@@ -34,6 +34,8 @@ from PyQt6.QtGui import (
     QPainterPath,
     QMouseEvent,
     QWheelEvent,
+    QScreen,
+    QGuiApplication,
 )
 from PyQt6.QtWidgets import QWidget
 
@@ -105,13 +107,72 @@ class LyricsStage(QWidget):
         self._user_scroll_timer.setInterval(2600)
         self._user_scroll_timer.timeout.connect(self._resume_auto_center)
 
-        # 60fps 物理与视觉插值帧驱动
+        # 屏幕刷新率动态自适应物理与视觉插值驱动器 (60Hz / 90Hz / 120Hz / 144Hz / 165Hz / 240Hz+)
+        self.screen_refresh_rate: float = 60.0
+        self._screen_signals_connected: bool = False
         self._phys_clock = QElapsedTimer()
         self._phys_clock.start()
         self._motion_timer = QTimer(self)
-        self._motion_timer.setInterval(16)
+        self._motion_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._motion_timer.timeout.connect(self._step_spring_physics)
+        self._update_refresh_rate()
         self._motion_timer.start()
+
+    def _detect_screen_refresh_rate(self) -> float:
+        screen: Optional[QScreen] = None
+        win = self.window()
+        if win is not None:
+            wh = win.windowHandle()
+            if wh is not None:
+                screen = wh.screen()
+        if screen is None and win is not None:
+            screen = win.screen()
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+
+        if screen is not None:
+            hz = screen.refreshRate()
+            if hz > 20.0:
+                return float(hz)
+        return 60.0
+
+    def _update_refresh_rate(self, rate: Optional[float] = None) -> None:
+        if rate is None or rate <= 20.0:
+            rate = self._detect_screen_refresh_rate()
+        self.screen_refresh_rate = float(rate)
+        # 根据检测到的屏幕物理刷新率动态设置定时器间隔 (支持 60Hz~240Hz+)
+        # 60Hz -> 17ms, 90Hz -> 11ms, 120Hz -> 8ms, 144Hz -> 7ms, 165Hz -> 6ms, 240Hz -> 4ms
+        interval_ms = max(4, min(33, int(round(1000.0 / self.screen_refresh_rate))))
+        self._motion_timer.setInterval(interval_ms)
+
+    def _on_screen_changed(self, new_screen: Optional[QScreen]) -> None:
+        if new_screen is not None:
+            try:
+                new_screen.refreshRateChanged.connect(self._on_refresh_rate_changed)
+            except Exception:
+                pass
+            self._update_refresh_rate(new_screen.refreshRate())
+        else:
+            self._update_refresh_rate()
+
+    def _on_refresh_rate_changed(self, new_rate: float) -> None:
+        self._update_refresh_rate(new_rate)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        win = self.window()
+        if win is not None:
+            wh = win.windowHandle()
+            if wh is not None and not self._screen_signals_connected:
+                wh.screenChanged.connect(self._on_screen_changed)
+                self._screen_signals_connected = True
+                scr = wh.screen()
+                if scr is not None:
+                    try:
+                        scr.refreshRateChanged.connect(self._on_refresh_rate_changed)
+                    except Exception:
+                        pass
+        self._update_refresh_rate()
 
     def _show_toast(self, text: str) -> None:
         self._toast_text = text
@@ -299,7 +360,9 @@ class LyricsStage(QWidget):
         确保无论自动切行、点击跳转还是滚轮滑动，都具有连续的速度与波浪式行间级联感。
         """
         raw_dt = self._phys_clock.restart() / 1000.0
-        dt = max(0.004, min(0.033, raw_dt if raw_dt > 0 else 0.016))
+        # 动态自适应屏幕物理刷新率，覆盖 24Hz 到 360Hz 超高刷电竞与高阶 ProMotion 显示屏
+        fallback_dt = 1.0 / max(30.0, getattr(self, "screen_refresh_rate", 60.0))
+        dt = max(0.002, min(0.045, raw_dt if raw_dt > 0 else fallback_dt))
         needs_repaint = False
 
         # 1. 全局视口中心位置阻尼弹簧 (omega = 9.8 rad/s, 临界阻尼平滑缓出)
@@ -362,6 +425,13 @@ class LyricsStage(QWidget):
                 st.current_bg_alpha = st.target_bg_alpha
                 st.current_x_offset = st.target_x_offset
                 st.pill_scale = target_pill
+
+        # 3. 逐字柔光羽化与间奏动效在歌曲播放区间的高刷连贯渲染
+        if self.syllable_mode and 0 <= self.active_index < len(self.lyrics):
+            cur_line = self.lyrics[self.active_index]
+            eff_t = max(0.0, self.current_time + self.lyric_offset)
+            if cur_line.time <= eff_t <= cur_line.end_time + 0.15:
+                needs_repaint = True
 
         if needs_repaint:
             self.update()
