@@ -347,6 +347,7 @@ class TransportBar(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.setFixedHeight(90)
 
@@ -567,6 +568,11 @@ class TransportBar(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.restore()
 
         w, h = float(self.width()), float(self.height())
         is_max = self.window().isMaximized()

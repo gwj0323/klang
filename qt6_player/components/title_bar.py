@@ -6,7 +6,7 @@
 
 from pathlib import Path
 from typing import Optional
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QPointF, QRectF, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QPointF, QRectF, QVariantAnimation, QEasingCurve, QTimer
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QMouseEvent, QPainterPath, QPixmap
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
 
@@ -149,8 +149,22 @@ class WindowCaptionButton(QPushButton):
     def __init__(self, kind: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.kind = kind
+        self.is_maximized: bool = False
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.setFixedSize(40, 30)
+        if kind == "min":
+            self.setToolTip("最小化")
+        elif kind == "max":
+            self.setToolTip("最大化")
+        elif kind == "close":
+            self.setToolTip("关闭")
+
+    def set_maximized_state(self, is_max: bool) -> None:
+        if self.is_maximized != is_max:
+            self.is_maximized = is_max
+            if self.kind == "max":
+                self.setToolTip("向下还原" if is_max else "最大化")
+            self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
@@ -179,7 +193,16 @@ class WindowCaptionButton(QPushButton):
             painter.drawLine(QPointF(cx - 5.0, cy), QPointF(cx + 5.0, cy))
         elif self.kind == "max":
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(cx - 4.5, cy - 4.5, 9.0, 9.0), 1.4, 1.4)
+            if self.is_maximized:
+                # 还原双矩形图标 (WinUI 3 还原标准微缩图形)
+                painter.drawRoundedRect(QRectF(cx - 5.5, cy - 3.5, 8.0, 8.0), 1.2, 1.2)
+                p_back = QPainterPath()
+                p_back.moveTo(cx - 3.0, cy - 5.5)
+                p_back.lineTo(cx + 4.5, cy - 5.5)
+                p_back.lineTo(cx + 4.5, cy + 2.0)
+                painter.drawPath(p_back)
+            else:
+                painter.drawRoundedRect(QRectF(cx - 4.5, cy - 4.5, 9.0, 9.0), 1.4, 1.4)
         elif self.kind == "close":
             painter.drawLine(QPointF(cx - 4.5, cy - 4.5), QPointF(cx + 4.5, cy + 4.5))
             painter.drawLine(QPointF(cx + 4.5, cy - 4.5), QPointF(cx - 4.5, cy + 4.5))
@@ -307,12 +330,20 @@ class WinUITitleBar(QWidget):
         self.desktop_lyric_open = active
         self.btn_desktop_lyric.set_chip_active(active)
 
+    def set_window_maximized(self, is_max: bool) -> None:
+        self.btn_max.set_maximized_state(is_max)
+
     def _toggle_maximize(self) -> None:
         win = self.window()
         if win.isMaximized():
             win.showNormal()
         else:
             win.showMaximized()
+        if hasattr(win, "_handle_window_state_change"):
+            win._handle_window_state_change()
+            QTimer.singleShot(0, win._handle_window_state_change)
+            QTimer.singleShot(40, win._handle_window_state_change)
+            QTimer.singleShot(120, win._handle_window_state_change)
 
     def _on_toggle_translation(self) -> None:
         self.show_translation = not self.show_translation

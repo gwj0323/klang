@@ -13,7 +13,7 @@ Klang 音乐播放器主窗口 (Qt6)
 import random
 from pathlib import Path
 from typing import List, Optional
-from PyQt6.QtCore import Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, QTimer, QEvent
 from PyQt6.QtGui import (
     QPainter,
     QPen,
@@ -24,6 +24,7 @@ from PyQt6.QtGui import (
     QDropEvent,
     QMouseEvent,
     QCloseEvent,
+    QShowEvent,
     QIcon,
 )
 from PyQt6.QtWidgets import (
@@ -73,6 +74,11 @@ class WindowFrameOverlay(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.restore()
 
         is_max = self.window().isMaximized()
         radius = 0.0 if is_max else 12.0
@@ -176,11 +182,47 @@ class NordicWinUI3Window(QMainWindow):
         self.frame_overlay = WindowFrameOverlay(central)
         self.frame_overlay.raise_()
 
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if hasattr(self, "frame_overlay") and self.centralWidget():
+            self.frame_overlay.setGeometry(self.centralWidget().rect())
+            self.frame_overlay.raise_()
+        self._handle_window_state_change()
+        QTimer.singleShot(0, self._handle_window_state_change)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._handle_window_state_change()
+            # 兼容 Windows DWM 动画与异步消息延迟：在多个时间点再次确保正确重绘圆角
+            QTimer.singleShot(0, self._handle_window_state_change)
+            QTimer.singleShot(40, self._handle_window_state_change)
+            QTimer.singleShot(120, self._handle_window_state_change)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, "frame_overlay") and self.centralWidget():
             self.frame_overlay.setGeometry(self.centralWidget().rect())
             self.frame_overlay.raise_()
+            self.frame_overlay.update()
+        if hasattr(self, "transport_bar"):
+            self.transport_bar.update()
+        if hasattr(self, "title_bar"):
+            self.title_bar.set_window_maximized(self.isMaximized())
+        self.update()
+
+    def _handle_window_state_change(self) -> None:
+        """当窗口在最大化与常规尺寸之间切换时，同步更新组件圆角与最大化图标"""
+        is_max = self.isMaximized()
+        if hasattr(self, "title_bar"):
+            self.title_bar.set_window_maximized(is_max)
+        if hasattr(self, "frame_overlay") and self.centralWidget():
+            self.frame_overlay.setGeometry(self.centralWidget().rect())
+            self.frame_overlay.raise_()
+            self.frame_overlay.update()
+        if hasattr(self, "transport_bar"):
+            self.transport_bar.update()
+        self.update()
 
     def _apply_restored_settings(self) -> None:
         st = self._saved_state
@@ -760,6 +802,11 @@ class NordicWinUI3Window(QMainWindow):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.restore()
 
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         radius = 0.0 if self.isMaximized() else 12.0
