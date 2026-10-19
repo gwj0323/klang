@@ -17,6 +17,8 @@ class DesktopLyricOverlay(QWidget):
     playToggled = pyqtSignal()
     nextClicked = pyqtSignal()
     closedByUser = pyqtSignal()
+    positionChanged = pyqtSignal(int, int)
+    fontSizeChanged = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -86,6 +88,7 @@ class DesktopLyricOverlay(QWidget):
 
     def _change_font(self, delta: int) -> None:
         self.font_size = max(16, min(32, self.font_size + delta))
+        self.fontSizeChanged.emit(self.font_size)
         self.update()
 
     def _on_close(self) -> None:
@@ -124,7 +127,10 @@ class DesktopLyricOverlay(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        had_drag = self._drag_pos is not None
         self._drag_pos = None
+        if had_drag:
+            self.positionChanged.emit(self.x(), self.y())
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event) -> None:

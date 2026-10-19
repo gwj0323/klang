@@ -593,11 +593,25 @@ class TransportBar(QWidget):
 
         painter.save()
         painter.setClipPath(path)
-        painter.fillPath(path, self.theme.oat_surface)
 
-        # 顶部分割线与内侧微高光
-        painter.setPen(QPen(self.theme.stroke_outer, 1.0))
+        # WinUI 3 Acrylic 磨砂玻璃层：微透光垂直光感渐变，大幅降低透明度并提升对比度
+        grad = QLinearGradient(0.0, 0.0, 0.0, h)
+        if self.theme.name == "dusk":
+            grad.setColorAt(0.0, QColor(40, 45, 52, 246))
+            grad.setColorAt(0.35, QColor(34, 38, 44, 242))
+            grad.setColorAt(1.0, QColor(28, 31, 36, 246))
+        else:
+            grad.setColorAt(0.0, QColor(255, 254, 252, 248))
+            grad.setColorAt(0.35, QColor(250, 249, 246, 243))
+            grad.setColorAt(1.0, QColor(244, 242, 237, 246))
+        painter.fillPath(path, grad)
+
+        # 顶部分割线（WinUI 3 极细微层次分割）
+        painter.setPen(QPen(self.theme.divider, 1.0))
         painter.drawLine(0, 0, int(w), 0)
-        painter.setPen(QPen(self.theme.stroke_inner, 1.0))
+
+        # 顶边内侧 1px 细微光感高光（模拟 WinUI 3 玻璃折射光）
+        highlight = QColor(255, 255, 255, 175) if self.theme.name == "daylight" else QColor(255, 255, 255, 20)
+        painter.setPen(QPen(highlight, 1.0))
         painter.drawLine(0, 1, int(w), 1)
         painter.restore()

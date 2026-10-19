@@ -19,13 +19,20 @@ def main() -> int:
 
     from pathlib import Path
     from PyQt6.QtGui import QIcon
-    icon_path = Path(__file__).resolve().parent / "qt6_player" / "assets" / "klang_icon.ico"
+
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base_dir = Path(sys._MEIPASS)
+    else:
+        base_dir = Path(__file__).resolve().parent
+
+    icon_path = base_dir / "qt6_player" / "assets" / "klang_icon.ico"
     if not icon_path.exists():
-        icon_path = Path(__file__).resolve().parent / "qt6_player" / "assets" / "klang_icon.png"
+        icon_path = base_dir / "qt6_player" / "assets" / "klang_icon.png"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
     window = NordicWinUI3Window()
+    app.aboutToQuit.connect(window._save_current_state)
     window.show()
     return app.exec()
 

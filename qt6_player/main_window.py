@@ -25,6 +25,7 @@ from PyQt6.QtGui import (
     QMouseEvent,
     QCloseEvent,
     QShowEvent,
+    QMoveEvent,
     QIcon,
 )
 from PyQt6.QtWidgets import (
@@ -56,6 +57,7 @@ from qt6_player.components.lyrics_stage import LyricsStage
 from qt6_player.components.transport_bar import TransportBar
 from qt6_player.components.desktop_lyric_overlay import DesktopLyricOverlay
 from qt6_player.components.equalizer_dialog import AudioSettingsDialog
+from qt6_player.services.window_effects import apply_window_system_theme_and_corners
 
 
 class WindowFrameOverlay(QWidget):
@@ -74,11 +76,6 @@ class WindowFrameOverlay(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
-        painter.restore()
 
         is_max = self.window().isMaximized()
         radius = 0.0 if is_max else 12.0
@@ -129,6 +126,11 @@ class NordicWinUI3Window(QMainWindow):
         self.desktop_lyric = DesktopLyricOverlay()
         self._active_workers: List[AutoScrapeWorker] = []
 
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(300)
+        self._autosave_timer.timeout.connect(self._save_current_state)
+
         self._setup_ui()
         self._bind_signals()
         self._apply_restored_settings()
@@ -138,9 +140,15 @@ class NordicWinUI3Window(QMainWindow):
             init_idx = 0
         self.select_track(init_idx, auto_play=False)
 
+    def schedule_save(self) -> None:
+        """防抖自动保存设置到本地磁盘，避免卡顿 I/O"""
+        if hasattr(self, "_autosave_timer"):
+            self._autosave_timer.start()
+
     def _setup_ui(self) -> None:
         central = QWidget(self)
         central.setMouseTracking(True)
+        central.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setCentralWidget(central)
 
         root_vbox = QVBoxLayout(central)
@@ -189,6 +197,14 @@ class NordicWinUI3Window(QMainWindow):
             self.frame_overlay.raise_()
         self._handle_window_state_change()
         QTimer.singleShot(0, self._handle_window_state_change)
+        try:
+            hwnd = int(self.winId()) if self.winId() else 0
+            if hwnd:
+                apply_window_system_theme_and_corners(
+                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=self.isMaximized()
+                )
+        except Exception:
+            pass
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -198,6 +214,10 @@ class NordicWinUI3Window(QMainWindow):
             QTimer.singleShot(0, self._handle_window_state_change)
             QTimer.singleShot(40, self._handle_window_state_change)
             QTimer.singleShot(120, self._handle_window_state_change)
+
+    def moveEvent(self, event: QMoveEvent) -> None:
+        super().moveEvent(event)
+        self.schedule_save()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -210,6 +230,7 @@ class NordicWinUI3Window(QMainWindow):
         if hasattr(self, "title_bar"):
             self.title_bar.set_window_maximized(self.isMaximized())
         self.update()
+        self.schedule_save()
 
     def _handle_window_state_change(self) -> None:
         """当窗口在最大化与常规尺寸之间切换时，同步更新组件圆角与最大化图标"""
@@ -222,7 +243,16 @@ class NordicWinUI3Window(QMainWindow):
             self.frame_overlay.update()
         if hasattr(self, "transport_bar"):
             self.transport_bar.update()
+        try:
+            hwnd = int(self.winId()) if self.winId() else 0
+            if hwnd:
+                apply_window_system_theme_and_corners(
+                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=is_max
+                )
+        except Exception:
+            pass
         self.update()
+        self.schedule_save()
 
     def _apply_restored_settings(self) -> None:
         st = self._saved_state
@@ -235,12 +265,18 @@ class NordicWinUI3Window(QMainWindow):
         align_center = bool(st.get("lyric_align_center", False))
         sidebar_collapsed = bool(st.get("sidebar_collapsed", False))
         sound_profile = str(st.get("sound_profile", "原声自然"))
+        saved_gains = st.get("eq_gains_db")
+        saved_reverb = st.get("reverb_mix")
 
         self.audio.set_volume(vol)
         if muted:
             self.audio.toggle_mute()
         self.audio.set_playback_rate(rate)
-        self.audio.set_sound_profile(sound_profile, trigger_preview=False)
+
+        if sound_profile == "自定义" and saved_gains is not None and saved_reverb is not None:
+            self.audio.set_custom_eq([float(g) for g in saved_gains], float(saved_reverb), trigger_preview=False)
+        else:
+            self.audio.set_sound_profile(sound_profile, trigger_preview=False)
 
         self.transport_bar.set_play_mode(self.play_mode)
         self.transport_bar.set_playback_rate(rate)
@@ -270,23 +306,65 @@ class NordicWinUI3Window(QMainWindow):
         self.nav_pane.setVisible(init_w > 0)
         self.title_bar.set_sidebar_expanded(self._sidebar_expanded)
 
+        # 桌面歌词设置恢复
+        dt_font = int(st.get("desktop_lyric_font_size", 22))
+        self.desktop_lyric.font_size = dt_font
+        dt_pos = st.get("desktop_lyric_pos")
+        if dt_pos and isinstance(dt_pos, list) and len(dt_pos) == 2:
+            self.desktop_lyric.move(int(dt_pos[0]), int(dt_pos[1]))
+        if bool(st.get("desktop_lyric_open", False)):
+            self.desktop_lyric.show()
+            self.title_bar.set_desktop_lyric_active(True)
+
+        # 窗口大小与位置恢复
+        geo = st.get("window_geometry")
+        if geo and isinstance(geo, list) and len(geo) == 4:
+            gx, gy, gw, gh = int(geo[0]), int(geo[1]), int(geo[2]), int(geo[3])
+            if gw >= self.minimumWidth() and gh >= self.minimumHeight():
+                self.setGeometry(gx, gy, gw, gh)
+        if bool(st.get("is_maximized", False)):
+            self.showMaximized()
+
         self._on_theme_toggled(self.theme.name)
 
     def _save_current_state(self) -> None:
+        if hasattr(self, "_autosave_timer"):
+            self._autosave_timer.stop()
+
+        geom = None
+        if not self.isMaximized():
+            geom = [self.x(), self.y(), self.width(), self.height()]
+        elif hasattr(self, "_saved_state"):
+            geom = self._saved_state.get("window_geometry")
+
+        dt_pos = None
+        if hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible():
+            dt_pos = [self.desktop_lyric.x(), self.desktop_lyric.y()]
+        elif hasattr(self, "_saved_state"):
+            dt_pos = self._saved_state.get("desktop_lyric_pos")
+
         settings = {
-            "volume": self.audio.volume,
-            "is_muted": self.audio.is_muted,
-            "play_mode": self.play_mode,
-            "playback_rate": self.audio.playback_rate,
-            "lyric_font_size": self.lyrics_stage.lyric_font_size,
-            "show_translation": self.lyrics_stage.show_translation,
-            "syllable_mode": self.lyrics_stage.syllable_mode,
-            "lyric_align_center": self.lyrics_stage.align_center,
-            "theme": self.theme.name,
+            "volume": float(self.audio.volume),
+            "is_muted": bool(self.audio.is_muted),
+            "play_mode": str(self.play_mode),
+            "playback_rate": float(self.audio.playback_rate),
+            "lyric_font_size": int(self.lyrics_stage.lyric_font_size),
+            "show_translation": bool(self.lyrics_stage.show_translation),
+            "syllable_mode": bool(self.lyrics_stage.syllable_mode),
+            "lyric_align_center": bool(self.lyrics_stage.align_center),
+            "theme": str(self.theme.name),
             "sidebar_collapsed": not getattr(self, "_sidebar_expanded", True),
-            "sound_profile": self.audio.sound_profile,
-            "last_track_index": self.current_track_index,
+            "sound_profile": str(self.audio.sound_profile),
+            "eq_gains_db": [float(g) for g in self.audio.eq_gains_db],
+            "reverb_mix": float(self.audio.reverb_mix),
+            "desktop_lyric_open": bool(hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible()),
+            "desktop_lyric_pos": dt_pos,
+            "desktop_lyric_font_size": int(self.desktop_lyric.font_size) if hasattr(self, "desktop_lyric") else 22,
+            "window_geometry": geom,
+            "is_maximized": bool(self.isMaximized()),
+            "last_track_index": int(self.current_track_index),
         }
+        self._saved_state.update(settings)
         save_player_state(self.tracks, settings)
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -302,7 +380,9 @@ class NordicWinUI3Window(QMainWindow):
         self.title_bar.scrapeClicked.connect(self._open_online_scraper_dialog)
         self.title_bar.fontSizeDeltaRequested.connect(self.lyrics_stage.adjust_lyric_font_size)
         self.title_bar.translationToggled.connect(self.lyrics_stage.set_show_translation)
+        self.title_bar.translationToggled.connect(lambda _b: self.schedule_save())
         self.title_bar.syllableModeToggled.connect(self.lyrics_stage.set_syllable_mode)
+        self.title_bar.syllableModeToggled.connect(lambda _b: self.schedule_save())
         self.title_bar.desktopLyricToggled.connect(self._toggle_desktop_lyric)
         self.title_bar.themeToggled.connect(self._on_theme_toggled)
 
@@ -323,6 +403,7 @@ class NordicWinUI3Window(QMainWindow):
         )
         self.lyrics_stage.activeLineChanged.connect(self._on_active_lyric_line_changed)
         self.lyrics_stage.fontSizeChanged.connect(self.title_bar.update_font_size_display)
+        self.lyrics_stage.fontSizeChanged.connect(lambda _sz: self.schedule_save())
         self.lyrics_stage.lyricOffsetChanged.connect(self._on_lyric_offset_changed)
 
         # 底部控制栏信号
@@ -344,16 +425,22 @@ class NordicWinUI3Window(QMainWindow):
         self.desktop_lyric.prevClicked.connect(self._on_prev_track)
         self.desktop_lyric.playToggled.connect(self.audio.toggle_play)
         self.desktop_lyric.nextClicked.connect(self._on_next_track)
-        self.desktop_lyric.closedByUser.connect(lambda: self.title_bar.set_desktop_lyric_active(False))
+        self.desktop_lyric.closedByUser.connect(
+            lambda: (self.title_bar.set_desktop_lyric_active(False), self.schedule_save())
+        )
+        self.desktop_lyric.positionChanged.connect(lambda _x, _y: self.schedule_save())
+        self.desktop_lyric.fontSizeChanged.connect(lambda _sz: self.schedule_save())
 
         # 音频引擎信号
         self.audio.trackChanged.connect(self._on_track_changed)
         self.audio.playStateChanged.connect(self._on_play_state_changed)
         self.audio.timeUpdated.connect(self._on_time_updated)
         self.audio.volumeChanged.connect(self.transport_bar.update_volume)
+        self.audio.volumeChanged.connect(lambda _v, _m: self.schedule_save())
         self.audio.playbackRateChanged.connect(self.transport_bar.set_playback_rate)
+        self.audio.playbackRateChanged.connect(lambda _r: self.schedule_save())
         self.audio.soundProfileChanged.connect(
-            lambda name, _g, _r: self.transport_bar.set_sound_profile_badge(name)
+            lambda name, _g, _r: (self.transport_bar.set_sound_profile_badge(name), self.schedule_save())
         )
         self.audio.trackEnded.connect(self._on_track_naturally_ended)
 
@@ -374,6 +461,7 @@ class NordicWinUI3Window(QMainWindow):
         self._sidebar_anim.setStartValue(float(cur_w))
         self._sidebar_anim.setEndValue(float(target_w))
         self._sidebar_anim.start()
+        self.schedule_save()
 
     def _toggle_desktop_lyric(self, open_flag: bool) -> None:
         if open_flag:
@@ -381,6 +469,7 @@ class NordicWinUI3Window(QMainWindow):
             self.desktop_lyric.raise_()
         else:
             self.desktop_lyric.hide()
+        self.schedule_save()
 
     def _on_active_lyric_line_changed(self, line: LyricLine) -> None:
         self.transport_bar.update_lyric_snippet(line)
@@ -389,19 +478,23 @@ class NordicWinUI3Window(QMainWindow):
     def _on_lyric_offset_changed(self, new_offset: float) -> None:
         if 0 <= self.current_track_index < len(self.tracks):
             self.tracks[self.current_track_index].lyric_offset = new_offset
+            self.schedule_save()
 
     def _on_play_mode_changed(self, mode: str) -> None:
         self.play_mode = mode
         mode_label = TransportBar._MODE_NAMES.get(mode, "列表循环")
         self.lyrics_stage._show_toast(f"播放模式: {mode_label}")
+        self.schedule_save()
 
     def _on_rate_cycled(self) -> None:
         r = self.audio.cycle_playback_rate()
         self.lyrics_stage._show_toast(f"播放倍速: {r:g}x")
+        self.schedule_save()
 
     def _on_nav_favorite_changed(self, idx: int) -> None:
         if idx == self.current_track_index and 0 <= idx < len(self.tracks):
             self.transport_bar.set_track_info(self.tracks[idx])
+        self.schedule_save()
 
     def _on_transport_favorite_toggled(self) -> None:
         if not (0 <= self.current_track_index < len(self.tracks)):
@@ -411,6 +504,7 @@ class NordicWinUI3Window(QMainWindow):
         self.transport_bar.set_track_info(cur)
         self.nav_pane.refresh_item(self.current_track_index)
         self.lyrics_stage._show_toast("已添加到「我喜欢」" if cur.is_favorite else "已取消喜欢")
+        self.schedule_save()
 
     def _on_track_context_action(self, index: int, action: str) -> None:
         if not (0 <= index < len(self.tracks)):
@@ -446,6 +540,7 @@ class NordicWinUI3Window(QMainWindow):
                     self.current_track_index -= 1
                 self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
                 self.lyrics_stage._show_toast("已从播放列表移除")
+            self.schedule_save()
 
     def _open_audio_settings_dialog(self) -> None:
         cur_offset = (
@@ -467,15 +562,20 @@ class NordicWinUI3Window(QMainWindow):
             lambda prof: (
                 self.audio.set_sound_profile(prof, trigger_preview=True),
                 self.lyrics_stage._show_toast(f"声学预设: {prof}"),
+                self.schedule_save(),
             )
         )
         dlg.customEqChanged.connect(
-            lambda gains, rev, prev: self.audio.set_custom_eq(gains, rev, trigger_preview=prev)
+            lambda gains, rev, prev: (
+                self.audio.set_custom_eq(gains, rev, trigger_preview=prev),
+                self.schedule_save(),
+            )
         )
-        dlg.playbackRateChanged.connect(self.audio.set_playback_rate)
+        dlg.playbackRateChanged.connect(lambda r: (self.audio.set_playback_rate(r), self.schedule_save()))
         dlg.lyricOffsetDeltaRequested.connect(self.lyrics_stage.adjust_lyric_offset)
         dlg.sleepTimerRequested.connect(self.audio.set_sleep_timer)
         dlg.exec()
+        self.schedule_save()
 
     # =========================================================
     # 音乐文件 / 文件夹 / LRC 歌词导入与拖拽支持
@@ -520,6 +620,7 @@ class NordicWinUI3Window(QMainWindow):
                         self.lyrics_stage.load_lyrics(parsed, lyric_offset=cur.lyric_offset)
                         self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
                         self.transport_bar.set_status_message(f"已加载歌词：{p.name}")
+                        self.schedule_save()
                     break
             except Exception:
                 continue
@@ -582,6 +683,7 @@ class NordicWinUI3Window(QMainWindow):
                             cur.lyrics = parsed
                             self.lyrics_stage.load_lyrics(parsed, lyric_offset=cur.lyric_offset)
                             self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
+                            self.schedule_save()
                         break
                 except Exception:
                     continue
@@ -629,6 +731,7 @@ class NordicWinUI3Window(QMainWindow):
                     if lyrics:
                         self.lyrics_stage.load_lyrics(t.lyrics, lyric_offset=t.lyric_offset)
                         self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
+                self.schedule_save()
                 break
 
     def _open_online_scraper_dialog(self) -> None:
@@ -663,6 +766,7 @@ class NordicWinUI3Window(QMainWindow):
         self.transport_bar.set_track_info(cur_track)
         self.nav_pane.refresh_item(self.current_track_index)
         self.transport_bar.set_status_message("已更新在线歌词与封面")
+        self.schedule_save()
 
     # =========================================================
     # 播放与模式调度
@@ -674,6 +778,7 @@ class NordicWinUI3Window(QMainWindow):
         track = self.tracks[self.current_track_index]
         self.nav_pane.set_active_index(self.current_track_index)
         self.audio.load_track(track, auto_play=auto_play)
+        self.schedule_save()
 
     def _on_prev_track(self) -> None:
         if not self.tracks:
@@ -731,7 +836,16 @@ class NordicWinUI3Window(QMainWindow):
         self.transport_bar.set_theme(self.theme)
         self.desktop_lyric.set_theme(self.theme)
         self.frame_overlay.set_theme(self.theme)
+        try:
+            hwnd = int(self.winId()) if self.winId() else 0
+            if hwnd:
+                apply_window_system_theme_and_corners(
+                    hwnd, is_dark=(theme_name == "dusk"), is_maximized=self.isMaximized()
+                )
+        except Exception:
+            pass
         self.update()
+        self.schedule_save()
 
     # =========================================================
     # 无边框窗口四周 8 方向鼠标拖拽缩放支持
