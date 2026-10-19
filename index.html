@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KLANG · Nordic Minimalist WinUI 3 Music Player</title>
+  <link rel="stylesheet" href="./styles/tokens.css" />
+  <link rel="stylesheet" href="./styles/winui-shell.css" />
+  <link rel="stylesheet" href="./styles/lyrics-motion.css" />
+</head>
+<body>
+  <div class="desktop-environment">
+    <main class="winui-window" role="application" aria-label="KLANG 北欧极简音乐播放器">
+      <!-- 1. WinUI 3 自定义极简标题栏 -->
+      <header class="winui-titlebar" id="mount-titlebar"></header>
+
+      <!-- 2. 主工作区：左侧 NavigationView + 右侧大留白双栏舞台 -->
+      <div class="winui-workspace">
+        <aside class="winui-nav-pane" id="mount-navpane"></aside>
+
+        <section class="nordic-main-stage">
+          <!-- 左侧：专辑艺术封面与曲目建筑排版 -->
+          <div class="cover-presentation" id="mount-cover"></div>
+
+          <!-- 右侧：核心滚动歌词舞台 (mask-image 羽化 + scale 1.03 + 惯性缓出居中) -->
+          <div id="mount-lyrics" style="height: 100%; min-height: 0;"></div>
+        </section>
+      </div>
+
+      <!-- 3. WinUI 3 底部 Acrylic 悬浮播放控制栏 -->
+      <footer class="winui-transport-bar" id="mount-transport"></footer>
+    </main>
+  </div>
+
+  <!-- HTTP 服务器环境下使用原生 ES Module 组件加载 -->
+  <script type="module" src="./src/main.js"></script>
+
+  <!-- 本地双击 file:// 协议打开时的零配置兼容引导（避免浏览器 CORS 拦截 ES Modules） -->
+  <script>
+    if (window.location.protocol === "file:") {
+      (function () {
+        function formatTimecode(seconds) {
+          const s = Math.max(0, Math.floor(seconds || 0));
+          const mins = Math.floor(s / 60);
+          const secs = s % 60;
+          return String(mins).padStart(2, "0") + ":" + String(secs).padStart(2, "0");
+        }
+
+        function buildSyllables(text, startTime, endTime) {
+          const isCJK = /[\u4e00-\u9fa5]/.test(text);
+          const rawTokens = isCJK
+            ? text.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9]+|\s+|[^\s\u4e00-\u9fa5a-zA-Z0-9]+/g) || [text]
+            : text.match(/\S+\s*/g) || [text];
+          const totalSpan = Math.max(0.6, (endTime - startTime) * 0.88);
+          const step = totalSpan / rawTokens.length;
+          return rawTokens.map((token, idx) => ({
+            text: token,
+            start: Number((startTime + idx * step).toFixed(2)),
+            end: Number((startTime + (idx + 1) * step).toFixed(2)),
+          }));
+        }
+
+        function createLyricList(rawLines) {
+          return rawLines.map((item, idx) => {
+            const nextStart = idx < rawLines.length - 1 ? rawLines[idx + 1].time : item.time + 5.5;
+            const endTime = item.end || Math.max(item.time + 1.8, nextStart - 0.25);
+            return {
+              id: "line-" + idx,
+              index: idx,
+              time: item.time,
+              endTime,
+              text: item.text,
+              sub: item.sub || "",
+              isInterlude: Boolean(item.isInterlude),
+              syllables: item.isInterlude ? [] : buildSyllables(item.text, item.time, endTime),
+            };
+          });
+        }
+
+        const NORDIC_TRACKS = [
+          {
+            id: "bergen-mist",
+            catalogueNo: "NRD-041 · BERGEN RECORDINGS",
+            title: "Morgendugg over Fjorden",
+            artist: "Soren Lindqvist & Astrid Holm",
+            album: "Stillhet i Nord (Architecture of Silence)",
+            format: "24-Bit / 96kHz FLAC",
+            tempo: "68 BPM · Felt Piano & Cello",
+            duration: 76,
+            palette: { bgPrimary: "#E7EAE6", bgSecondary: "#D7DFDA", accent: "#6E8277", wood: "#C9BBAE", ink: "#26292E" },
+            chordProgression: [
+              [220.0, 261.63, 329.63, 392.0],
+              [174.61, 220.0, 261.63, 349.23],
+              [130.81, 196.0, 246.94, 329.63],
+              [146.83, 220.0, 261.63, 329.63],
+            ],
+            lyrics: createLyricList([
+              { time: 0.0, text: "· · ·", sub: "Felt piano & distant fjord wind", isInterlude: true },
+              { time: 4.5, text: "Pale light settles on the slate-grey water", sub: "微光静静落向板岩灰色的峡湾水面" },
+              { time: 10.2, text: "Pine needles hold the weight of morning mist", sub: "松针托起清晨薄雾微凉的重量" },
+              { time: 16.0, text: "Nothing hurries through the birchwood valley", sub: "白桦林谷之中，万物皆不仓促" },
+              { time: 21.8, text: "Only the slow tide breathing against stone", sub: "唯有缓慢的潮汐，轻叩冷冽的礁石" },
+              { time: 27.5, text: "We leave the windows open to the north wind", sub: "我们向北风敞开木窗，任清冽穿堂而过" },
+              { time: 33.4, text: "White linen drifting in a quiet room", sub: "素白亚麻窗纱在静谧的房间里微微浮动" },
+              { time: 39.2, text: "Every unspoken word becomes transparent", sub: "每一句未曾言说的话语，都澄澈如水" },
+              { time: 45.0, text: "· · ·", sub: "Solo cello resonance in birch hall", isInterlude: true },
+              { time: 50.5, text: "Shadows lengthen across untreated timber", sub: "漫射的光影掠过未上漆的浅色原木" },
+              { time: 56.4, text: "Cold air carries the scent of wet moss", sub: "清冷空气里弥漫着湿润苔藓与雪松的气息" },
+              { time: 62.2, text: "Stay until the horizon turns to silver", sub: "请驻足片刻，直到远方天际化作柔和的银灰" },
+              { time: 68.5, text: "In the gentle geometry of winter light", sub: "在这冬日光影克制而温柔的秩序之中" },
+            ]),
+          },
+          {
+            id: "oslo-atelier",
+            catalogueNo: "NRD-042 · OSLO ATELIER",
+            title: "Kveldssol i Bjørkeskog",
+            artist: "Freja Lind & Kasper Vestergaard",
+            album: "Nordic Minimalist Sessions Vol. III",
+            format: "PCM 48kHz · Studio Master",
+            tempo: "74 BPM · Acoustic Harmonics",
+            duration: 68,
+            palette: { bgPrimary: "#EAE6DF", bgSecondary: "#DED8CE", accent: "#7B847E", wood: "#BFAFB2", ink: "#2A2D32" },
+            chordProgression: [
+              [196.0, 246.94, 293.66, 369.99],
+              [164.81, 220.0, 246.94, 329.63],
+              [130.81, 164.81, 196.0, 246.94],
+              [146.83, 196.0, 220.0, 293.66],
+            ],
+            lyrics: createLyricList([
+              { time: 0.0, text: "· · ·", sub: "Warm birch acoustic overtones", isInterlude: true },
+              { time: 4.0, text: "Dust motes float in a beam of amber frost", sub: "微尘在琥珀色的清霜光束中缓慢悬浮" },
+              { time: 9.8, text: "Ceramic cups still warm upon the table", sub: "粗陶杯盏在原木桌面上尚存余温" },
+              { time: 15.6, text: "Footsteps fade along the gravel courtyard", sub: "脚步声沿着碎石庭院渐行渐远" },
+              { time: 21.4, text: "Silence is not empty, it is full of space", sub: "寂静并非空无一物，而是盛满了呼吸的留白" },
+              { time: 27.2, text: "A single line drawn across handmade paper", sub: "手工棉纸上轻轻落下一道克制的线条" },
+              { time: 33.0, text: "Sage-green hills beneath a porcelain sky", sub: "灰鼠尾草绿的山丘枕在白瓷般的天幕之下" },
+              { time: 39.0, text: "Time unfolds without a sharp edge", sub: "时间缓缓舒展，不带一丝生硬的棱角" },
+              { time: 45.2, text: "Let the evening settle like soft snow", sub: "任暮色如初雪般悄然落定" },
+              { time: 51.5, text: "Breathing slow between two quiet notes", sub: "在两个轻柔音符的间隙里，自在呼吸" },
+              { time: 58.0, text: "Until only warmth remains in the room", sub: "直至室内唯余一抹温润的微光" },
+            ]),
+          },
+          {
+            id: "reykjavik-rain",
+            catalogueNo: "NRD-043 · REYKJAVIK CHAMBER",
+            title: "Regn på Skiferstein",
+            artist: "Einar Sigurdsson",
+            album: "Monochrome Coastlines",
+            format: "Dolby Atmos · Spatial Mix",
+            tempo: "62 BPM · Ambient Chamber",
+            duration: 64,
+            palette: { bgPrimary: "#E3E7E9", bgSecondary: "#D2D9DD", accent: "#65787E", wood: "#BDB6AE", ink: "#24282D" },
+            chordProgression: [
+              [174.61, 220.0, 261.63, 329.63],
+              [146.83, 174.61, 220.0, 261.63],
+              [196.0, 246.94, 293.66, 349.23],
+              [130.81, 164.81, 196.0, 261.63],
+            ],
+            lyrics: createLyricList([
+              { time: 0.0, text: "· · ·", sub: "Fine rain & muted string harmonics", isInterlude: true },
+              { time: 4.2, text: "Raindrops trace the grain of weathered slate", sub: "细雨沿着风化板岩的纹理缓缓滑落" },
+              { time: 10.0, text: "Harbor lanterns glow through coastal fog", sub: "港口的风灯在海岸雾气中泛着柔和微光" },
+              { time: 16.0, text: "No neon glare, only the hush of grey water", sub: "没有刺眼的霓虹，唯有灰水低语的安宁" },
+              { time: 22.0, text: "Pages turn beside a frosted windowpane", sub: "结霜的窗畔，书页被轻轻翻动" },
+              { time: 28.0, text: "Every echo softens into wool and cedar", sub: "每一声回响都被羊毛与雪松温柔吸纳" },
+              { time: 34.2, text: "We measure hours by the drifting clouds", sub: "我们以流云的舒卷丈量漫长的午后" },
+              { time: 40.5, text: "Calm as the deep current beneath the ice", sub: "沉静如冰层之下缓缓涌动的暗流" },
+              { time: 47.0, text: "Holding stillness in the palm of our hands", sub: "将这一刻的静谧轻捧于掌心" },
+              { time: 54.0, text: "Where the northern sea meets the pale sky", sub: "在北国海面与苍白天空相接的尽头" },
+            ]),
+          },
+        ];
+
+        window.addEventListener("DOMContentLoaded", () => {
+          // 动态注入模块化脚本等价逻辑以支持本地直接双击运行
+          Promise.all([
+            fetch("./src/main.js").catch(() => null)
+          ]).then(() => {
+            if (document.getElementById("mount-titlebar").children.length > 0) return;
+            initStandaloneApp(NORDIC_TRACKS, formatTimecode);
+          });
+        });
+
+        function initStandaloneApp(tracks, fmt) {
+          let currentIdx = 0;
+          let currentTime = 0;
+          let isPlaying = false;
+          let isMuted = false;
+          let volume = 0.72;
+          let activeIndex = -1;
+          let rafId = null;
+          let lastFrame = 0;
+          let lastChord = -1;
+          let scrollRaf = null;
+          let userScrolling = false;
+          let userScrollTimer = null;
+          let audioCtx = null;
+          let masterGain = null;
+
+          // 1. TitleBar
+          const titleMount = document.getElementById("mount-titlebar");
+          titleMount.innerHTML = `
+            <div class="titlebar-brand">
+              <span class="brand-dot"></span>
+              <span>KLANG · NORDIC AUDIO ATELIER</span>
+              <span class="titlebar-tag">WinUI 3 Mica · Scandinavian Edition</span>
+            </div>
+            <div class="titlebar-actions">
+              <button type="button" class="winui-chip-btn is-active" id="btn-syllable-toggle">
+                <span class="status-indicator"></span>
+                <span id="label-syllable-mode">逐音节柔光推进</span>
+              </button>
+              <button type="button" class="winui-chip-btn" id="btn-theme-toggle">
+                <span id="label-theme-mode">晨雾白 · Mist Light</span>
+              </button>
+            </div>
+          `;
+
+          // 2. Lyrics Stage
+          const lyricsMount = document.getElementById("mount-lyrics");
+          lyricsMount.innerHTML = `
+            <div class="lyrics-stage-wrapper">
+              <div class="lyrics-scroll-viewport" id="lyrics-viewport">
+                <div class="lyrics-spacer"></div>
+                <ul class="lyrics-list" id="lyrics-list" data-syllable-mode="true"></ul>
+                <div class="lyrics-spacer"></div>
+              </div>
+              <button type="button" class="manual-scroll-pill" id="manual-scroll-pill">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--nordic-sage);"></span>
+                <span>自由浏览中 · 点击回归居中跟随</span>
+              </button>
+            </div>
+          `;
+
+          // 3. Transport Bar
+          const transMount = document.getElementById("mount-transport");
+          transMount.innerHTML = `
+            <div class="transport-now-playing">
+              <div class="mini-soundwave" id="mini-soundwave">
+                <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
+              </div>
+              <div class="transport-status-text">
+                <div class="transport-status-label">SYNCED LYRIC STAGE</div>
+                <div class="transport-current-lyric-snippet" id="transport-lyric-snippet">点击播放或任意歌词体验丝滑居中滚动</div>
+              </div>
+            </div>
+            <div class="transport-center-stack">
+              <div class="transport-buttons">
+                <button type="button" class="winui-icon-btn" id="btn-prev" title="上一首"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z"/></svg></button>
+                <button type="button" class="winui-play-fab" id="btn-play-pause" title="播放/暂停">
+                  <svg id="icon-play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+                  <svg id="icon-pause" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+                <button type="button" class="winui-icon-btn" id="btn-next" title="下一首"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+              </div>
+              <div class="timeline-row">
+                <span class="time-readout" id="time-current">00:00</span>
+                <div class="winui-slider-container" id="timeline-slider">
+                  <div class="winui-slider-track"><div class="winui-slider-fill" id="timeline-fill"></div></div>
+                  <div class="winui-slider-thumb" id="timeline-thumb"></div>
+                </div>
+                <span class="time-readout" id="time-duration">01:16</span>
+              </div>
+            </div>
+            <div class="transport-right-controls">
+              <div class="volume-group">
+                <button type="button" class="winui-icon-btn" id="btn-mute"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg></button>
+                <div class="winui-slider-container" id="volume-slider">
+                  <div class="winui-slider-track"><div class="winui-slider-fill" id="volume-fill" style="width:72%;"></div></div>
+                  <div class="winui-slider-thumb" id="volume-thumb" style="left:72%;"></div>
+                </div>
+              </div>
+            </div>
+          `;
+
+          const viewportEl = document.getElementById("lyrics-viewport");
+          const listEl = document.getElementById("lyrics-list");
+          const manualPill = document.getElementById("manual-scroll-pill");
+          let lineEls = [];
+
+          function playChord(freqs) {
+            if (isMuted) return;
+            try {
+              const Ctx = window.AudioContext || window.webkitAudioContext;
+              if (!Ctx) return;
+              if (!audioCtx) {
+                audioCtx = new Ctx();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = volume * 0.24;
+                masterGain.connect(audioCtx.destination);
+              }
+              if (audioCtx.state === "suspended") audioCtx.resume();
+              const now = audioCtx.currentTime;
+              freqs.forEach((f, idx) => {
+                const osc = audioCtx.createOscillator();
+                const filter = audioCtx.createBiquadFilter();
+                const g = audioCtx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(f, now);
+                filter.type = "lowpass";
+                filter.frequency.setValueAtTime(540 + idx * 90, now);
+                g.gain.setValueAtTime(0.0001, now + idx * 0.1);
+                g.gain.linearRampToValueAtTime(0.11, now + idx * 0.1 + 0.32);
+                g.gain.exponentialRampToValueAtTime(0.0006, now + idx * 0.1 + 4.0);
+                osc.connect(filter);
+                filter.connect(g);
+                g.connect(masterGain);
+                osc.start(now + idx * 0.1);
+                osc.stop(now + idx * 0.1 + 4.1);
+              });
+            } catch (e) {}
+          }
+
+          function centerLineSmoothly(idx, duration = 620) {
+            const el = lineEls[idx];
+            if (!el) return;
+            const desired = Math.max(0, el.offsetTop + el.offsetHeight / 2 - viewportEl.clientHeight / 2);
+            if (duration <= 0) {
+              viewportEl.scrollTop = desired;
+              return;
+            }
+            if (scrollRaf) cancelAnimationFrame(scrollRaf);
+            const start = viewportEl.scrollTop;
+            const delta = desired - start;
+            const t0 = performance.now();
+            const easeOut = (t) => 1 - Math.pow(1 - t, 4);
+            function step(now) {
+              const p = Math.min(1, (now - t0) / duration);
+              viewportEl.scrollTop = start + delta * easeOut(p);
+              if (p < 1) scrollRaf = requestAnimationFrame(step);
+            }
+            scrollRaf = requestAnimationFrame(step);
+          }
+
+          function syncLyrics(time, immediate = false) {
+            const track = tracks[currentIdx];
+            let found = 0;
+            for (let i = 0; i < track.lyrics.length; i++) {
+              if (time >= track.lyrics[i].time) found = i;
+              else break;
+            }
+            if (found !== activeIndex) {
+              activeIndex = found;
+              lineEls.forEach((el, i) => {
+                el.classList.toggle("is-active", i === found);
+                el.classList.toggle("is-near", Math.abs(i - found) === 1);
+              });
+              const line = track.lyrics[found];
+              document.getElementById("transport-lyric-snippet").textContent = line.isInterlude ? line.sub : line.text;
+              if (!userScrolling || immediate) centerLineSmoothly(found, immediate ? 0 : 620);
+            }
+            const curLine = track.lyrics[activeIndex];
+            const curEl = lineEls[activeIndex];
+            if (!curLine || !curEl) return;
+            if (curLine.isInterlude) {
+              const r = (time - curLine.time) / Math.max(1, curLine.endTime - curLine.time);
+              curEl.querySelectorAll(".interlude-dot").forEach((d, di) => d.classList.toggle("is-lit", r >= (di + 0.25) / 3));
+            } else {
+              const tokens = curEl.querySelectorAll(".syllable-token");
+              curLine.syllables.forEach((s, si) => {
+                const token = tokens[si];
+                if (!token) return;
+                if (time <= s.start) {
+                  token.style.setProperty("--syl-pct", "0%");
+                  token.classList.remove("is-singing", "is-sung");
+                } else if (time >= s.end) {
+                  token.style.setProperty("--syl-pct", "115%");
+                  token.classList.remove("is-singing");
+                  token.classList.add("is-sung");
+                } else {
+                  const pct = ((time - s.start) / Math.max(0.08, s.end - s.start)) * 100;
+                  token.style.setProperty("--syl-pct", pct.toFixed(1) + "%");
+                  token.classList.add("is-singing");
+                }
+              });
+            }
+          }
+
+          function updateProgressUI() {
+            const dur = tracks[currentIdx].duration;
+            const pct = Math.min(100, (currentTime / dur) * 100);
+            document.getElementById("time-current").textContent = fmt(currentTime);
+            document.getElementById("time-duration").textContent = fmt(dur);
+            document.getElementById("timeline-fill").style.width = pct.toFixed(2) + "%";
+            document.getElementById("timeline-thumb").style.left = pct.toFixed(2) + "%";
+          }
+
+          function loadTrack(idx) {
+            currentIdx = idx;
+            currentTime = 0;
+            activeIndex = -1;
+            lastChord = -1;
+            const t = tracks[idx];
+
+            // Nav
+            const navMount = document.getElementById("mount-navpane");
+            navMount.innerHTML = `
+              <div>
+                <div class="nav-section-title">Nordic Repertoire · 曲目集</div>
+                <div class="nav-track-list">
+                  ${tracks.map((tr, i) => `
+                    <button type="button" class="nav-track-item ${i === idx ? "is-selected" : ""}" data-idx="${i}">
+                      <div class="nav-track-swatch" style="background:linear-gradient(135deg,${tr.palette.bgPrimary},${tr.palette.bgSecondary});">0${i + 1}</div>
+                      <div class="nav-track-meta">
+                        <div class="nav-track-title">${tr.title}</div>
+                        <div class="nav-track-artist">${tr.artist}</div>
+                      </div>
+                      <span class="nav-track-duration">${fmt(tr.duration)}</span>
+                    </button>
+                  `).join("")}
+                </div>
+              </div>
+              <div class="nav-acoustic-card">
+                <div class="acoustic-header"><span>Scandinavian Motion</span><span style="color:var(--nordic-sage);font-family:var(--font-mono);">1.03×</span></div>
+                <p class="acoustic-desc">点击右侧任意一行歌词即可丝滑跳转至对应时刻；支持滚轮自由浏览与自动居中回归。</p>
+              </div>
+            `;
+            navMount.querySelectorAll(".nav-track-item").forEach((b) => {
+              b.addEventListener("click", () => loadTrack(Number(b.dataset.idx)));
+            });
+
+            // Cover
+            const { bgPrimary, bgSecondary, accent, wood, ink } = t.palette;
+            document.getElementById("mount-cover").innerHTML = `
+              <div class="artwork-frame ${isPlaying ? "is-playing" : ""}" id="cover-frame">
+                <div class="vinyl-disc-peek"></div>
+                <div class="artwork-canvas">
+                  <svg viewBox="0 0 320 320" width="100%" height="100%">
+                    <rect width="320" height="320" fill="${bgPrimary}"/>
+                    <circle cx="215" cy="98" r="54" fill="${wood}" opacity="0.48"/>
+                    <path d="M0 210 Q95 178 190 202 T320 188 L320 320 L0 320 Z" fill="${bgSecondary}"/>
+                    <path d="M0 246 Q120 225 230 244 T320 236 L320 320 L0 320 Z" fill="${accent}" opacity="0.52"/>
+                    <line x1="36" y1="42" x2="36" y2="278" stroke="${ink}" stroke-opacity="0.16"/>
+                    <line x1="36" y1="246" x2="284" y2="246" stroke="${ink}" stroke-opacity="0.16"/>
+                  </svg>
+                </div>
+              </div>
+              <div class="track-editorial-meta">
+                <div class="track-catalogue-Row"><span>${t.catalogueNo}</span></div>
+                <h1 class="track-main-title">${t.title}</h1>
+                <p class="track-Byline">${t.artist} — ${t.album}</p>
+                <div class="track-specs-pills">
+                  <span class="spec-pill">${t.format}</span>
+                  <span class="spec-pill">${t.tempo}</span>
+                </div>
+              </div>
+            `;
+
+            // Lyrics
+            listEl.innerHTML = t.lyrics.map((l, i) => `
+              <li class="lyric-line-item" data-idx="${i}">
+                <div class="lyric-primary-text">
+                  ${l.isInterlude
+                    ? `<div class="interlude-dots"><span class="interlude-dot"></span><span class="interlude-dot"></span><span class="interlude-dot"></span></div>`
+                    : l.syllables.map((s) => `<span class="syllable-token">${s.text}</span>`).join("")}
+                </div>
+                ${l.sub ? `<div class="lyric-sub-translation">${l.sub}</div>` : ""}
+                <span class="lyric-seek-badge">▶ ${fmt(l.time)}</span>
+              </li>
+            `).join("");
+
+            lineEls = Array.from(listEl.querySelectorAll(".lyric-line-item"));
+            lineEls.forEach((el, i) => {
+              el.addEventListener("click", () => {
+                userScrolling = false;
+                manualPill.classList.remove("is-visible");
+                currentTime = t.lyrics[i].time;
+                updateProgressUI();
+                syncLyrics(currentTime, false);
+                centerLineSmoothly(i, 520);
+                if (!isPlaying) togglePlay();
+                else playChord(t.chordProgression[i % t.chordProgression.length]);
+              });
+            });
+
+            updateProgressUI();
+            requestAnimationFrame(() => syncLyrics(0, true));
+          }
+
+          function togglePlay() {
+            isPlaying = !isPlaying;
+            document.getElementById("icon-play").style.display = isPlaying ? "none" : "block";
+            document.getElementById("icon-pause").style.display = isPlaying ? "block" : "none";
+            document.getElementById("mini-soundwave").classList.toggle("is-playing", isPlaying);
+            document.getElementById("cover-frame")?.classList.toggle("is-playing", isPlaying);
+
+            if (isPlaying) {
+              lastFrame = performance.now();
+              const tick = (now) => {
+                if (!isPlaying) return;
+                const dt = Math.min(0.1, (now - lastFrame) / 1000);
+                lastFrame = now;
+                const t = tracks[currentIdx];
+                currentTime = Math.min(t.duration, currentTime + dt);
+                const cStep = Math.floor(currentTime / 4.5);
+                if (cStep !== lastChord) {
+                  lastChord = cStep;
+                  playChord(t.chordProgression[cStep % t.chordProgression.length]);
+                }
+                updateProgressUI();
+                syncLyrics(currentTime, false);
+                if (currentTime >= t.duration) {
+                  currentTime = 0;
+                  lastChord = -1;
+                }
+                rafId = requestAnimationFrame(tick);
+              };
+              rafId = requestAnimationFrame(tick);
+            } else if (rafId) {
+              cancelAnimationFrame(rafId);
+            }
+          }
+
+          document.getElementById("btn-play-pause").addEventListener("click", togglePlay);
+          document.getElementById("btn-prev").addEventListener("click", () => loadTrack((currentIdx - 1 + tracks.length) % tracks.length));
+          document.getElementById("btn-next").addEventListener("click", () => loadTrack((currentIdx + 1) % tracks.length));
+
+          document.getElementById("btn-syllable-toggle").addEventListener("click", (e) => {
+            const cur = listEl.getAttribute("data-syllable-mode") === "true";
+            listEl.setAttribute("data-syllable-mode", String(!cur));
+            e.currentTarget.classList.toggle("is-active", !cur);
+            document.getElementById("label-syllable-mode").textContent = !cur ? "逐音节柔光推进" : "整行极简高亮";
+          });
+
+          document.getElementById("btn-theme-toggle").addEventListener("click", () => {
+            const isDusk = document.documentElement.getAttribute("data-theme") === "dusk";
+            if (isDusk) {
+              document.documentElement.removeAttribute("data-theme");
+              document.getElementById("label-theme-mode").textContent = "晨雾白 · Mist Light";
+            } else {
+              document.documentElement.setAttribute("data-theme", "dusk");
+              document.getElementById("label-theme-mode").textContent = "峡湾夜 · Slate Dusk";
+            }
+          });
+
+          viewportEl.addEventListener("wheel", () => {
+            if (scrollRaf) cancelAnimationFrame(scrollRaf);
+            userScrolling = true;
+            manualPill.classList.add("is-visible");
+            clearTimeout(userScrollTimer);
+            userScrollTimer = setTimeout(() => {
+              userScrolling = false;
+              manualPill.classList.remove("is-visible");
+              if (activeIndex >= 0) centerLineSmoothly(activeIndex, 620);
+            }, 2600);
+          }, { passive: true });
+
+          manualPill.addEventListener("click", () => {
+            userScrolling = false;
+            manualPill.classList.remove("is-visible");
+            if (activeIndex >= 0) centerLineSmoothly(activeIndex, 520);
+          });
+
+          const tlSlider = document.getElementById("timeline-slider");
+          tlSlider.addEventListener("click", (e) => {
+            const r = Math.max(0, Math.min(1, (e.clientX - tlSlider.getBoundingClientRect().left) / tlSlider.clientWidth));
+            currentTime = r * tracks[currentIdx].duration;
+            updateProgressUI();
+            syncLyrics(currentTime, true);
+          });
+
+          loadTrack(0);
+        }
+      })();
+    }
+  </script>
+</body>
+</html>

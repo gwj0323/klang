@@ -1,0 +1,80 @@
+/**
+ * Nordic Minimalist × WinUI 3 Design System Tokens
+ * 色彩哲学：取自斯堪的纳维亚晨雾、桦木、板岩与鼠尾草，严禁高饱和霓虹色。
+ */
+:root {
+  /* --- 核心北欧自然色板 (Scandinavian Daylight) --- */
+  --nordic-mist-white: #F6F5F1;         /* 晨雾白：主窗口底层 (Mica Base) */
+  --nordic-warm-birch: #EDEAE2;         /* 浅桦木暖白：次级背景/韵律呼吸区 */
+  --nordic-oat-surface: rgba(250, 249, 246, 0.72); /* 燕麦磨砂表层 (Acrylic Surface) */
+  --nordic-card-elevated: rgba(255, 254, 251, 0.82); /* 悬浮层卡片 */
+  --nordic-subtle-hover: rgba(43, 46, 51, 0.045);    /* WinUI 3 Subtle Fill Hover */
+  --nordic-subtle-active: rgba(43, 46, 51, 0.08);    /* WinUI 3 Subtle Fill Pressed */
+
+  /* --- 文本与排版层级 --- */
+  --nordic-charcoal: #26292E;           /* 炭黑：主标题、当前激活歌词 */
+  --nordic-slate-dark: #4A5058;         /* 深板岩灰：副标题、控制图标 */
+  --nordic-slate-muted: #767D86;        /* 板岩灰：次要元数据、未激活歌词基准色 */
+  --nordic-slate-faint: #9DA3AB;        /* 浅板岩：时间戳、辅助刻度 */
+
+  /* --- 灰鼠尾草绿强调色与浅木色点缀 --- */
+  --nordic-sage: #6E8277;               /* 灰鼠尾草绿：主强调色 (WinUI Accent) */
+  --nordic-sage-soft: rgba(110, 130, 119, 0.14); /* 鼠尾草柔光底衬 */
+  --nordic-sage-border: rgba(110, 130, 119, 0.28);
+  --nordic-wood-warm: #C8BBAE;          /* 微弱浅木色：唱片内圈/温暖装饰点缀 */
+
+  /* --- WinUI 3 超细描边与漫反射微阴影 --- */
+  --winui-stroke-outer: rgba(38, 41, 46, 0.075);
+  --winui-stroke-inner: rgba(255, 255, 255, 0.75);
+  --winui-divider: rgba(38, 41, 46, 0.06);
+  --shadow-ambient: 0 20px 44px -14px rgba(38, 41, 46, 0.07), 0 4px 14px -3px rgba(38, 41, 46, 0.035);
+  --shadow-flyout: 0 12px 32px -8px rgba(38, 41, 46, 0.09), 0 2px 6px -1px rgba(38, 41, 46, 0.04);
+  --shadow-cover: 0 24px 48px -12px rgba(38, 41, 46, 0.12), 0 6px 16px -4px rgba(38, 41, 46, 0.06);
+
+  /* --- 排版与空间规范 --- */
+  --font-sans: 'Inter', 'Segoe UI Variable Display', 'Segoe UI Variable Text', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  --lyric-line-height: 1.72;            /* 规范要求：1.6 ~ 1.8 */
+  --lyric-active-scale: 1.03;           /* 规范要求：当前高亮行微量放大 1.03 */
+  --lyric-inactive-opacity: 0.35;       /* 规范要求：未激活歌词半透明 0.35 */
+  --lyric-near-opacity: 0.48;           /* 临近行温和过渡透明度 */
+  --lyric-active-opacity: 1;            /* 规范要求：当前行全亮 1.0 */
+
+  /* --- 动效缓动曲线 (WinUI 3 Fast Out, Slow In) --- */
+  --ease-out-nordic: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-soft: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* --- 圆角规范 (WinUI 3 Geometry) --- */
+  --radius-window: 12px;
+  --radius-card: 10px;
+  --radius-control: 6px;
+  --radius-pill: 999px;
+}
+
+/* --- 北欧极夜主题 (Nordic Fjord Dusk - 同样保持低饱和自然冷调) --- */
+[data-theme="dusk"] {
+  --nordic-mist-white: #1C1F23;         /* 深板岩炭底 */
+  --nordic-warm-birch: #16181C;         /* 峡湾深灰底 */
+  --nordic-oat-surface: rgba(36, 40, 46, 0.72);
+  --nordic-card-elevated: rgba(42, 47, 54, 0.78);
+  --nordic-subtle-hover: rgba(235, 232, 225, 0.055);
+  --nordic-subtle-active: rgba(235, 232, 225, 0.09);
+
+  --nordic-charcoal: #EAE7E1;           /* 柔和暖雾白文字，避免纯白刺眼 */
+  --nordic-slate-dark: #B8BEC6;
+  --nordic-slate-muted: #858D96;
+  --nordic-slate-faint: #5D646D;
+
+  --nordic-sage: #8CA196;               /* 夜色灰鼠尾草绿 */
+  --nordic-sage-soft: rgba(140, 161, 150, 0.15);
+  --nordic-sage-border: rgba(140, 161, 150, 0.3);
+  --nordic-wood-warm: #8B7E72;
+
+  --winui-stroke-outer: rgba(255, 255, 255, 0.07);
+  --winui-stroke-inner: rgba(255, 255, 255, 0.045);
+  --winui-divider: rgba(255, 255, 255, 0.06);
+  --shadow-ambient: 0 24px 52px -12px rgba(0, 0, 0, 0.42), 0 4px 16px -2px rgba(0, 0, 0, 0.28);
+  --shadow-flyout: 0 14px 36px -6px rgba(0, 0, 0, 0.38);
+  --shadow-cover: 0 26px 54px -12px rgba(0, 0, 0, 0.48);
+}

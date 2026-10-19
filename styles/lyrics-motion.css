@@ -1,0 +1,302 @@
+/**
+ * Nordic Lyrics Choreography & Motion System
+ * 核心动效规范：
+ * 1. 上下边缘 mask-image 线性渐变羽化遮罩
+ * 2. Active 行 scale(1.03) + opacity: 0.35 -> 1.0 平滑缓动过渡
+ * 3. 逐音节柔和透明度擦除与微字重呼吸（摒弃俗气 KTV 变色填充）
+ * 4. 点击任意歌词行丝滑寻道反馈
+ */
+
+.lyrics-stage-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* 歌词滚动视口：应用上下边缘线性渐变羽化遮罩 (mask-image) */
+.lyrics-scroll-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 0 18px 0 8px;
+
+  /* 规范要求：上下边缘使用线性渐变遮罩 (mask-image 渐隐) */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 8%,
+    rgba(0, 0, 0, 0.65) 16%,
+    #000000 24%,
+    #000000 76%,
+    rgba(0, 0, 0, 0.65) 84%,
+    rgba(0, 0, 0, 0.18) 92%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 8%,
+    rgba(0, 0, 0, 0.65) 16%,
+    #000000 24%,
+    #000000 76%,
+    rgba(0, 0, 0, 0.65) 84%,
+    rgba(0, 0, 0, 0.18) 92%,
+    transparent 100%
+  );
+}
+
+.lyrics-scroll-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* 上下留白占位层，确保首行与末行都能精确滚动至视口正中央 */
+.lyrics-spacer {
+  height: 46%;
+  pointer-events: none;
+}
+
+.lyrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+
+/* =========================================================
+   单行歌词容器与状态过渡
+   ========================================================= */
+.lyric-line-item {
+  position: relative;
+  padding: 14px 20px;
+  border-radius: var(--radius-card);
+  border: 1px solid transparent;
+  cursor: pointer;
+
+  /* 规范要求：默认半透明 opacity: 0.35，平滑缓动过渡到 1.0，微量放大 scale(1.03) */
+  opacity: var(--lyric-inactive-opacity);
+  transform: scale(1) translateZ(0);
+  transform-origin: left center;
+  filter: blur(0.35px);
+  will-change: transform, opacity, filter;
+
+  transition:
+    transform 0.58s var(--ease-out-nordic),
+    opacity 0.52s var(--ease-out-nordic),
+    filter 0.52s var(--ease-out-nordic),
+    background-color 0.25s var(--ease-out-nordic),
+    border-color 0.25s var(--ease-out-nordic);
+}
+
+/* 距离当前行上下相邻 1 行的温和呼吸层次 */
+.lyric-line-item.is-near {
+  opacity: var(--lyric-near-opacity);
+  filter: blur(0.12px);
+}
+
+/* 规范要求：当前唱到的高亮行 (Active) -> scale(1.03) + opacity: 1 */
+.lyric-line-item.is-active {
+  opacity: var(--lyric-active-opacity);
+  transform: scale(var(--lyric-active-scale)) translateZ(0);
+  filter: blur(0px);
+  background: rgba(110, 130, 119, 0.045);
+  border-color: var(--winui-stroke-outer);
+  box-shadow: inset 0 1px 0 var(--winui-stroke-inner);
+}
+
+/* 左侧微弱鼠尾草绿激活呼吸锚点 */
+.lyric-line-item::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--nordic-sage);
+  transform: translateY(-50%) scaleY(0);
+  opacity: 0;
+  transition:
+    transform 0.45s var(--ease-out-nordic),
+    opacity 0.45s var(--ease-out-nordic);
+}
+
+.lyric-line-item.is-active::before {
+  transform: translateY(-50%) scaleY(1);
+  opacity: 0.85;
+}
+
+/* Hover 态：展示可点击跳转的温润磨砂底衬与右侧时间戳 */
+.lyric-line-item:hover:not(.is-active) {
+  opacity: 0.72;
+  filter: blur(0px);
+  background: var(--nordic-subtle-hover);
+  border-color: var(--winui-stroke-outer);
+}
+
+.lyric-line-item:active {
+  transform: scale(0.992);
+}
+
+/* 歌词主文本排版：极简无衬线、行高 1.72 (在 1.6~1.8 区间内) */
+.lyric-primary-text {
+  font-size: clamp(18px, 1.75vw, 23px);
+  line-height: var(--lyric-line-height);
+  letter-spacing: -0.015em;
+  font-weight: 460;
+  color: var(--nordic-charcoal);
+  padding-right: 68px;
+  transition: font-weight 0.35s var(--ease-out-nordic);
+}
+
+.lyric-line-item.is-active .lyric-primary-text {
+  font-weight: 580;
+}
+
+/* 北欧双语/意境副行注解 */
+.lyric-sub-translation {
+  margin-top: 4px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  font-weight: 400;
+  color: var(--nordic-slate-muted);
+  letter-spacing: 0.005em;
+  padding-right: 68px;
+  transition: color 0.4s var(--ease-out-nordic);
+}
+
+.lyric-line-item.is-active .lyric-sub-translation {
+  color: var(--nordic-slate-dark);
+}
+
+/* =========================================================
+   逐字/音节柔和推进动效 (Soft Syllable Wipe & Weight Shift)
+   严禁俗气 KTV 霓虹变色，采用同色系炭黑透明度柔光擦除与微字重过渡
+   ========================================================= */
+.syllable-token {
+  display: inline-block;
+  position: relative;
+  white-space: pre;
+  --syl-pct: 0%;
+  transition: transform 0.28s var(--ease-out-nordic), opacity 0.28s var(--ease-out-nordic);
+}
+
+/* 当开启「逐字/音节推进」且处于当前激活行时 */
+.lyrics-list[data-syllable-mode="true"] .lyric-line-item.is-active .syllable-token {
+  color: var(--nordic-charcoal);
+  /* 使用带 22% 柔和羽化过渡带的线性 Alpha 遮罩，实现温润擦除感 */
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) calc(var(--syl-pct) - 10%),
+    rgba(0, 0, 0, 0.42) calc(var(--syl-pct) + 14%),
+    rgba(0, 0, 0, 0.42) 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) calc(var(--syl-pct) - 10%),
+    rgba(0, 0, 0, 0.42) calc(var(--syl-pct) + 14%),
+    rgba(0, 0, 0, 0.42) 100%
+  );
+}
+
+/* 正在发声的当前音节：微弱字重饱满度与 -0.5px 轻盈呼吸感 */
+.lyrics-list[data-syllable-mode="true"] .lyric-line-item.is-active .syllable-token.is-singing {
+  font-weight: 630;
+  transform: translateY(-0.6px);
+}
+
+.lyrics-list[data-syllable-mode="true"] .lyric-line-item.is-active .syllable-token.is-sung {
+  font-weight: 600;
+}
+
+/* 间奏呼吸三点指示器 (Instrumental Interlude Dots) */
+.interlude-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.interlude-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nordic-sage);
+  opacity: 0.3;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.lyric-line-item.is-active .interlude-dot.is-lit {
+  opacity: 0.95;
+  transform: scale(1.22);
+}
+
+/* =========================================================
+   右侧点击跳转时间戳胶囊 (Seek Timestamp Pill)
+   ========================================================= */
+.lyric-seek-badge {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--nordic-card-elevated);
+  border: 1px solid var(--winui-stroke-outer);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--nordic-slate-dark);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.22s var(--ease-out-nordic),
+    transform 0.22s var(--ease-out-nordic);
+}
+
+.lyric-line-item:hover .lyric-seek-badge {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* 手动滚动浏览时的中央基准指示浮层 */
+.manual-scroll-pill {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  border-radius: var(--radius-pill);
+  background: var(--nordic-card-elevated);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--winui-stroke-outer);
+  box-shadow: var(--shadow-flyout);
+  font-size: 11.5px;
+  color: var(--nordic-slate-dark);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: all 0.28s var(--ease-out-nordic);
+}
+
+.manual-scroll-pill.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  cursor: pointer;
+}
