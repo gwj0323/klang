@@ -204,8 +204,10 @@ class WinUISegmentedControl(QWidget):
         self.setMouseTracking(True)
 
         self._anim = QVariantAnimation(self)
-        self._anim.setDuration(260)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setDuration(280)
+        seg_curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        seg_curve.setOvershoot(1.16)
+        self._anim.setEasingCurve(seg_curve)
         self._anim.valueChanged.connect(self._on_anim_val)
 
     def _on_anim_val(self, val: float) -> None:
@@ -559,8 +561,10 @@ class WinUIFlyoutMenu(QWidget):
         self.setFixedSize(w, h)
 
         self._anim = QVariantAnimation(self)
-        self._anim.setDuration(190)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setDuration(220)
+        flyout_curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        flyout_curve.setOvershoot(1.22)
+        self._anim.setEasingCurve(flyout_curve)
         self._anim.valueChanged.connect(self._on_anim_val)
 
     def _on_anim_val(self, val: float) -> None:
@@ -691,8 +695,10 @@ class WinUIModalDialog(QDialog):
         self._root_vbox.addLayout(header_row)
 
         self._entry_anim = QVariantAnimation(self)
-        self._entry_anim.setDuration(210)
-        self._entry_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._entry_anim.setDuration(260)
+        modal_curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        modal_curve.setOvershoot(1.10)
+        self._entry_anim.setEasingCurve(modal_curve)
         self._entry_anim.valueChanged.connect(self._on_entry_anim)
 
     def _paint_close_btn(self, event) -> None:

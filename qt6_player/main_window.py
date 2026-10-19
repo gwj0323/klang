@@ -218,8 +218,8 @@ class NordicWinUI3Window(QMainWindow):
 
         self._sidebar_expanded = not sidebar_collapsed
         self._sidebar_anim = QVariantAnimation(self)
-        self._sidebar_anim.setDuration(260)
-        self._sidebar_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._sidebar_anim.setDuration(300)
+        self._sidebar_anim.setEasingCurve(QEasingCurve.Type.OutQuint)
         self._sidebar_anim.valueChanged.connect(self._on_sidebar_anim_val)
 
         init_w = NavigationPane.EXPANDED_WIDTH if self._sidebar_expanded else 0
@@ -385,11 +385,25 @@ class NordicWinUI3Window(QMainWindow):
             if len(self.tracks) <= 1:
                 self.lyrics_stage._show_toast("至少保留一首曲目")
                 return
+
+            was_playing = self.audio.is_playing
+            is_removing_current = (index == self.current_track_index)
+
             self.tracks.pop(index)
-            if self.current_track_index >= len(self.tracks):
-                self.current_track_index = max(0, len(self.tracks) - 1)
-            self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
-            self.select_track(self.current_track_index, auto_play=self.audio.is_playing)
+
+            if is_removing_current:
+                # 删除的是当前正在播放的曲目：切换到同一索引的新曲目并继续播放
+                if self.current_track_index >= len(self.tracks):
+                    self.current_track_index = max(0, len(self.tracks) - 1)
+                self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+                self.select_track(self.current_track_index, auto_play=was_playing)
+                self.lyrics_stage._show_toast("已移除当前曲目，自动播放下一首")
+            else:
+                # 删除的是非当前播放曲目：当前歌曲连续播放完全不受任何影响，保持原进度与音频流
+                if index < self.current_track_index:
+                    self.current_track_index -= 1
+                self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+                self.lyrics_stage._show_toast("已从播放列表移除")
 
     def _open_audio_settings_dialog(self) -> None:
         cur_offset = (

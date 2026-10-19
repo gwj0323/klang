@@ -448,10 +448,10 @@ class NavigationPane(QWidget):
         self.btn_import_split.menuRequested.connect(self._open_import_flyout)
         layout.addWidget(self.btn_import_split)
 
-        # 列表切换动效驱动器
+        # 列表切换非线性动效驱动器 (错峰级联四次减速)
         self._list_reveal_anim = QVariantAnimation(self)
-        self._list_reveal_anim.setDuration(240)
-        self._list_reveal_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._list_reveal_anim.setDuration(320)
+        self._list_reveal_anim.setEasingCurve(QEasingCurve.Type.OutQuint)
         self._list_reveal_anim.valueChanged.connect(self._on_list_reveal_val)
 
         self.rebuild_list(tracks, active_index=0)
@@ -477,9 +477,16 @@ class NavigationPane(QWidget):
 
     def _on_list_reveal_val(self, val: float) -> None:
         p = float(val)
-        for btn in self.item_buttons:
-            if btn.isVisible():
-                btn.set_reveal_progress(p)
+        visible_btns = [b for b in self.item_buttons if b.isVisible()]
+        total = len(visible_btns)
+        if total == 0:
+            return
+        # 非线性级联错峰入场 (Staggered Non-linear Cascade)
+        for i, btn in enumerate(visible_btns):
+            stagger = (min(i, 10) / 10.0) * 0.36
+            sub_p = max(0.0, min(1.0, (p - stagger) / max(0.01, 1.0 - stagger)))
+            eased = 1.0 - (1.0 - sub_p) ** 4
+            btn.set_reveal_progress(eased)
 
     def _trigger_list_transition(self) -> None:
         self._list_reveal_anim.stop()
