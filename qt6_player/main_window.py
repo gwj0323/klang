@@ -166,6 +166,8 @@ class NordicWinUI3Window(QMainWindow):
         self.desktop_lyric = DesktopLyricOverlay()
         self.mini_player = MiniPlayerWindow()
         self.immersive_window = ImmersiveFullscreenWindow(self)
+        saved_vm = self._saved_state.get("vinyl_mode", "pure")
+        self.immersive_window.artwork_view.set_vinyl_mode(saved_vm)
         self._active_eq_dialog: Optional[AudioSettingsDialog] = None
         self._active_workers: List[AutoScrapeWorker] = []
 
@@ -563,6 +565,7 @@ class NordicWinUI3Window(QMainWindow):
             "desktop_lyric_font_size": int(self.desktop_lyric.font_size) if hasattr(self, "desktop_lyric") else 22,
             "immersive_fps": int(getattr(self.immersive_window, "target_fps", 60)),
             "backdrop_material": str(getattr(self, "backdrop_material", "mica")),
+            "vinyl_mode": str(getattr(self.immersive_window.artwork_view, "vinyl_mode", "pure")),
             "window_geometry": geom,
             "is_maximized": bool(self.isMaximized()),
             "last_track_index": int(self.current_track_index),
@@ -914,7 +917,7 @@ class NordicWinUI3Window(QMainWindow):
             show_translation=getattr(self.lyrics_stage, "show_translation", True),
             syllable_mode=getattr(self.lyrics_stage, "syllable_mode", True),
             immersive_fps=getattr(self.immersive_window, "target_fps", 60),
-            vinyl_mode=getattr(self.immersive_window.artwork_view, "show_vinyl", False),
+            vinyl_mode=getattr(self.immersive_window.artwork_view, "vinyl_mode", "pure"),
             backdrop_material=getattr(self, "backdrop_material", "mica"),
             theme=self.theme,
             parent=self,
@@ -951,6 +954,8 @@ class NordicWinUI3Window(QMainWindow):
         dlg.syllableModeToggled.connect(lambda _b: self.schedule_save())
         dlg.immersiveFpsChanged.connect(self.immersive_window.set_target_fps)
         dlg.immersiveFpsChanged.connect(lambda fps: (self._saved_state.update({"immersive_fps": fps}), self.schedule_save()))
+        dlg.vinylModeChanged.connect(self.immersive_window.artwork_view.set_vinyl_mode)
+        dlg.vinylModeChanged.connect(lambda m: (self._saved_state.update({"vinyl_mode": m}), self.schedule_save()))
         dlg.vinylModeToggled.connect(self.immersive_window.artwork_view.set_vinyl_mode)
         dlg.backdropMaterialChanged.connect(self.set_backdrop_material)
         dlg.scrapeRequested.connect(self._open_online_scraper_dialog)

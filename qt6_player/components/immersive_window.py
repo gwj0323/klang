@@ -136,7 +136,7 @@ class ImmersiveArtworkView(QWidget):
         self.track: Optional[NordicTrack] = None
         self.cover_pixmap: Optional[QPixmap] = None
         self.is_playing: bool = False
-        self.show_vinyl: bool = False  # 默认纯净现代封面模式
+        self.vinyl_mode: str = "pure"  # "none" | "pure" (纯净黑胶无唱臂) | "arm" (极简现代唱臂)
         self.vinyl_angle: float = 0.0
         self.angular_vel: float = 0.0
         self.slide_prog: float = 0.0
@@ -145,11 +145,11 @@ class ImmersiveArtworkView(QWidget):
         self._cached_disc_key: Optional[str] = None
         self._cached_disc_pixmap: Optional[QPixmap] = None
 
-        # 唱臂落针起伏物理系统 (Tonearm Drop & Lift Physics)
-        self.tonearm_angle: float = -32.0        # 当前唱臂旋转角 (deg): -32° 为停靠原点, -12°~+3° 为唱片音轨
-        self.tonearm_target_angle: float = -32.0  # 目标旋转角
-        self.tonearm_lift: float = 1.0           # 当前高度抬升比例: 1.0 为抬起悬空, 0.0 为落针搭在唱片上
-        self.tonearm_target_lift: float = 1.0    # 目标抬升比例
+        # 现代极简线性唱臂系统 (仅在 vinyl_mode == "arm" 时生效)
+        self.tonearm_angle: float = -16.0        # 当前旋转角 (deg): -16° 为停靠外侧, 0°~+8° 为音轨
+        self.tonearm_target_angle: float = -16.0
+        self.tonearm_lift: float = 1.0           # 抬升: 1.0 为悬空抬起, 0.0 为落针搭在唱片上
+        self.tonearm_target_lift: float = 1.0
 
         # 播放状态与交互
         self.current_time: float = 0.0
@@ -176,8 +176,25 @@ class ImmersiveArtworkView(QWidget):
 
         self.setMouseTracking(True)
 
-    def set_vinyl_mode(self, enabled: bool) -> None:
-        self.show_vinyl = enabled
+    @property
+    def show_vinyl(self) -> bool:
+        return self.vinyl_mode in ("pure", "arm", "vinyl_pure", "vinyl_arm")
+
+    @property
+    def show_tonearm(self) -> bool:
+        return self.vinyl_mode in ("arm", "vinyl_arm")
+
+    def set_vinyl_mode(self, mode) -> None:
+        if isinstance(mode, bool):
+            self.vinyl_mode = "pure" if mode else "none"
+        elif mode in ("none", "pure", "arm"):
+            self.vinyl_mode = mode
+        elif mode == "vinyl_pure":
+            self.vinyl_mode = "pure"
+        elif mode == "vinyl_arm":
+            self.vinyl_mode = "arm"
+        else:
+            self.vinyl_mode = "pure" if bool(mode) else "none"
         self.update()
 
     def set_track(self, track: Optional[NordicTrack]) -> None:
@@ -224,172 +241,125 @@ class ImmersiveArtworkView(QWidget):
         slide_rate = min(1.0, 1.0 - math.exp(-6.5 * dt))
         self.slide_prog += (target_slide - self.slide_prog) * slide_rate
 
-        # 3. 唱臂落针与抬针起伏物理动力学 (Tonearm drop & lift)
-        if self.show_vinyl and self.slide_prog > 0.20:
+        # 3. 极简现代线性唱臂落针物理系统 (仅在 show_tonearm 开启时运作)
+        if self.show_tonearm and self.show_vinyl and self.slide_prog > 0.20:
             if self.is_playing:
-                # 播放时：唱针根据歌曲进度沿着唱片微刻音轨从外圈慢慢滑向内圈
+                # 播放时：根据播放进度在右侧暴露音轨上微移 (0° ~ 8°)
                 progress = max(0.0, min(1.0, self.current_time / max(1.0, self.duration)))
-                self.tonearm_target_angle = -12.0 + progress * 15.0
+                self.tonearm_target_angle = 0.0 + progress * 8.0
 
-                # 当唱臂横向摆入唱片范围后，唱针缓缓降落 (温柔轻放)
-                if abs(self.tonearm_angle - self.tonearm_target_angle) < 7.0:
+                # 摆到位后轻柔落针
+                if abs(self.tonearm_angle - self.tonearm_target_angle) < 5.0:
                     self.tonearm_target_lift = 0.0
                 else:
                     self.tonearm_target_lift = 1.0
             else:
-                # 暂停时：唱针轻柔抬起，缓缓归位到右侧停泊唱臂托架 (-32.0°)
+                # 暂停时：抬起并旋回外侧停靠位 (-16°)
                 self.tonearm_target_lift = 1.0
-                self.tonearm_target_angle = -32.0
+                self.tonearm_target_angle = -16.0
         else:
             self.tonearm_target_lift = 1.0
-            self.tonearm_target_angle = -32.0
+            self.tonearm_target_angle = -16.0
 
-        # 唱臂横向摆动平滑阻尼
-        arm_rate = min(1.0, dt * 3.8)
+        # 唱臂平滑阻尼
+        arm_rate = min(1.0, dt * 4.2)
         self.tonearm_angle += (self.tonearm_target_angle - self.tonearm_angle) * arm_rate
 
-        # 唱臂垂直起伏阻尼：落针缓缓下落(温柔软触感)，抬起果断轻盈
-        lift_speed = 3.2 if self.tonearm_target_lift == 0.0 else 5.8
+        lift_speed = 3.6 if self.tonearm_target_lift == 0.0 else 6.5
         lift_rate = min(1.0, dt * lift_speed)
         self.tonearm_lift += (self.tonearm_target_lift - self.tonearm_lift) * lift_rate
 
     def _draw_tonearm(self, painter: QPainter, pivot_x: float, pivot_y: float, r_disc: float) -> None:
         """
-        绘制高保真北欧极简黑胶唱臂与落针动效 (Tonearm, Counterweight, Cartridge, Stylus)。
+        绘制现代极简 (Braun / B&O 风格) 纤薄线性唱臂与落针动效。
+        特点：
+        - 位于唱片右上方外侧，落针在暴露的右侧音轨 (2 点钟方向)，绝不遮挡唱片中心封面与护封；
+        - 去除一切多余拟物杂质 (无怪异黑孔眼、无笨重配重砣、无支架叉)；
+        - 极细 1.6px 钛金直臂杆，精微平齐枢轴，极简黑色微型唱头与翡翠绿指示线；
+        - 播放时温柔平缓落针，暂停时轻盈抬起。
         """
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        arm_len = r_disc * 0.95
+        arm_len = r_disc * 0.60
         cur_angle = self.tonearm_angle
         lift_prog = self.tonearm_lift
 
-        # 1. 停靠托架 (Parked Arm Rest)
-        rest_x = pivot_x + 12.0
-        rest_y = pivot_y + 24.0
-        painter.setPen(QPen(QColor(80, 85, 90, 180), 2.0))
-        painter.drawLine(QPointF(rest_x, rest_y), QPointF(rest_x + 3.0, rest_y + 12.0))
-        rest_clip = QPainterPath()
-        rest_clip.moveTo(rest_x - 4.0, rest_y - 2.0)
-        rest_clip.lineTo(rest_x, rest_y + 2.0)
-        rest_clip.lineTo(rest_x + 5.0, rest_y - 1.0)
-        painter.setPen(QPen(QColor(180, 186, 192, 220), 1.8))
-        painter.drawPath(rest_clip)
-
-        # 2. 动态落针投射阴影 (随抬起高度变远并淡化，落针贴合时汇聚在唱针着地点)
-        sh_offset_x = 4.0 + 10.0 * lift_prog
-        sh_offset_y = 6.0 + 12.0 * lift_prog
-        sh_alpha = int(round(55 * (1.0 - 0.42 * lift_prog)))
-
-        p1_x, p1_y = -arm_len * 0.58, arm_len * 0.52
-        p2_x, p2_y = -arm_len * 0.82, arm_len * 0.72
-        head_x, head_y = -arm_len * 0.94, arm_len * 0.88
+        # 1. 动态接触柔和阴影 (随抬针高度产生真实景深)
+        sh_dx = 3.0 + 7.0 * lift_prog
+        sh_dy = 3.0 + 8.0 * lift_prog
+        sh_alpha = int(round(35 * (1.0 - 0.45 * lift_prog)))
 
         painter.save()
-        painter.translate(pivot_x + sh_offset_x, pivot_y + sh_offset_y)
+        painter.translate(pivot_x + sh_dx, pivot_y + sh_dy)
         painter.rotate(cur_angle)
-
-        shadow_path = QPainterPath()
-        shadow_path.moveTo(0, 0)
-        shadow_path.cubicTo(p1_x * 0.5, p1_y * 0.4, p1_x, p1_y, p2_x, p2_y)
-        shadow_path.lineTo(head_x, head_y)
-        painter.setPen(QPen(QColor(0, 0, 0, sh_alpha), 3.6))
-        painter.drawPath(shadow_path)
+        painter.setPen(QPen(QColor(0, 0, 0, sh_alpha), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(QPointF(0, 0), QPointF(0, arm_len))
+        painter.fillRect(QRectF(-3.0, arm_len, 6.0, 13.0), QColor(0, 0, 0, sh_alpha))
         painter.restore()
 
-        # 3. 唱臂主体旋转系统 (围绕 pivot 旋转)
+        # 2. 唱臂主体旋转系统 (围绕 pivot 旋转)
         painter.save()
         painter.translate(pivot_x, pivot_y)
         painter.rotate(cur_angle)
 
-        # A. 后平衡配重杆与配重砣 (Counterweight)
-        rear_len = 30.0
-        painter.setPen(QPen(QColor(140, 145, 150), 3.0))
-        painter.drawLine(QPointF(0, 0), QPointF(rear_len * 0.7, -rear_len * 0.7))
+        # A. 极简纤细钛金直臂杆 (1.6px)
+        arm_col = QColor(220, 226, 234)
+        arm_pen = QPen(arm_col, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        painter.setPen(arm_pen)
+        painter.drawLine(QPointF(0, 0), QPointF(0, arm_len))
 
-        cw_cx = rear_len * 0.55
-        cw_cy = -rear_len * 0.55
-        cw_w, cw_h = 16.0, 14.0
-        cw_rect = QRectF(cw_cx - cw_w / 2.0, cw_cy - cw_h / 2.0, cw_w, cw_h)
-        cw_grad = QLinearGradient(cw_rect.topLeft(), cw_rect.bottomRight())
-        cw_grad.setColorAt(0.0, QColor(220, 224, 228))
-        cw_grad.setColorAt(0.4, QColor(160, 166, 172))
-        cw_grad.setColorAt(0.7, QColor(110, 115, 120))
-        cw_grad.setColorAt(1.0, QColor(180, 185, 190))
-        cw_path = QPainterPath()
-        cw_path.addRoundedRect(cw_rect, 3.0, 3.0)
-        painter.fillPath(cw_path, cw_grad)
-        painter.setPen(QPen(QColor(40, 44, 48, 120), 1.0))
-        painter.drawPath(cw_path)
-        painter.setPen(QPen(QColor(240, 244, 248, 180), 0.8))
-        painter.drawLine(QPointF(cw_cx - 2.0, cw_cy - cw_h / 2.0 + 2.0), QPointF(cw_cx - 2.0, cw_cy + cw_h / 2.0 - 2.0))
-        painter.drawLine(QPointF(cw_cx + 2.0, cw_cy - cw_h / 2.0 + 2.0), QPointF(cw_cx + 2.0, cw_cy + cw_h / 2.0 - 2.0))
+        # 后端精微平齐短杆
+        rear_pen = QPen(QColor(130, 138, 148), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        painter.setPen(rear_pen)
+        painter.drawLine(QPointF(0, 0), QPointF(0, -6.5))
 
-        # B. 唱臂金属曲管 (S/J-bend Wand)
-        arm_path = QPainterPath()
-        arm_path.moveTo(0, 0)
-        arm_path.cubicTo(p1_x * 0.5, p1_y * 0.4, p1_x, p1_y, p2_x, p2_y)
-        arm_path.lineTo(head_x, head_y)
+        # B. 极简现代微型唱头 (Cartridge)
+        cart_w, cart_h = 5.6, 13.0
+        cart_rect = QRectF(-cart_w / 2.0, arm_len - 1.0, cart_w, cart_h)
+        cart_path = QPainterPath()
+        cart_path.addRoundedRect(cart_rect, 1.5, 1.5)
+        painter.fillPath(cart_path, QColor(22, 24, 27))
+        painter.setPen(QPen(QColor(60, 66, 74), 0.8))
+        painter.drawPath(cart_path)
 
-        painter.setPen(QPen(QColor(45, 50, 55, 200), 3.2))
-        painter.drawPath(arm_path)
+        # 标志性翡翠绿 / 强调色微细指示条
+        stripe_rect = QRectF(-cart_w / 2.0 + 0.8, arm_len + 4.0, cart_w - 1.6, 1.6)
+        painter.fillRect(stripe_rect, self.accent_color)
 
-        arm_metal_pen = QPen(QColor(230, 235, 240, 240), 1.8)
-        arm_metal_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(arm_metal_pen)
-        painter.drawPath(arm_path)
+        # 针尖微点 (Diamond Stylus Tip)
+        stylus_tip = QPointF(0.0, arm_len + cart_h)
+        painter.setPen(QPen(QColor(230, 235, 240), 1.0))
+        painter.drawPoint(stylus_tip)
 
-        # C. 唱头与唱头盖 (Cartridge & Headshell)
-        painter.save()
-        painter.translate(head_x, head_y)
-        painter.rotate(18.0)
-
-        hs_rect = QRectF(-5.0, -4.0, 10.0, 20.0)
-        hs_path = QPainterPath()
-        hs_path.addRoundedRect(hs_rect, 2.0, 2.0)
-        painter.fillPath(hs_path, QColor(24, 26, 28))
-        painter.setPen(QPen(QColor(70, 75, 80), 0.8))
-        painter.drawPath(hs_path)
-
-        cart_rect = QRectF(-4.0, 6.0, 8.0, 12.0)
-        painter.fillRect(cart_rect, QColor(14, 16, 18))
-        accent_band = QRectF(-4.0, 10.0, 8.0, 2.5)
-        painter.fillRect(accent_band, self.accent_color)
-
-        stylus_tip = QPointF(0.0, 20.0)
-        painter.setPen(QPen(QColor(220, 225, 230), 1.2))
-        painter.drawLine(QPointF(0.0, 17.0), stylus_tip)
-
-        if lift_prog < 0.12 and self.is_playing:
-            contact_glow = QRadialGradient(stylus_tip, 4.0)
-            contact_glow.setColorAt(0.0, QColor(255, 255, 255, 220))
-            contact_glow.setColorAt(0.4, QColor(self.accent_color.red(), self.accent_color.green(), self.accent_color.blue(), 160))
-            contact_glow.setColorAt(1.0, Qt.GlobalColor.transparent)
+        # 落针着地微光
+        if lift_prog < 0.10 and self.is_playing:
+            glow = QRadialGradient(stylus_tip, 3.5)
+            glow.setColorAt(0.0, QColor(255, 255, 255, 220))
+            glow.setColorAt(0.5, QColor(self.accent_color.red(), self.accent_color.green(), self.accent_color.blue(), 120))
+            glow.setColorAt(1.0, Qt.GlobalColor.transparent)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(contact_glow)
-            painter.drawEllipse(stylus_tip, 4.0, 4.0)
+            painter.setBrush(glow)
+            painter.drawEllipse(stylus_tip, 3.5, 3.5)
 
         painter.restore()
-        painter.restore()
 
-        # 4. 唱臂底座云台轴承 (Gimbal Pivot Base)
-        base_r_outer = 14.0
-        base_grad = QRadialGradient(QPointF(pivot_x - 3.0, pivot_y - 3.0), base_r_outer * 1.2)
-        base_grad.setColorAt(0.0, QColor(245, 248, 250))
-        base_grad.setColorAt(0.45, QColor(180, 186, 192))
-        base_grad.setColorAt(0.85, QColor(100, 105, 112))
-        base_grad.setColorAt(1.0, QColor(50, 54, 58))
+        # 3. 平齐现代极简轴承底座 (Flush Minimalist Gimbal Pivot)
+        base_r = 7.0
+        base_grad = QRadialGradient(QPointF(pivot_x - 1.5, pivot_y - 1.5), base_r * 1.2)
+        base_grad.setColorAt(0.0, QColor(64, 70, 78))
+        base_grad.setColorAt(0.7, QColor(32, 36, 40))
+        base_grad.setColorAt(1.0, QColor(18, 20, 23))
 
-        painter.setPen(QPen(QColor(30, 32, 36, 180), 1.0))
+        painter.setPen(QPen(QColor(70, 78, 88), 1.0))
         painter.setBrush(base_grad)
-        painter.drawEllipse(QPointF(pivot_x, pivot_y), base_r_outer, base_r_outer)
+        painter.drawEllipse(QPointF(pivot_x, pivot_y), base_r, base_r)
 
-        painter.setBrush(QColor(38, 42, 46))
-        painter.drawEllipse(QPointF(pivot_x, pivot_y), 7.5, 7.5)
-
-        painter.setBrush(QColor(220, 225, 230))
-        painter.drawEllipse(QPointF(pivot_x, pivot_y), 3.2, 3.2)
+        # 中心车削精铝同心圆点
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(220, 226, 232))
+        painter.drawEllipse(QPointF(pivot_x, pivot_y), 2.0, 2.0)
 
         painter.restore()
 
@@ -406,27 +376,48 @@ class ImmersiveArtworkView(QWidget):
         cx, cy = diameter / 2.0, diameter / 2.0
         r_outer = diameter / 2.0 - 2.0
 
-        # PVC 黑胶盘体
+        # 1. 拟真黑曜石黑胶盘体 (带微弱径向漫反射深度)
         disc_path = QPainterPath()
         disc_path.addEllipse(QPointF(cx, cy), r_outer, r_outer)
-        p.fillPath(disc_path, QColor(14, 15, 18))
 
-        # 外圈微弱金属光泽
-        p.setPen(QPen(QColor(255, 255, 255, 26), 1.0))
+        disc_grad = QRadialGradient(QPointF(cx, cy), r_outer)
+        disc_grad.setColorAt(0.0, QColor(24, 26, 30))
+        disc_grad.setColorAt(0.35, QColor(16, 17, 20))
+        disc_grad.setColorAt(0.85, QColor(10, 11, 13))
+        disc_grad.setColorAt(1.0, QColor(5, 6, 7))
+        p.fillPath(disc_path, disc_grad)
+
+        # 2. 外缘圆润精抛光倒角 (Lead-in rim)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(disc_path)
 
-        # 细腻同心圆音轨微刻纹
-        n_grooves = 18
-        r_min = r_outer * 0.42
-        for i in range(n_grooves):
-            t_r = r_min + (r_outer - r_min) * (i / float(n_grooves - 1))
-            g_pen = QPen(QColor(255, 255, 255, 12 if i % 2 == 0 else 6), 0.8)
-            p.setPen(g_pen)
-            p.drawEllipse(QPointF(cx, cy), t_r, t_r)
+        p.setPen(QPen(QColor(0, 0, 0, 120), 1.0))
+        p.drawEllipse(QPointF(cx, cy), r_outer - 1.5, r_outer - 1.5)
 
-        # 唱片中央圆形贴纸
+        # 3. 极细腻多音轨微刻纹 (Micro-Groove Acoustic Bands)
         r_label = r_outer * 0.36
+        r_groove_start = r_label + (r_outer - r_label) * 0.08
+        r_groove_end = r_outer * 0.96
+        total_groove_width = r_groove_end - r_groove_start
+
+        track_splits = [0.0, 0.26, 0.52, 0.78, 1.0]
+        for t_idx in range(len(track_splits) - 1):
+            band_r_start = r_groove_start + total_groove_width * track_splits[t_idx]
+            band_r_end = r_groove_start + total_groove_width * track_splits[t_idx + 1] - 3.0
+
+            lines_in_band = 7
+            for li in range(lines_in_band):
+                sub_r = band_r_start + (band_r_end - band_r_start) * (li / float(lines_in_band - 1))
+                alpha = 10 if (li % 2 == 0) else 6
+                p.setPen(QPen(QColor(255, 255, 255, alpha), 0.7))
+                p.drawEllipse(QPointF(cx, cy), sub_r, sub_r)
+
+            gap_r = band_r_end + 1.5
+            p.setPen(QPen(QColor(0, 0, 0, 90), 1.2))
+            p.drawEllipse(QPointF(cx, cy), gap_r, gap_r)
+
+        # 4. 唱片中央圆形贴纸与内圈微凹倒角
         label_path = QPainterPath()
         label_path.addEllipse(QPointF(cx, cy), r_label, r_label)
         p.save()
@@ -437,17 +428,28 @@ class ImmersiveArtworkView(QWidget):
                 self.cover_pixmap,
             )
             inner_shadow = QRadialGradient(QPointF(cx, cy), r_label)
-            inner_shadow.setColorAt(0.68, Qt.GlobalColor.transparent)
-            inner_shadow.setColorAt(1.0, QColor(0, 0, 0, 160))
+            inner_shadow.setColorAt(0.72, Qt.GlobalColor.transparent)
+            inner_shadow.setColorAt(0.96, QColor(0, 0, 0, 110))
+            inner_shadow.setColorAt(1.0, QColor(0, 0, 0, 180))
             p.fillPath(label_path, inner_shadow)
         else:
-            p.fillPath(label_path, QColor(42, 50, 58))
+            p.fillPath(label_path, QColor(36, 42, 48))
         p.restore()
 
-        # 金属中心主轴孔
-        r_hole = r_outer * 0.052
-        p.setPen(QPen(QColor(220, 200, 160), 1.2))
-        p.setBrush(QColor(8, 10, 12))
+        p.setPen(QPen(QColor(0, 0, 0, 140), 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(label_path)
+        p.setPen(QPen(QColor(255, 255, 255, 24), 0.8))
+        p.drawEllipse(QPointF(cx, cy), r_label + 1.0, r_label + 1.0)
+
+        # 5. 金属中心主轴孔 (精车镀铬黄铜轴芯)
+        r_hole = r_outer * 0.050
+        spindle_grad = QRadialGradient(QPointF(cx - 1.0, cy - 1.0), r_hole * 1.4)
+        spindle_grad.setColorAt(0.0, QColor(255, 248, 220))
+        spindle_grad.setColorAt(0.6, QColor(190, 175, 140))
+        spindle_grad.setColorAt(1.0, QColor(120, 105, 75))
+        p.setPen(QPen(spindle_grad, 1.2))
+        p.setBrush(QColor(6, 7, 8))
         p.drawEllipse(QPointF(cx, cy), r_hole, r_hole)
 
         p.end()
@@ -616,7 +618,7 @@ class ImmersiveArtworkView(QWidget):
 
         if self.show_vinyl:
             center_x = w * 0.40
-            slide_offset = sleeve_sz * (0.08 + 0.38 * self.slide_prog)
+            slide_offset = sleeve_sz * (0.08 + 0.34 * self.slide_prog)
         else:
             center_x = w * 0.48
             slide_offset = 0.0
@@ -657,11 +659,13 @@ class ImmersiveArtworkView(QWidget):
                 p.drawPixmap(int(-disc_sz / 2.0), int(-disc_sz / 2.0), self._cached_disc_pixmap)
 
                 sheen = QConicalGradient(QPointF(0, 0), 45.0)
-                sheen.setColorAt(0.0, QColor(255, 255, 255, 45))
-                sheen.setColorAt(0.18, Qt.GlobalColor.transparent)
-                sheen.setColorAt(0.50, QColor(255, 255, 255, 45))
-                sheen.setColorAt(0.68, Qt.GlobalColor.transparent)
-                sheen.setColorAt(1.0, QColor(255, 255, 255, 45))
+                sheen.setColorAt(0.0, QColor(255, 255, 255, 30))
+                sheen.setColorAt(0.12, QColor(255, 255, 255, 6))
+                sheen.setColorAt(0.25, Qt.GlobalColor.transparent)
+                sheen.setColorAt(0.50, QColor(255, 255, 255, 30))
+                sheen.setColorAt(0.62, QColor(255, 255, 255, 6))
+                sheen.setColorAt(0.75, Qt.GlobalColor.transparent)
+                sheen.setColorAt(1.0, QColor(255, 255, 255, 30))
 
                 sheen_path = QPainterPath()
                 sheen_path.addEllipse(QPointF(0, 0), disc_sz / 2.0 - 2.0, disc_sz / 2.0 - 2.0)
@@ -707,10 +711,10 @@ class ImmersiveArtworkView(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(jacket_path)
 
-        # 若开启黑胶模式，在唱片上方绘制高保真落针唱臂系统
-        if self.show_vinyl and (self.slide_prog > 0.05 or self.is_playing):
-            pivot_x = disc_cx + (disc_sz / 2.0) * 0.72
-            pivot_y = disc_cy - (disc_sz / 2.0) * 0.74
+        # 若开启现代黑胶模式且包含唱臂，在暴露的右侧音轨上方绘制现代极简线性唱臂
+        if self.show_vinyl and self.show_tonearm and (self.slide_prog > 0.05 or self.is_playing):
+            pivot_x = disc_cx + (disc_sz / 2.0) * 0.68
+            pivot_y = disc_cy - (disc_sz / 2.0) * 0.78
             self._draw_tonearm(p, pivot_x, pivot_y, disc_sz / 2.0)
 
         # =========================================================================
@@ -1741,12 +1745,18 @@ class ImmersiveFullscreenWindow(QWidget):
         self.syllableToggled.emit(self.syllable_mode)
 
     def _on_toggle_cover_mode(self) -> None:
-        new_state = not self.artwork_view.show_vinyl
-        self.artwork_view.set_vinyl_mode(new_state)
-        label = "伴生黑胶" if new_state else "纯净封面"
+        cur_mode = getattr(self.artwork_view, "vinyl_mode", "none")
+        mode_cycle = ["none", "pure", "arm"]
+        next_idx = (mode_cycle.index(cur_mode) + 1) % len(mode_cycle) if cur_mode in mode_cycle else 1
+        new_mode = mode_cycle[next_idx]
+        self.artwork_view.set_vinyl_mode(new_mode)
+
+        labels = {"none": "现代封面", "pure": "纯净黑胶", "arm": "极简唱机"}
+        label = labels.get(new_mode, "现代封面")
         self.btn_vinyl_mode.setText(label)
+        is_active = (new_mode != "none")
         self.btn_vinyl_mode.setStyleSheet(
-            f"QPushButton {{ background: {'rgba(255, 255, 255, 0.32)' if new_state else 'rgba(255, 255, 255, 0.12)'}; "
+            f"QPushButton {{ background: {'rgba(255, 255, 255, 0.32)' if is_active else 'rgba(255, 255, 255, 0.12)'}; "
             "border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 10px; }"
             "QPushButton:hover {{ background: rgba(255, 255, 255, 0.36); }}"
         )

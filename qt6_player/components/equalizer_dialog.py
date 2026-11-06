@@ -260,6 +260,7 @@ class AudioSettingsDialog(WinUIModalDialog):
     syllableModeToggled = pyqtSignal(bool)
     immersiveFpsChanged = pyqtSignal(int)
     vinylModeToggled = pyqtSignal(bool)
+    vinylModeChanged = pyqtSignal(str)
     backdropMaterialChanged = pyqtSignal(str)
     scrapeRequested = pyqtSignal()
 
@@ -743,11 +744,20 @@ class AudioSettingsDialog(WinUIModalDialog):
         cover_row.addWidget(lbl_cv)
         cover_row.addSpacing(12)
 
-        self.cover_mode_tabs = WinUISegmentedControl(["标准封面", "黑胶唱机"], self.tab_ui)
+        self.cover_mode_tabs = WinUISegmentedControl(["现代封面", "纯净黑胶", "极简唱机"], self.tab_ui)
         self.cover_mode_tabs.set_theme(self.theme)
-        self.cover_mode_tabs.set_current_index(1 if vinyl_mode else 0, animate=False)
+        if vinyl_mode in ("arm", "vinyl_arm", 2):
+            cur_cv_idx = 2
+        elif vinyl_mode in ("pure", "vinyl_pure", True, 1):
+            cur_cv_idx = 1
+        else:
+            cur_cv_idx = 0
+        self.cover_mode_tabs.set_current_index(cur_cv_idx, animate=False)
         self.cover_mode_tabs.currentIndexChanged.connect(
-            lambda idx: self.vinylModeToggled.emit(idx == 1)
+            lambda idx: (
+                self.vinylModeChanged.emit(["none", "pure", "arm"][idx]),
+                self.vinylModeToggled.emit(idx > 0),
+            )
         )
         cover_row.addWidget(self.cover_mode_tabs, 1)
         imm_box.addLayout(cover_row)
