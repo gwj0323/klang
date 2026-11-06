@@ -382,6 +382,21 @@ class NordicWinUI3Window(QMainWindow):
         self.frame_overlay = WindowFrameOverlay(central)
         self.frame_overlay.raise_()
 
+    def _apply_backdrop_to_window(self) -> None:
+        try:
+            hwnd = int(self.winId()) if self.winId() else 0
+            if hwnd:
+                tint = self.theme.mist_white.name() if self.theme.name == "daylight" else self.theme.dusk_night.name()
+                apply_window_system_theme_and_corners(
+                    hwnd,
+                    is_dark=(self.theme.name == "dusk"),
+                    is_maximized=self.isMaximized(),
+                    backdrop_material=getattr(self, "backdrop_material", "mica"),
+                    tint_hex=tint,
+                )
+        except Exception:
+            pass
+
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         if hasattr(self, "frame_overlay") and self.centralWidget():
@@ -389,14 +404,8 @@ class NordicWinUI3Window(QMainWindow):
             self.frame_overlay.raise_()
         self._handle_window_state_change()
         QTimer.singleShot(0, self._handle_window_state_change)
-        try:
-            hwnd = int(self.winId()) if self.winId() else 0
-            if hwnd:
-                apply_window_system_theme_and_corners(
-                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=self.isMaximized(), backdrop_material=self.backdrop_material
-                )
-        except Exception:
-            pass
+        self._apply_backdrop_to_window()
+        QTimer.singleShot(50, self._apply_backdrop_to_window)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -436,14 +445,7 @@ class NordicWinUI3Window(QMainWindow):
             self.frame_overlay.update()
         if hasattr(self, "transport_bar"):
             self.transport_bar.update()
-        try:
-            hwnd = int(self.winId()) if self.winId() else 0
-            if hwnd:
-                apply_window_system_theme_and_corners(
-                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=is_max, backdrop_material=self.backdrop_material
-                )
-        except Exception:
-            pass
+        self._apply_backdrop_to_window()
         self._bg_dirty = True
         self.update()
         self.schedule_save()
@@ -863,17 +865,7 @@ class NordicWinUI3Window(QMainWindow):
 
     def set_backdrop_material(self, mode: str) -> None:
         self.backdrop_material = mode
-        try:
-            hwnd = int(self.winId()) if self.winId() else 0
-            if hwnd:
-                apply_window_system_theme_and_corners(
-                    hwnd,
-                    is_dark=(self.theme.name == "dusk"),
-                    is_maximized=self.isMaximized(),
-                    backdrop_material=self.backdrop_material,
-                )
-        except Exception:
-            pass
+        self._apply_backdrop_to_window()
         self._bg_dirty = True
         self.update()
         self.schedule_save()
@@ -1288,14 +1280,7 @@ class NordicWinUI3Window(QMainWindow):
         self.desktop_lyric.set_theme(self.theme)
         self.mini_player.set_theme(self.theme)
         self.frame_overlay.set_theme(self.theme)
-        try:
-            hwnd = int(self.winId()) if self.winId() else 0
-            if hwnd:
-                apply_window_system_theme_and_corners(
-                    hwnd, is_dark=(theme_name == "dusk"), is_maximized=self.isMaximized(), backdrop_material=self.backdrop_material
-                )
-        except Exception:
-            pass
+        self._apply_backdrop_to_window()
         self.update()
         self.schedule_save()
 
@@ -1446,15 +1431,22 @@ class NordicWinUI3Window(QMainWindow):
         fill_col = QColor(self._bg_col_cur)
         mat = getattr(self, "backdrop_material", "mica")
         if mat == "mica":
-            fill_col.setAlpha(208)
+            # 云母材质：适度透明度让壁纸动态色彩与云母微颗粒透映，保留北欧温润原色
+            fill_col.setAlpha(128 if self.theme.name == "daylight" else 150)
         elif mat == "acrylic":
-            fill_col.setAlpha(175)
+            # 亚克力材质：更透彻的毛玻璃磨砂感，让窗口后方的应用/桌面呈现柔和虚化
+            fill_col.setAlpha(70 if self.theme.name == "daylight" else 95)
         else:
+            # 标准纯色模式：完全不透明 (255)
             fill_col.setAlpha(255)
         bp.fillPath(path, fill_col)
 
         # 封面自适应双核流光背景 (Ambient Mesh Glow，缓存在位图中避免每帧全屏径向渐变计算)
         base_alpha = 28 if self.theme.name == "daylight" else 36
+        if mat == "acrylic":
+            base_alpha = int(base_alpha * 0.55)
+        elif mat == "mica":
+            base_alpha = int(base_alpha * 0.75)
         c1 = QColor(self._amb1_cur)
         c1.setAlpha(base_alpha)
         orb1 = QRadialGradient(QPointF(w * 0.28, h * 0.40), 500.0)
