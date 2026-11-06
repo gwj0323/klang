@@ -337,7 +337,12 @@ class LyricPosterPreviewWidget(QWidget):
         painter.drawText(QPointF(pad_x, footer_y + 6.0 * scale), "Klang · Nordic Audio")
 
         # 高清音质标签胶囊
-        badge_text = "Lossless · 24-bit"
+        if self.track and getattr(self.track, "is_hi_res", False):
+            badge_text = f"Hi-Res · {self.track.bit_depth}-bit/{self.track.sample_rate_str}"
+        elif self.track and getattr(self.track, "sample_rate", None):
+            badge_text = f"Lossless · {self.track.sample_rate_str}"
+        else:
+            badge_text = "Lossless · 24-bit" 
         painter.setFont(get_nordic_font(int(round(9 * scale)), QFont.Weight.Bold, mono=True))
         fm_b = painter.fontMetrics()
         bw = fm_b.horizontalAdvance(badge_text) + 14.0 * scale

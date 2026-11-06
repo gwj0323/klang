@@ -232,8 +232,116 @@ def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]
     return lrc_text, trans_text, cover_path
 
 
+
+
+def extract_audio_properties(file_path: str) -> dict:
+    """
+    精准解析音频底层工程参数：
+    - sample_rate (如 44100, 48000, 96000, 192000)
+    - bit_depth (如 16, 24, 32)
+    - channels (如 1, 2, 6, 8)
+    - bitrate_kbps (如 320, 1411, 2681)
+    - duration (float 秒数)
+    - audio_format (如 "FLAC", "WAV", "MP3", "AAC", "M4A")
+    """
+    path_obj = Path(file_path)
+    ext = path_obj.suffix.lower()
+    props = {
+        "sample_rate": 44100,
+        "bit_depth": 16,
+        "channels": 2,
+        "bitrate_kbps": 0,
+        "duration": 0.0,
+        "audio_format": ext.lstrip(".").upper() or "PCM",
+    }
+
+    # 1. 优先使用 mutagen 解析高保真参数
+    try:
+        import mutagen
+        m = mutagen.File(file_path)
+        if m is not None and hasattr(m, "info") and m.info:
+            if getattr(m.info, "sample_rate", None):
+                props["sample_rate"] = int(m.info.sample_rate)
+            if getattr(m.info, "bits_per_sample", None):
+                props["bit_depth"] = int(m.info.bits_per_sample)
+            if getattr(m.info, "channels", None):
+                props["channels"] = int(m.info.channels)
+            if getattr(m.info, "bitrate", None) and m.info.bitrate > 0:
+                props["bitrate_kbps"] = int(round(m.info.bitrate / 1000.0))
+            if getattr(m.info, "length", None) and m.info.length > 0:
+                props["duration"] = float(m.info.length)
+            return props
+    except Exception:
+        pass
+
+    # 2. 原生二进制快速回退解析 (针对 FLAC)
+    if ext == ".flac":
+        try:
+            with open(file_path, "rb") as f:
+                if f.read(4) == b"fLaC":
+                    while True:
+                        bh = f.read(4)
+                        if len(bh) < 4:
+                            break
+                        is_last = (bh[0] & 0x80) != 0
+                        btype = bh[0] & 0x7F
+                        length = (bh[1] << 16) | (bh[2] << 8) | bh[3]
+                        if btype == 0 and length >= 18:
+                            data = f.read(length)
+                            val64 = struct.unpack(">Q", data[10:18])[0]
+                            sr = (val64 >> 44) & 0xFFFFF
+                            ch = ((val64 >> 41) & 0x07) + 1
+                            bps = ((val64 >> 36) & 0x1F) + 1
+                            total_samples = val64 & 0xFFFFFFFFF
+                            dur = total_samples / float(sr) if sr > 0 else 0.0
+                            if sr > 0:
+                                props["sample_rate"] = sr
+                            if bps > 0:
+                                props["bit_depth"] = bps
+                            if ch > 0:
+                                props["channels"] = ch
+                            if dur > 0:
+                                props["duration"] = dur
+                            break
+                        else:
+                            f.seek(length, os.SEEK_CUR)
+                        if is_last:
+                            break
+        except Exception:
+            pass
+
+    # 3. 原生二进制快速回退解析 (针对 WAV)
+    elif ext == ".wav":
+        try:
+            with open(file_path, "rb") as f:
+                if f.read(4) == b"RIFF":
+                    f.seek(4, os.SEEK_CUR)
+                    if f.read(4) == b"WAVE":
+                        while True:
+                            cid = f.read(4)
+                            if len(cid) < 4:
+                                break
+                            csize = struct.unpack("<I", f.read(4))[0]
+                            if cid == b"fmt " and csize >= 16:
+                                fmt_data = f.read(csize)
+                                _, ch, sr, _, _, bps = struct.unpack("<HHIIHH", fmt_data[:16])
+                                if sr > 0:
+                                    props["sample_rate"] = sr
+                                if bps > 0:
+                                    props["bit_depth"] = bps
+                                if ch > 0:
+                                    props["channels"] = ch
+                                break
+                            else:
+                                f.seek(csize, os.SEEK_CUR)
+        except Exception:
+            pass
+
+    return props
+
+
 def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
-    """从本地音频文件构建 NordicTrack，自动解析标签、内嵌封面、同名 LRC"""
+    """从本地音频文件构建 NordicTrack，自动解析标签、内嵌封面、同名 LRC 与高解析度音频参数"""
     path_obj = Path(file_path)
     ext = path_obj.suffix.lower()
 
@@ -243,6 +351,9 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
         title, artist, album, cover_bytes, embedded_lrc = _extract_mp3_id3v2(file_path)
     elif ext == ".flac":
         title, artist, album, cover_bytes, embedded_lrc, parsed_dur = _extract_flac_metadata(file_path)
+
+    # 提取真实的采样率、位深、声道数、比特率
+    props = extract_audio_properties(file_path)
 
     fn_artist, fn_title = _parse_filename_artist_title(path_obj.stem)
     final_title = title or fn_title
@@ -265,16 +376,21 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
     palette = dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)])
     resolved_str = str(path_obj.resolve())
     stable_digest = hashlib.md5(resolved_str.encode("utf-8", errors="ignore")).hexdigest()[:12]
-    fallback_dur = max(30.0, (lyrics[-1].end_time + 4.0) if (final_lrc and lyrics) else 180.0)
+    final_dur = parsed_dur if parsed_dur > 5.0 else (props["duration"] if props["duration"] > 5.0 else max(30.0, (lyrics[-1].end_time + 4.0) if (final_lrc and lyrics) else 180.0))
     return NordicTrack(
         track_id=f"local-{stable_digest}",
         title=final_title,
         artist=final_artist,
         album=final_album,
-        duration=parsed_dur if parsed_dur > 5.0 else fallback_dur,
+        duration=final_dur,
         file_path=resolved_str,
         cover_path=local_cover_path,
         cover_bytes=cover_bytes,
+        sample_rate=props["sample_rate"],
+        bit_depth=props["bit_depth"],
+        bitrate_kbps=props["bitrate_kbps"],
+        channels=props["channels"],
+        audio_format=props["audio_format"],
         palette=palette,
         chords=[],
         lyrics=lyrics,

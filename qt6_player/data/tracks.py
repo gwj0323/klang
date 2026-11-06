@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
+from pathlib import Path
 
 
 @dataclass
@@ -33,6 +34,11 @@ class NordicTrack:
     cover_bytes: Optional[bytes] = None
     is_favorite: bool = False
     lyric_offset: float = 0.0  # 歌词时间轴微调秒数（正数提前显示，负数延后显示）
+    sample_rate: int = 44100
+    bit_depth: int = 16
+    bitrate_kbps: int = 0
+    channels: int = 2
+    audio_format: str = ""
     palette: dict = field(
         default_factory=lambda: {
             "bg_primary": "#E7EAE6",
@@ -46,6 +52,53 @@ class NordicTrack:
     lyrics: List[LyricLine] = field(default_factory=list)
     _cached_cover_pix: object = field(default=None, init=False, repr=False, compare=False)
     _cover_cache_loaded: bool = field(default=False, init=False, repr=False, compare=False)
+
+    @property
+    def is_hi_res(self) -> bool:
+        """根据 JEITA/JAS 高解析度音频标准判定是否为 Hi-Res"""
+        return (self.sample_rate or 44100) > 48000 or (self.bit_depth or 16) > 16
+
+    @property
+    def sample_rate_str(self) -> str:
+        """精准格式化采样率（如 44.1kHz, 48kHz, 96kHz, 192kHz）"""
+        sr = self.sample_rate or 44100
+        if sr % 1000 == 0:
+            return f"{sr // 1000}kHz"
+        if sr % 100 == 0:
+            return f"{sr / 1000.0:.1f}kHz"
+        return f"{sr / 1000.0:.2f}kHz"
+
+    def format_audio_badge(self, is_atmos: bool = False, actual_channels: int = 2) -> str:
+        """生成精准母带级音频规格胶囊文案"""
+        ext = (self.audio_format or (Path(self.file_path).suffix.upper().lstrip(".") if self.file_path else "")).upper()
+        if not ext:
+            ext = "PCM"
+        sr_txt = self.sample_rate_str
+        bit_txt = f"{self.bit_depth}-bit" if (self.bit_depth and self.bit_depth in (16, 24, 32)) else ""
+
+        if is_atmos:
+            if actual_channels == 6:
+                return f"{ext} · DOLBY ATMOS 5.1"
+            elif actual_channels == 8:
+                return f"{ext} · DOLBY ATMOS 7.1"
+            if self.is_hi_res:
+                return f"{ext} HI-RES · {sr_txt} · DOLBY ATMOS"
+            return f"{ext} · DOLBY ATMOS"
+
+        # 无损音频格式
+        if ext in ("FLAC", "WAV", "APE", "ALAC", "AIFF", "DSD"):
+            spec = f"{sr_txt} / {bit_txt}" if bit_txt else sr_txt
+            if self.is_hi_res:
+                return f"{ext} HI-RES · {spec}"
+            return f"{ext} LOSSLESS · {spec}"
+
+        # 有损压缩格式
+        if ext in ("MP3", "AAC", "M4A", "OGG", "WMA", "OPUS"):
+            if self.bitrate_kbps > 0:
+                return f"{ext} · {self.bitrate_kbps}kbps · {sr_txt}"
+            return f"{ext} · {sr_txt}"
+
+        return f"{ext} · {sr_txt}"
 
     def invalidate_cover_cache(self) -> None:
         self._cached_cover_pix = None

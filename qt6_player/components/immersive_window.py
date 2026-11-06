@@ -734,16 +734,29 @@ class ImmersiveArtworkView(QWidget):
         if is_atmos:
             if actual_ch == 6:
                 atmos_txt = "DOLBY ATMOS 5.1"
-                badge_w = 118.0
             elif actual_ch == 8:
                 atmos_txt = "DOLBY ATMOS 7.1"
-                badge_w = 118.0
+            elif self.track and getattr(self.track, "is_hi_res", False):
+                atmos_txt = f"HI-RES · ATMOS"
             else:
                 atmos_txt = "DOLBY ATMOS"
-                badge_w = 98.0
+        elif self.track:
+            ext = (getattr(self.track, "audio_format", "") or "").upper()
+            sr_txt = getattr(self.track, "sample_rate_str", "44.1kHz")
+            if getattr(self.track, "is_hi_res", False):
+                atmos_txt = f"HI-RES · {sr_txt}"
+            elif ext in ("FLAC", "WAV", "APE", "ALAC", "AIFF"):
+                atmos_txt = f"LOSSLESS · {sr_txt}"
+            elif ext in ("MP3", "AAC", "M4A", "OGG"):
+                atmos_txt = f"{ext} · {sr_txt}"
+            else:
+                atmos_txt = f"PCM · {sr_txt}"
         else:
             atmos_txt = "LOSSLESS"
-            badge_w = 66.0
+
+        b_font = get_nordic_font(8, QFont.Weight.Bold, mono=True)
+        fm_badge = QFontMetricsF(b_font)
+        badge_w = max(66.0, fm_badge.horizontalAdvance(atmos_txt) + 16.0)
         title_max_w = sleeve_sz - badge_w - 10.0
 
         title_str = self.track.title if self.track else "Klang"
@@ -767,16 +780,16 @@ class ImmersiveArtworkView(QWidget):
             p.fillPath(badge_path, QColor(255, 255, 255, 30))
             p.setPen(QPen(QColor(255, 255, 255, 75), 1.0))
             p.drawPath(badge_path)
-            p.setFont(get_nordic_font(8, QFont.Weight.Bold, mono=True))
+            p.setFont(b_font)
             p.setPen(QColor(255, 255, 255, 240))
             p.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), atmos_txt)
         else:
             p.fillPath(badge_path, QColor(255, 255, 255, 20))
             p.setPen(QPen(QColor(255, 255, 255, 45), 1.0))
             p.drawPath(badge_path)
-            p.setFont(get_nordic_font(9, QFont.Weight.Bold, mono=True))
+            p.setFont(b_font)
             p.setPen(QColor(255, 255, 255, 210))
-            p.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), "LOSSLESS")
+            p.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), atmos_txt)
 
         # 歌手与专辑副标题 (14px SF Pro Medium)
         sub_str = f"{artist_str}  ·  {album_str}" if album_str else artist_str

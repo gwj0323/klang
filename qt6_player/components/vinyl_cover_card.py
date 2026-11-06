@@ -543,21 +543,8 @@ class AudioQualityBadge(QLabel):
         self.current_track = track
         self._is_atmos = bool(is_atmos)
         self._actual_channels = int(actual_channels)
-        if track and track.file_path:
-            ext = Path(track.file_path).suffix.upper().lstrip(".")
-            if is_atmos:
-                if actual_channels == 6:
-                    txt = f"{ext} · DOLBY ATMOS 5.1" if ext else "DOLBY ATMOS 5.1"
-                elif actual_channels == 8:
-                    txt = f"{ext} · DOLBY ATMOS 7.1" if ext else "DOLBY ATMOS 7.1"
-                else:
-                    txt = f"{ext} · DOLBY ATMOS" if ext else "DOLBY ATMOS · 空间音频"
-            elif ext in ("FLAC", "WAV", "APE"):
-                txt = f"{ext} LOSSLESS · 44.1kHz"
-            elif ext:
-                txt = f"{ext} · 44.1kHz"
-            else:
-                txt = "PCM · 44.1kHz"
+        if track:
+            txt = track.format_audio_badge(is_atmos=is_atmos, actual_channels=actual_channels)
         else:
             if is_atmos:
                 txt = (

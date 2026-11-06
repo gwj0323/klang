@@ -115,6 +115,11 @@ def save_player_state(
             "cover_path": str(t.cover_path) if t.cover_path else "",
             "is_favorite": bool(t.is_favorite),
             "lyric_offset": float(t.lyric_offset),
+            "sample_rate": int(getattr(t, "sample_rate", 44100)),
+            "bit_depth": int(getattr(t, "bit_depth", 16)),
+            "channels": int(getattr(t, "channels", 2)),
+            "bitrate_kbps": int(getattr(t, "bitrate_kbps", 0)),
+            "audio_format": str(getattr(t, "audio_format", "")),
             "lyrics": lyrics_data,
         }
         playlist_data.append(entry)
@@ -213,6 +218,16 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
                 tr.cover_path = valid_cov
             tr.is_favorite = bool(item.get("is_favorite", False))
             tr.lyric_offset = float(item.get("lyric_offset", 0.0))
+            if item.get("sample_rate") and tr.sample_rate == 44100:
+                tr.sample_rate = int(item["sample_rate"])
+            if item.get("bit_depth") and tr.bit_depth == 16:
+                tr.bit_depth = int(item["bit_depth"])
+            if item.get("channels") and tr.channels == 2:
+                tr.channels = int(item["channels"])
+            if item.get("bitrate_kbps") and not tr.bitrate_kbps:
+                tr.bitrate_kbps = int(item["bitrate_kbps"])
+            if item.get("audio_format") and not tr.audio_format:
+                tr.audio_format = str(item["audio_format"])
             saved_lyrics = _parse_saved_lyrics(item.get("lyrics", []))
             if saved_lyrics:
                 tr.lyrics = saved_lyrics
