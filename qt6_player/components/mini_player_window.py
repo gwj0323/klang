@@ -63,11 +63,9 @@ class MiniSpinningArtwork(QWidget):
     def set_track(self, track: NordicTrack) -> None:
         self.track = track
         self.pixmap = None
-        pix = QPixmap()
-        if (track.cover_bytes and pix.loadFromData(track.cover_bytes)) or (
-            track.cover_path and pix.load(track.cover_path)
-        ):
-            self.pixmap = pix.scaled(
+        base_pix = track.get_cover_pixmap() if track is not None else None
+        if base_pix is not None and not base_pix.isNull():
+            self.pixmap = base_pix.scaled(
                 120,
                 120,
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,

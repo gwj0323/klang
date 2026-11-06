@@ -218,7 +218,7 @@ class NordicDspProcessor:
 
 
 class ContinuousDspStreamDevice(QIODevice):
-    BLOCK_FRAMES = 2048
+    BLOCK_FRAMES = 1024
     SPECTRUM_BANDS = 24
 
     def __init__(self, engine: "NordicAudioEngine"):
@@ -229,10 +229,14 @@ class ContinuousDspStreamDevice(QIODevice):
         self._crossfade_on_next_block: bool = False
         self._env_gain: float = 0.0
         self._hann_win = np.hanning(self.BLOCK_FRAMES)
+        self._cos_fade_in = (
+            0.5 - 0.5 * np.cos(np.linspace(0.0, math.pi, self.BLOCK_FRAMES, dtype=np.float64))
+        )[np.newaxis, :]
+        self._cos_fade_out = 1.0 - self._cos_fade_in
         self._silence_stereo = bytes(self.BLOCK_FRAMES * 4)
         self._silence_mono = bytes(self.BLOCK_FRAMES * 2)
         self._fft_edges = np.unique(
-            np.geomspace(2, 700, num=self.SPECTRUM_BANDS + 1).astype(np.int32)
+            np.geomspace(2, 360, num=self.SPECTRUM_BANDS + 1).astype(np.int32)
         )
 
     def start_stream(self) -> None:
@@ -243,6 +247,50 @@ class ContinuousDspStreamDevice(QIODevice):
     def request_smooth_transition(self) -> None:
         self._out_fifo.clear()
         self._crossfade_on_next_block = True
+
+    def render_smooth_fadeout_block(self) -> Optional[bytes]:
+        eng = self.engine
+        n_frames = self.BLOCK_FRAMES
+        if self._env_gain <= 0.001 and float(np.max(np.abs(self._last_tail_frame))) <= 1e-4:
+            self._env_gain = 0.0
+            self._last_tail_frame.fill(0.0)
+            return None
+
+        raw_buf = eng._decoded_raw_bytes
+        total_avail_frames = len(raw_buf) // 4
+        cur_frame = eng._frame_cursor
+
+        if cur_frame + 16 < total_avail_frames:
+            end_frame = min(total_avail_frames, cur_frame + n_frames)
+            actual = end_frame - cur_frame
+            byte_slice = raw_buf[cur_frame * 4 : end_frame * 4]
+            arr = np.frombuffer(byte_slice, dtype=np.int16).astype(np.float64) / 32768.0
+            arr = arr.reshape(-1, 2).T
+            if actual < n_frames:
+                pad = np.zeros((2, n_frames - actual), dtype=np.float64)
+                stereo_block = np.hstack((arr, pad))
+            else:
+                stereo_block = arr
+            eng._frame_cursor = end_frame
+            proc_stereo = eng.dsp.process_block(stereo_block)
+            proc_stereo = proc_stereo * (self._env_gain * self._cos_fade_out)
+        else:
+            proc_stereo = self._last_tail_frame * self._cos_fade_out
+
+        self._env_gain = 0.0
+        self._last_tail_frame.fill(0.0)
+        self._crossfade_on_next_block = False
+        return self._pack_pcm_bytes(proc_stereo, n_frames, eng._channels)
+
+    def _pack_pcm_bytes(self, proc_stereo: np.ndarray, n_frames: int, channels: int) -> bytes:
+        if channels == 2:
+            interleaved = np.empty(n_frames * 2, dtype=np.int16)
+            interleaved[0::2] = np.clip(proc_stereo[0] * 32767.0, -32767.0, 32767.0).astype(np.int16)
+            interleaved[1::2] = np.clip(proc_stereo[1] * 32767.0, -32767.0, 32767.0).astype(np.int16)
+            return interleaved.tobytes()
+        mono = (proc_stereo[0] + proc_stereo[1]) * 0.5
+        pcm_mono = np.clip(mono * 32767.0, -32767.0, 32767.0).astype(np.int16)
+        return pcm_mono.tobytes()
 
     def _compute_spectrum_24(self, stereo_block: np.ndarray) -> List[float]:
         mono = (stereo_block[0] + stereo_block[1]) * 0.5
@@ -293,12 +341,21 @@ class ContinuousDspStreamDevice(QIODevice):
         n_frames = self.BLOCK_FRAMES
 
         if not eng.is_playing and eng._preview_frames_remaining <= 0 and self._env_gain <= 0.001:
+            if float(np.max(np.abs(self._last_tail_frame))) > 1e-4:
+                decay = self._last_tail_frame * self._cos_fade_out
+                self._last_tail_frame.fill(0.0)
+                return self._pack_pcm_bytes(decay, n_frames, eng._channels)
             return self._silence_stereo if eng._channels == 2 else self._silence_mono
 
         raw_buf = eng._decoded_raw_bytes
         total_avail_frames = len(raw_buf) // 4
 
         if total_avail_frames <= 64:
+            if float(np.max(np.abs(self._last_tail_frame))) > 1e-4:
+                decay = self._last_tail_frame * self._cos_fade_out
+                self._last_tail_frame.fill(0.0)
+                self._env_gain = 0.0
+                return self._pack_pcm_bytes(decay, n_frames, eng._channels)
             return self._silence_stereo if eng._channels == 2 else self._silence_mono
 
         rate = eng.playback_rate
@@ -307,6 +364,11 @@ class ContinuousDspStreamDevice(QIODevice):
         if cur_frame >= total_avail_frames:
             if eng._decoder_finished:
                 eng._notify_eof_from_stream()
+            if float(np.max(np.abs(self._last_tail_frame))) > 1e-4:
+                decay = self._last_tail_frame * self._cos_fade_out
+                self._last_tail_frame.fill(0.0)
+                self._env_gain = 0.0
+                return self._pack_pcm_bytes(decay, n_frames, eng._channels)
             return self._silence_stereo if eng._channels == 2 else self._silence_mono
 
         advance_cursor = eng.is_playing or eng._preview_frames_remaining > 0
@@ -358,46 +420,19 @@ class ContinuousDspStreamDevice(QIODevice):
 
         target_env = 1.0 if (eng.is_playing or eng._preview_frames_remaining > 0) else 0.0
         if abs(target_env - self._env_gain) > 0.001:
-            env_curve = np.linspace(self._env_gain, target_env, n_frames, dtype=np.float64)[np.newaxis, :]
+            env_curve = self._env_gain + (target_env - self._env_gain) * self._cos_fade_in
             proc_stereo = proc_stereo * env_curve
             self._env_gain = target_env
         elif target_env < 0.001:
             proc_stereo = proc_stereo * 0.0
 
-        if eng._crossfade_tail_pcm is not None and len(eng._crossfade_tail_pcm) >= 4:
-            tail_frames = min(n_frames, len(eng._crossfade_tail_pcm) // 4)
-            if tail_frames > 0:
-                tail_slice = eng._crossfade_tail_pcm[: tail_frames * 4]
-                del eng._crossfade_tail_pcm[: tail_frames * 4]
-                tail_arr = (
-                    np.frombuffer(tail_slice, dtype=np.int16).astype(np.float64) / 32768.0
-                ).reshape(-1, 2).T
-                fade_out = np.linspace(0.75, 0.0, tail_frames, dtype=np.float64)[np.newaxis, :]
-                fade_in = np.linspace(0.25, 1.0, tail_frames, dtype=np.float64)[np.newaxis, :]
-                proc_stereo[:, :tail_frames] = (
-                    tail_arr * fade_out + proc_stereo[:, :tail_frames] * fade_in
-                )
-            if len(eng._crossfade_tail_pcm) < 4:
-                eng._crossfade_tail_pcm = None
-
         if self._crossfade_on_next_block:
             self._crossfade_on_next_block = False
-            cf_len = min(256, n_frames)
-            ramp = np.linspace(0.0, 1.0, cf_len, dtype=np.float64)[np.newaxis, :]
-            proc_stereo[:, :cf_len] = self._last_tail_frame * (1.0 - ramp) + proc_stereo[:, :cf_len] * ramp
+            proc_stereo = self._last_tail_frame * self._cos_fade_out + proc_stereo * self._cos_fade_in
 
         self._last_tail_frame = proc_stereo[:, -1:].copy()
         eng.current_spectrum_bands = self._compute_spectrum_24(proc_stereo)
-
-        if eng._channels == 2:
-            interleaved = np.empty(n_frames * 2, dtype=np.int16)
-            interleaved[0::2] = np.clip(proc_stereo[0] * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            interleaved[1::2] = np.clip(proc_stereo[1] * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            return interleaved.tobytes()
-        else:
-            mono = (proc_stereo[0] + proc_stereo[1]) * 0.5
-            pcm_mono = np.clip(mono * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            return pcm_mono.tobytes()
+        return self._pack_pcm_bytes(proc_stereo, n_frames, eng._channels)
 
 
 class NordicAudioEngine(QObject):
@@ -459,17 +494,30 @@ class NordicAudioEngine(QObject):
         dec_fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
         self._decoder.setAudioFormat(dec_fmt)
         self._decoder.bufferReady.connect(self._on_decoder_buffer_ready)
+        self._decoder.durationChanged.connect(self._on_media_duration_changed)
         self._decoder.finished.connect(self._on_decoder_finished)
         self._decoder.error.connect(self._on_decoder_error)
+        self._ignoring_decoder_signals: bool = False
+        self._initial_sink_fed: bool = False
 
         self._tick_timer = QTimer(self)
-        self._tick_timer.setInterval(24)
+        self._tick_timer.setInterval(16)
         self._tick_timer.timeout.connect(self._on_tick)
+        self._pause_drain_ticks: int = 0
 
         self._audio_sink: Optional[QAudioSink] = None
         self._push_io: Optional[QIODevice] = None
         self._stream_device = ContinuousDspStreamDevice(self)
         self._init_continuous_sink()
+
+    def _stop_decoder_safely(self) -> None:
+        self._ignoring_decoder_signals = True
+        try:
+            self._decoder.stop()
+        except Exception:
+            pass
+        finally:
+            self._ignoring_decoder_signals = False
 
     def _init_continuous_sink(self) -> None:
         try:
@@ -487,7 +535,7 @@ class NordicAudioEngine(QObject):
                 self._channels = 1
 
             self._audio_sink = QAudioSink(device, fmt, self)
-            self._audio_sink.setBufferSize(32768)
+            self._audio_sink.setBufferSize(16384)
             self._audio_sink.setVolume(self.volume)
             self._stream_device.start_stream()
         except Exception:
@@ -515,37 +563,91 @@ class NordicAudioEngine(QObject):
             self._stream_device.start_stream()
             self._push_io = self._audio_sink.start()
 
+    def _flush_fadeout_to_sink(self) -> None:
+        if self._audio_sink is None or self._push_io is None:
+            self._stream_device._env_gain = 0.0
+            self._stream_device._last_tail_frame.fill(0.0)
+            return
+        fade_bytes = self._stream_device.render_smooth_fadeout_block()
+        if fade_bytes and self._audio_sink.bytesFree() >= len(fade_bytes):
+            self._push_io.write(fade_bytes)
+
     def _feed_audio_sink(self) -> None:
         if self._audio_sink is None or self._push_io is None:
             return
         block_bytes = ContinuousDspStreamDevice.BLOCK_FRAMES * 2 * self._channels
+        waiting_for_initial_decode = (
+            self._using_local_file
+            and not self._decoder_finished
+            and not self._decoder_failed
+            and ((len(self._decoded_raw_bytes) // 4) - self._frame_cursor) < ContinuousDspStreamDevice.BLOCK_FRAMES * 2
+        )
+        if waiting_for_initial_decode:
+            buf_sz = self._audio_sink.bufferSize()
+            if buf_sz > 0 and self._audio_sink.bytesFree() >= buf_sz - block_bytes:
+                chunk = self._stream_device._render_next_dsp_block()
+                if chunk:
+                    self._push_io.write(chunk)
+            return
+
         while self._audio_sink.bytesFree() >= block_bytes:
             chunk = self._stream_device._render_next_dsp_block()
             if not chunk:
                 break
             self._push_io.write(chunk)
 
-    def _on_decoder_buffer_ready(self) -> None:
+    def _drain_decoder_buffers(self, max_buffers: int = 100000) -> None:
         try:
-            while self._decoder.bufferAvailable():
+            read_cnt = 0
+            while read_cnt < max_buffers and self._decoder.bufferAvailable():
                 buf = self._decoder.read()
                 cnt = buf.byteCount()
                 if cnt > 0:
                     self._decoded_raw_bytes.extend(buf.constData().asstring(cnt))
+                read_cnt += 1
         except Exception:
             pass
 
+    def _on_decoder_buffer_ready(self) -> None:
+        if self._ignoring_decoder_signals:
+            return
+        self._drain_decoder_buffers(max_buffers=100000)
+        if (
+            self.is_playing
+            and not self._initial_sink_fed
+            and (len(self._decoded_raw_bytes) // 4) - self._frame_cursor >= ContinuousDspStreamDevice.BLOCK_FRAMES * 2
+        ):
+            self._initial_sink_fed = True
+            self._feed_audio_sink()
+
     def _on_decoder_finished(self) -> None:
+        if self._ignoring_decoder_signals:
+            return
+        self._drain_decoder_buffers(max_buffers=100000)
         self._decoder_finished = True
         total_frames = len(self._decoded_raw_bytes) // 4
         if total_frames > 0:
-            self.duration = total_frames / float(self._sample_rate)
-            if self.current_track is not None:
-                self.current_track.duration = self.duration
-            self.timeUpdated.emit(self.current_time, self.duration, "init")
+            decoded_dur = total_frames / float(self._sample_rate)
+            if decoded_dur >= 10.0 or self.duration < 10.0:
+                self.duration = decoded_dur
+                if self.current_track is not None:
+                    self.current_track.duration = self.duration
+                self.timeUpdated.emit(self.current_time, self.duration, "init")
 
     def _on_decoder_error(self, err) -> None:
-        if len(self._decoded_raw_bytes) == 0 and self.current_track and self.current_track.file_path:
+        if self._ignoring_decoder_signals:
+            return
+        self._drain_decoder_buffers(max_buffers=100000)
+        decoded_dur = (len(self._decoded_raw_bytes) // 4) / float(self._sample_rate)
+        if decoded_dur >= max(15.0, self.duration * 0.5):
+            QTimer.singleShot(
+                60,
+                lambda: self._on_decoder_finished()
+                if (not self._decoder_finished and not self._ignoring_decoder_signals)
+                else None,
+            )
+            return
+        if self.current_track and self.current_track.file_path:
             self._decoder_failed = True
             url = QUrl.fromLocalFile(self.current_track.file_path)
             self._media_player.setSource(url)
@@ -616,15 +718,17 @@ class NordicAudioEngine(QObject):
 
     def load_track(self, track: NordicTrack, auto_play: bool = False) -> None:
         was_playing = self.is_playing
-        # 切歌时截取上一首余音 (约 370ms = 16384 帧) 用于无缝交叉淡化 (Crossfade)
-        if was_playing and len(self._decoded_raw_bytes) > 0:
-            avail_f = len(self._decoded_raw_bytes) // 4
-            if self._frame_cursor < avail_f:
-                end_cf = min(avail_f, self._frame_cursor + 16384)
-                self._crossfade_tail_pcm = bytearray(
-                    self._decoded_raw_bytes[self._frame_cursor * 4 : end_cf * 4]
-                )
-        self.pause()
+        should_play = bool(auto_play or was_playing)
+
+        if was_playing:
+            self._flush_fadeout_to_sink()
+            if self._using_local_file and self._decoder_failed:
+                self._media_player.stop()
+        if not should_play and was_playing:
+            self.pause()
+
+        self._stop_decoder_safely()
+        self._decoded_raw_bytes.clear()
         self.current_track = track
         self.duration = max(1.0, track.duration)
         self.current_time = 0.0
@@ -634,18 +738,21 @@ class NordicAudioEngine(QObject):
         self._decoder_started = False
         self._decoder_finished = False
         self._decoder_failed = False
+        self._initial_sink_fed = False
+        self._crossfade_tail_pcm = None
 
-        self._decoder.stop()
-        self._decoded_raw_bytes.clear()
         self.dsp.reset_state()
-        self._stream_device.request_smooth_transition()
+        self._stream_device._out_fifo.clear()
+        self._stream_device._env_gain = 0.0
+        self._stream_device._last_tail_frame.fill(0.0)
+        self._stream_device._crossfade_on_next_block = False
 
         if track.file_path and Path(track.file_path).is_file():
             self._using_local_file = True
             url = QUrl.fromLocalFile(track.file_path)
             self._audio_output.setVolume(0.0)
             self._decoder.setSource(url)
-            if auto_play or was_playing:
+            if should_play:
                 self._decoder_started = True
                 self._decoder.start()
         else:
@@ -658,8 +765,15 @@ class NordicAudioEngine(QObject):
         self.trackChanged.emit(track)
         self.timeUpdated.emit(0.0, self.duration, "init")
 
-        if auto_play or was_playing:
-            self.play()
+        if should_play:
+            if not self.is_playing:
+                self.play()
+            else:
+                self._pause_drain_ticks = 0
+                self._ensure_sink_running()
+                self._feed_audio_sink()
+                if not self._tick_timer.isActive():
+                    self._tick_timer.start()
 
     def play(self) -> None:
         if self.is_playing or self.current_track is None:
@@ -669,6 +783,7 @@ class NordicAudioEngine(QObject):
             self._frame_cursor = 0
             self._eof_triggered = False
 
+        self._pause_drain_ticks = 0
         self._preview_frames_remaining = 0
         self.is_playing = True
         self._ensure_sink_running()
@@ -683,13 +798,10 @@ class NordicAudioEngine(QObject):
             return
         self.is_playing = False
         self._preview_frames_remaining = 0
-        # 推送一帧软淡出块消除停播咔哒声，随后挂起音频硬件流以释放全部后台 CPU
-        if self._audio_sink is not None and self._push_io is not None:
-            block_bytes = ContinuousDspStreamDevice.BLOCK_FRAMES * 2 * self._channels
-            if self._audio_sink.bytesFree() >= block_bytes:
-                self._push_io.write(self._stream_device._render_next_dsp_block())
-            self._audio_sink.suspend()
-        self._tick_timer.stop()
+        self._flush_fadeout_to_sink()
+        self._pause_drain_ticks = 4
+        if not self._tick_timer.isActive():
+            self._tick_timer.start()
         if self._using_local_file and self._decoder_failed:
             self._media_player.pause()
         self.current_spectrum_bands = [0.0] * 24
@@ -704,16 +816,25 @@ class NordicAudioEngine(QObject):
 
     def seek(self, target_seconds: float, auto_play_on_seek: bool = True, source: str = "seek") -> None:
         clamped = max(0.0, min(self.duration, float(target_seconds)))
+        if self.is_playing:
+            self._flush_fadeout_to_sink()
         self.current_time = clamped
         self._eof_triggered = False
         self._frame_cursor = max(0, int(clamped * self._sample_rate))
-        self._stream_device.request_smooth_transition()
+        self.dsp.reset_state()
+        self._stream_device._out_fifo.clear()
+        self._stream_device._env_gain = 0.0
+        self._stream_device._last_tail_frame.fill(0.0)
 
         if self._using_local_file and self._decoder_failed:
             self._media_player.setPosition(int(clamped * 1000))
+        elif self._using_local_file and not self._decoder_finished:
+            self._drain_decoder_buffers(max_buffers=16)
 
         if auto_play_on_seek and not self.is_playing:
             self.play()
+        elif self.is_playing:
+            self._feed_audio_sink()
 
         self.timeUpdated.emit(self.current_time, self.duration, source)
 
@@ -809,13 +930,17 @@ class NordicAudioEngine(QObject):
 
     def _handle_eof_on_main_thread(self) -> None:
         if self.is_playing:
-            self.pause()
             self.trackEnded.emit()
+            if self._eof_triggered and self.is_playing:
+                self.pause()
 
     def _on_tick(self) -> None:
         if self.current_track is None:
             return
         if not self.is_playing and self._preview_frames_remaining <= 0:
+            if self._pause_drain_ticks > 0:
+                self._pause_drain_ticks -= 1
+                return
             if self._audio_sink is not None:
                 self._audio_sink.suspend()
             self._tick_timer.stop()
@@ -829,6 +954,9 @@ class NordicAudioEngine(QObject):
             self.current_time = pos_ms / 1000.0
             self.timeUpdated.emit(self.current_time, self.duration, "tick")
             return
+
+        if self._using_local_file and not self._decoder_finished and not self._decoder_failed:
+            self._drain_decoder_buffers(max_buffers=3)
 
         self._feed_audio_sink()
         if self.is_playing:

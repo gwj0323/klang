@@ -202,11 +202,9 @@ class NavTrackItemButton(QPushButton):
 
     def refresh_thumbnail(self) -> None:
         self._thumb_pixmap = None
-        pix = QPixmap()
-        if (self.track.cover_bytes and pix.loadFromData(self.track.cover_bytes)) or (
-            self.track.cover_path and pix.load(self.track.cover_path)
-        ):
-            self._thumb_pixmap = pix.scaled(
+        base_pix = self.track.get_cover_pixmap() if self.track is not None else None
+        if base_pix is not None and not base_pix.isNull():
+            self._thumb_pixmap = base_pix.scaled(
                 72,
                 72,
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
@@ -219,8 +217,9 @@ class NavTrackItemButton(QPushButton):
         self.update()
 
     def set_selected(self, selected: bool) -> None:
-        self.is_selected = selected
-        self.update()
+        if self.is_selected != selected:
+            self.is_selected = selected
+            self.update()
 
     def _fav_rect(self) -> QRectF:
         return QRectF(self.width() - 62.0, self.height() / 2.0 - 9.0, 18.0, 18.0)
@@ -635,8 +634,10 @@ class NavigationPane(QWidget):
     def set_playing_state(self, is_playing: bool) -> None:
         self.is_playing = bool(is_playing)
         for i, btn in enumerate(self.item_buttons):
-            btn.is_playing = self.is_playing and (i == self.active_index)
-            btn.update()
+            new_playing = self.is_playing and (i == self.active_index)
+            if btn.is_playing != new_playing:
+                btn.is_playing = new_playing
+                btn.update()
         if self.is_playing:
             if not self._eq_timer.isActive():
                 self._eq_timer.start()
@@ -754,8 +755,12 @@ class NavigationPane(QWidget):
     def set_active_index(self, index: int) -> None:
         self.active_index = index
         for i, btn in enumerate(self.item_buttons):
-            btn.set_selected(i == index)
-            btn.is_playing = self.is_playing and (i == index)
+            new_sel = (i == index)
+            new_play = self.is_playing and new_sel
+            if btn.is_selected != new_sel or btn.is_playing != new_play:
+                btn.is_selected = new_sel
+                btn.is_playing = new_play
+                btn.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme

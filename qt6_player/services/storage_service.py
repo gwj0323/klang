@@ -201,7 +201,7 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
                 tr.artist = str(item["artist"])
             if item.get("album"):
                 tr.album = str(item["album"])
-            if item.get("duration"):
+            if item.get("duration") and float(item["duration"]) >= 15.0:
                 tr.duration = float(item["duration"])
             if valid_cov and not tr.cover_path:
                 tr.cover_path = valid_cov
@@ -227,7 +227,7 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
             tr.artist = str(item["artist"])
         if item.get("album"):
             tr.album = str(item["album"])
-        if item.get("duration"):
+        if item.get("duration") and float(item["duration"]) >= 15.0:
             tr.duration = float(item["duration"])
         saved_cov = item.get("cover_path")
         if saved_cov and Path(str(saved_cov)).is_file() and not tr.cover_path:

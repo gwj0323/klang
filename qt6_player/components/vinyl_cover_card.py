@@ -145,10 +145,14 @@ class NordicArtworkCanvas(QWidget):
             self._spin_timer.stop()
 
     def set_playing(self, playing: bool) -> None:
-        self.is_playing = bool(playing)
+        new_state = bool(playing)
+        target_slide = 1.0 if new_state else 0.0
+        if self.is_playing == new_state and abs(self.vinyl_slide - target_slide) < 0.01:
+            return
+        self.is_playing = new_state
         self._slide_anim.stop()
         self._slide_anim.setStartValue(self.vinyl_slide)
-        self._slide_anim.setEndValue(1.0 if playing else 0.0)
+        self._slide_anim.setEndValue(target_slide)
         self._slide_anim.start()
         self._spin_clock.restart()
         if not self._spin_timer.isActive():
@@ -167,13 +171,7 @@ class NordicArtworkCanvas(QWidget):
             self.transition_prog = 1.0
 
     def reload_cover_pixmap(self) -> None:
-        self.cover_pixmap = None
-        if self.track is not None:
-            pix = QPixmap()
-            if self.track.cover_bytes and pix.loadFromData(self.track.cover_bytes):
-                self.cover_pixmap = pix
-            elif self.track.cover_path and pix.load(self.track.cover_path):
-                self.cover_pixmap = pix
+        self.cover_pixmap = self.track.get_cover_pixmap() if self.track is not None else None
         self._rebuild_caches()
         self.update()
 
@@ -197,63 +195,65 @@ class NordicArtworkCanvas(QWidget):
         dpr = max(1.0, self.devicePixelRatioF())
         self._cached_dpr = dpr
 
-        # 1. 预渲染 212×212 黑胶唱片位图
-        disc_size = 212
-        disc_radius = 104.0
-        disc_pix = QPixmap(int(disc_size * dpr), int(disc_size * dpr))
-        disc_pix.setDevicePixelRatio(dpr)
-        disc_pix.fill(Qt.GlobalColor.transparent)
+        disc_key = (dpr, palette.get("wood", "#C9BBAE"), palette.get("accent", "#6E8277"))
+        if self._cached_disc_pixmap is None or getattr(self, "_cached_disc_key", None) != disc_key:
+            self._cached_disc_key = disc_key
+            disc_size = 212
+            disc_radius = 104.0
+            disc_pix = QPixmap(int(disc_size * dpr), int(disc_size * dpr))
+            disc_pix.setDevicePixelRatio(dpr)
+            disc_pix.fill(Qt.GlobalColor.transparent)
 
-        dp = QPainter(disc_pix)
-        dp.setRenderHint(QPainter.RenderHint.Antialiasing)
-        dp.translate(disc_size / 2.0, disc_size / 2.0)
+            dp = QPainter(disc_pix)
+            dp.setRenderHint(QPainter.RenderHint.Antialiasing)
+            dp.translate(disc_size / 2.0, disc_size / 2.0)
 
-        disc_grad = QRadialGradient(QPointF(0.0, 0.0), disc_radius)
-        disc_grad.setColorAt(0.0, QColor(palette["wood"]))
-        disc_grad.setColorAt(0.24, QColor(palette["wood"]))
-        disc_grad.setColorAt(0.26, QColor("#2B2E33"))
-        disc_grad.setColorAt(0.55, QColor("#1F2227"))
-        disc_grad.setColorAt(0.58, QColor("#2E3238"))
-        disc_grad.setColorAt(0.82, QColor("#1C1F24"))
-        disc_grad.setColorAt(1.0, QColor("#16181C"))
+            disc_grad = QRadialGradient(QPointF(0.0, 0.0), disc_radius)
+            disc_grad.setColorAt(0.0, QColor(palette["wood"]))
+            disc_grad.setColorAt(0.24, QColor(palette["wood"]))
+            disc_grad.setColorAt(0.26, QColor("#2B2E33"))
+            disc_grad.setColorAt(0.55, QColor("#1F2227"))
+            disc_grad.setColorAt(0.58, QColor("#2E3238"))
+            disc_grad.setColorAt(0.82, QColor("#1C1F24"))
+            disc_grad.setColorAt(1.0, QColor("#16181C"))
 
-        dp.setPen(QPen(QColor(255, 255, 255, 28), 1.0))
-        dp.setBrush(disc_grad)
-        dp.drawEllipse(QPointF(0.0, 0.0), disc_radius, disc_radius)
+            dp.setPen(QPen(QColor(255, 255, 255, 28), 1.0))
+            dp.setBrush(disc_grad)
+            dp.drawEllipse(QPointF(0.0, 0.0), disc_radius, disc_radius)
 
-        sheen = QConicalGradient(QPointF(0.0, 0.0), 35.0)
-        sheen.setColorAt(0.00, QColor(255, 255, 255, 0))
-        sheen.setColorAt(0.12, QColor(255, 255, 255, 24))
-        sheen.setColorAt(0.24, QColor(255, 255, 255, 0))
-        sheen.setColorAt(0.50, QColor(255, 255, 255, 0))
-        sheen.setColorAt(0.62, QColor(255, 255, 255, 20))
-        sheen.setColorAt(0.74, QColor(255, 255, 255, 0))
-        sheen.setColorAt(1.00, QColor(255, 255, 255, 0))
-        dp.setPen(Qt.PenStyle.NoPen)
-        dp.setBrush(sheen)
-        dp.drawEllipse(QPointF(0.0, 0.0), disc_radius - 2.0, disc_radius - 2.0)
+            sheen = QConicalGradient(QPointF(0.0, 0.0), 35.0)
+            sheen.setColorAt(0.00, QColor(255, 255, 255, 0))
+            sheen.setColorAt(0.12, QColor(255, 255, 255, 24))
+            sheen.setColorAt(0.24, QColor(255, 255, 255, 0))
+            sheen.setColorAt(0.50, QColor(255, 255, 255, 0))
+            sheen.setColorAt(0.62, QColor(255, 255, 255, 20))
+            sheen.setColorAt(0.74, QColor(255, 255, 255, 0))
+            sheen.setColorAt(1.00, QColor(255, 255, 255, 0))
+            dp.setPen(Qt.PenStyle.NoPen)
+            dp.setBrush(sheen)
+            dp.drawEllipse(QPointF(0.0, 0.0), disc_radius - 2.0, disc_radius - 2.0)
 
-        groove_pen = QPen(QColor(255, 255, 255, 16), 0.7)
-        dp.setPen(groove_pen)
-        dp.setBrush(Qt.BrushStyle.NoBrush)
-        for gr in (42.0, 56.0, 70.0, 84.0, 95.0):
-            dp.drawEllipse(QPointF(0.0, 0.0), gr, gr)
+            groove_pen = QPen(QColor(255, 255, 255, 16), 0.7)
+            dp.setPen(groove_pen)
+            dp.setBrush(Qt.BrushStyle.NoBrush)
+            for gr in (42.0, 56.0, 70.0, 84.0, 95.0):
+                dp.drawEllipse(QPointF(0.0, 0.0), gr, gr)
 
-        lbl_r = 25.0
-        dp.setPen(QPen(QColor(38, 41, 46, 50), 1.0))
-        dp.setBrush(QColor(palette["wood"]))
-        dp.drawEllipse(QPointF(0.0, 0.0), lbl_r, lbl_r)
+            lbl_r = 25.0
+            dp.setPen(QPen(QColor(38, 41, 46, 50), 1.0))
+            dp.setBrush(QColor(palette["wood"]))
+            dp.drawEllipse(QPointF(0.0, 0.0), lbl_r, lbl_r)
 
-        accent_col = QColor(palette.get("accent", "#6E8277"))
-        dp.setPen(QPen(accent_col, 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        dp.drawArc(QRectF(-17.0, -17.0, 34.0, 34.0), 30 * 16, 110 * 16)
-        dp.drawArc(QRectF(-17.0, -17.0, 34.0, 34.0), 210 * 16, 110 * 16)
+            accent_col = QColor(palette.get("accent", "#6E8277"))
+            dp.setPen(QPen(accent_col, 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            dp.drawArc(QRectF(-17.0, -17.0, 34.0, 34.0), 30 * 16, 110 * 16)
+            dp.drawArc(QRectF(-17.0, -17.0, 34.0, 34.0), 210 * 16, 110 * 16)
 
-        dp.setPen(Qt.PenStyle.NoPen)
-        dp.setBrush(QColor("#1B1E23"))
-        dp.drawEllipse(QPointF(0.0, 0.0), 4.2, 4.2)
-        dp.end()
-        self._cached_disc_pixmap = disc_pix
+            dp.setPen(Qt.PenStyle.NoPen)
+            dp.setBrush(QColor("#1B1E23"))
+            dp.drawEllipse(QPointF(0.0, 0.0), 4.2, 4.2)
+            dp.end()
+            self._cached_disc_pixmap = disc_pix
 
         card_pix = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
         card_pix.setDevicePixelRatio(dpr)

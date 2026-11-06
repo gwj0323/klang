@@ -44,6 +44,38 @@ class NordicTrack:
     )
     chords: List[List[float]] = field(default_factory=list)
     lyrics: List[LyricLine] = field(default_factory=list)
+    _cached_cover_pix: object = field(default=None, init=False, repr=False, compare=False)
+    _cover_cache_loaded: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def invalidate_cover_cache(self) -> None:
+        self._cached_cover_pix = None
+        self._cover_cache_loaded = False
+
+    def get_cover_pixmap(self):
+        if self._cover_cache_loaded:
+            return self._cached_cover_pix
+        self._cover_cache_loaded = True
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QPixmap
+
+        pix = QPixmap()
+        loaded = False
+        if self.cover_bytes and pix.loadFromData(self.cover_bytes):
+            loaded = True
+        elif self.cover_path and pix.load(self.cover_path):
+            loaded = True
+        if loaded and not pix.isNull():
+            if pix.width() > 512 or pix.height() > 512:
+                pix = pix.scaled(
+                    512,
+                    512,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            self._cached_cover_pix = pix
+        else:
+            self._cached_cover_pix = None
+        return self._cached_cover_pix
 
 
 def build_syllables(text: str, start_time: float, end_time: float) -> List[SyllableToken]:

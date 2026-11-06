@@ -188,14 +188,11 @@ class NordicWinUI3Window(QMainWindow):
         self.update()
 
     def _on_ambient_colors_updated(self, c1: QColor, c2: QColor) -> None:
-        self._amb1_start = QColor(self._amb1_cur)
-        self._amb2_start = QColor(self._amb2_cur)
-        self._amb1_target = QColor(c1)
-        self._amb2_target = QColor(c2)
-        self._ambient_anim.stop()
-        self._ambient_anim.setStartValue(0.0)
-        self._ambient_anim.setEndValue(1.0)
-        self._ambient_anim.start()
+        if self._amb1_cur != c1 or self._amb2_cur != c2:
+            self._amb1_cur = QColor(c1)
+            self._amb2_cur = QColor(c2)
+            self._bg_dirty = True
+            self.update()
 
     def _setup_system_tray(self, icon_path: Path) -> None:
         self.tray_icon = QSystemTrayIcon(self)
@@ -829,7 +826,10 @@ class NordicWinUI3Window(QMainWindow):
         first_new_index: Optional[int] = None
 
         for fp in file_paths:
-            norm_p = str(Path(fp).resolve())
+            p = Path(fp)
+            if p.suffix.lower() not in SUPPORTED_AUDIO_EXTS:
+                continue
+            norm_p = str(p.resolve())
             if norm_p in existing_paths:
                 continue
             new_track = create_track_from_file(norm_p, index_hint=len(self.tracks))
@@ -918,6 +918,7 @@ class NordicWinUI3Window(QMainWindow):
                     t.lyrics = lyrics
                 if cover_bytes:
                     t.cover_bytes = cover_bytes
+                    t.invalidate_cover_cache()
                 if album_name and not t.album:
                     t.album = album_name
 
@@ -963,6 +964,7 @@ class NordicWinUI3Window(QMainWindow):
                 self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
         if cover_bytes:
             target_track.cover_bytes = cover_bytes
+            target_track.invalidate_cover_cache()
         if album_name:
             target_track.album = album_name
 
@@ -975,7 +977,8 @@ class NordicWinUI3Window(QMainWindow):
 
     def _clear_now_playing_ui(self) -> None:
         self.audio.pause()
-        self.audio._decoder.stop()
+        self.audio._stop_decoder_safely()
+        self.audio._decoded_raw_bytes.clear()
         self.audio.current_track = None
         self.audio.current_time = 0.0
         self.audio.duration = 0.0
@@ -1055,6 +1058,9 @@ class NordicWinUI3Window(QMainWindow):
             self.lyrics_stage.sync_time(current_time, source=source)
         if self.mini_player.isVisible():
             self.mini_player.update_progress(current_time, duration)
+        if source == "init" and 0 <= self.current_track_index < len(self.nav_pane.item_buttons):
+            self.nav_pane.item_buttons[self.current_track_index].update()
+            self.schedule_save()
 
     def _on_theme_toggled(self, theme_name: str) -> None:
         new_theme = DUSK_THEME if theme_name == "dusk" else DAYLIGHT_THEME

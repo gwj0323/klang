@@ -104,14 +104,15 @@ def _extract_mp3_id3v2(file_path: str) -> Tuple[str, str, str, Optional[bytes], 
     return title, artist, album, cover_bytes, lrc_text
 
 
-def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[bytes], str]:
-    """轻量读取 FLAC Vorbis 注释与 Picture 块封面"""
+def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[bytes], str, float]:
+    """轻量读取 FLAC Vorbis 注释、Picture 块封面与 STREAMINFO 精准时长"""
     title, artist, album, lrc_text = "", "", "", ""
     cover_bytes: Optional[bytes] = None
+    duration: float = 0.0
     try:
         with open(file_path, "rb") as f:
             if f.read(4) != b"fLaC":
-                return title, artist, album, cover_bytes, lrc_text
+                return title, artist, album, cover_bytes, lrc_text, duration
             while True:
                 block_header = f.read(4)
                 if len(block_header) < 4:
@@ -123,7 +124,13 @@ def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[byte
                     f.seek(length, os.SEEK_CUR)
                 else:
                     data = f.read(length)
-                    if block_type == 4 and len(data) >= 8:  # VORBIS_COMMENT
+                    if block_type == 0 and len(data) >= 18:  # STREAMINFO
+                        val64 = struct.unpack(">Q", data[10:18])[0]
+                        sr = (val64 >> 44) & 0xFFFFF
+                        total_samples = val64 & 0xFFFFFFFFF
+                        if sr > 0 and total_samples > 0:
+                            duration = total_samples / float(sr)
+                    elif block_type == 4 and len(data) >= 8:  # VORBIS_COMMENT
                         vendor_len = struct.unpack("<I", data[:4])[0]
                         p = 4 + vendor_len
                         if p + 4 <= len(data):
@@ -164,7 +171,7 @@ def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[byte
                     break
     except Exception:
         pass
-    return title, artist, album, cover_bytes, lrc_text
+    return title, artist, album, cover_bytes, lrc_text, duration
 
 
 def _parse_filename_artist_title(stem: str) -> Tuple[str, str]:
@@ -211,10 +218,11 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
     ext = path_obj.suffix.lower()
 
     title, artist, album, cover_bytes, embedded_lrc = "", "", "", None, ""
+    parsed_dur: float = 0.0
     if ext == ".mp3":
         title, artist, album, cover_bytes, embedded_lrc = _extract_mp3_id3v2(file_path)
     elif ext == ".flac":
-        title, artist, album, cover_bytes, embedded_lrc = _extract_flac_metadata(file_path)
+        title, artist, album, cover_bytes, embedded_lrc, parsed_dur = _extract_flac_metadata(file_path)
 
     fn_artist, fn_title = _parse_filename_artist_title(path_obj.stem)
     final_title = title or fn_title
@@ -237,12 +245,13 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
     palette = dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)])
     resolved_str = str(path_obj.resolve())
     stable_digest = hashlib.md5(resolved_str.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    fallback_dur = max(30.0, (lyrics[-1].end_time + 4.0) if (final_lrc and lyrics) else 180.0)
     return NordicTrack(
         track_id=f"local-{stable_digest}",
         title=final_title,
         artist=final_artist,
         album=final_album,
-        duration=max(30.0, (lyrics[-1].end_time + 4.0) if lyrics else 180.0),
+        duration=parsed_dur if parsed_dur > 5.0 else fallback_dur,
         file_path=resolved_str,
         cover_path=local_cover_path,
         cover_bytes=cover_bytes,
