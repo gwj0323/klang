@@ -47,13 +47,13 @@ class ScrapeCandidate:
 
 
 def search_netease_candidates(keyword: str, limit: int = 8) -> List[ScrapeCandidate]:
-    """从网易云搜索歌曲候选列表"""
+    """从网易云搜索歌曲候选列表（使用 cloudsearch/pc 原生接口）"""
     results: List[ScrapeCandidate] = []
     if not keyword.strip():
         return results
     try:
         resp = requests.post(
-            "https://music.163.com/api/search/get/web",
+            "https://music.163.com/api/cloudsearch/pc",
             data={"s": keyword.strip(), "type": 1, "offset": 0, "total": "true", "limit": limit},
             headers=_HEADERS,
             timeout=6,
@@ -64,11 +64,13 @@ def search_netease_candidates(keyword: str, limit: int = 8) -> List[ScrapeCandid
             sid = str(s.get("id", ""))
             if not sid:
                 continue
-            artists = " / ".join(a.get("name", "") for a in (s.get("artists") or []) if a.get("name"))
-            album_obj = s.get("album") or {}
+            ar_list = s.get("ar") or s.get("artists") or []
+            artists = " / ".join(a.get("name", "") for a in ar_list if a.get("name"))
+            album_obj = s.get("al") or s.get("album") or {}
             album_name = album_obj.get("name", "")
             pic_url = album_obj.get("picUrl", "")
-            dur = float(s.get("duration", 0)) / 1000.0
+            dur_ms = s.get("dt") or s.get("duration") or 0
+            dur = float(dur_ms) / 1000.0
             results.append(
                 ScrapeCandidate(
                     source="网易云",
@@ -83,6 +85,22 @@ def search_netease_candidates(keyword: str, limit: int = 8) -> List[ScrapeCandid
     except Exception:
         pass
     return results
+
+
+def fetch_netease_translation_only(title: str, artist: str = "") -> str:
+    """按歌名和歌手快速检索网易云并仅获取翻译歌词 tlyric（轻量安全，供后台自动增补）"""
+    clean_art = "" if artist in ("未知歌手", "Unknown") else artist
+    q = f"{clean_art} {title}".strip()
+    if not q:
+        return ""
+    candidates = search_netease_candidates(q, limit=3)
+    if not candidates and clean_art:
+        candidates = search_netease_candidates(title, limit=3)
+    if not candidates:
+        return ""
+    best = candidates[0]
+    _p, trans_lrc, _cov = fetch_netease_lyric_and_cover(best.song_id)
+    return trans_lrc
 
 
 def fetch_netease_lyric_and_cover(song_id: str, existing_cover_url: str = "") -> Tuple[str, str, str]:
@@ -198,8 +216,9 @@ def save_scraped_files_alongside_audio(
     cover_bytes: Optional[bytes],
     track_id: str = "",
     overwrite: bool = False,
+    trans_lrc: str = "",
 ) -> Optional[str]:
-    """若为本地音频文件，将刮削到的 .lrc 歌词和同名封面保存到音频所在目录；否则缓存封面至用户配置目录"""
+    """若为本地音频文件，将刮削到的 .lrc 歌词、.tr.lrc 翻译歌词与同名封面保存到音频所在目录；否则缓存封面至用户配置目录"""
     saved_cover_path: Optional[str] = None
     if audio_file_path:
         try:
@@ -209,6 +228,10 @@ def save_scraped_files_alongside_audio(
                     lrc_path = p.parent / f"{p.stem}.lrc"
                     if overwrite or not lrc_path.exists():
                         lrc_path.write_text(primary_lrc, encoding="utf-8")
+                if trans_lrc.strip():
+                    tr_path = p.parent / f"{p.stem}.tr.lrc"
+                    if overwrite or not tr_path.exists():
+                        tr_path.write_text(trans_lrc, encoding="utf-8")
                 if cover_bytes:
                     cov_path = p.parent / f"{p.stem}.jpg"
                     if overwrite or not cov_path.exists():
@@ -276,13 +299,14 @@ class AutoScrapeWorker(QThread):
         cover_bytes = download_image_bytes(cover_url) if (self.need_cover and cover_url) else None
         parsed_lyrics: List[LyricLine] = parse_lrc_text(primary_lrc, trans_lrc) if primary_lrc.strip() else []
 
-        if primary_lrc.strip() or cover_bytes:
+        if primary_lrc.strip() or cover_bytes or trans_lrc.strip():
             saved_cov = save_scraped_files_alongside_audio(
                 self.track.file_path,
                 primary_lrc,
                 cover_bytes,
                 track_id=self.track.track_id,
                 overwrite=False,
+                trans_lrc=trans_lrc,
             )
             if saved_cov:
                 self.track.cover_path = saved_cov
@@ -305,7 +329,7 @@ class SearchWorker(QThread):
 
 
 class FetchCandidateDetailWorker(QThread):
-    detailReady = pyqtSignal(list, object, str, str)  # List[LyricLine], Optional[bytes], raw_lrc, album
+    detailReady = pyqtSignal(list, object, str, str, str)  # List[LyricLine], Optional[bytes], raw_lrc, trans_lrc, album
 
     def __init__(self, candidate: ScrapeCandidate, parent=None):
         super().__init__(parent)
@@ -326,7 +350,7 @@ class FetchCandidateDetailWorker(QThread):
 
         cover_bytes = download_image_bytes(cover_url) if cover_url else None
         lyrics = parse_lrc_text(primary_lrc, trans_lrc) if primary_lrc.strip() else []
-        self.detailReady.emit(lyrics, cover_bytes, primary_lrc, cand.album)
+        self.detailReady.emit(lyrics, cover_bytes, primary_lrc, trans_lrc, cand.album)
 
 
 class OnlineScraperDialog(WinUIModalDialog):
@@ -495,6 +519,7 @@ class OnlineScraperDialog(WinUIModalDialog):
         lyrics: List[LyricLine],
         cover_bytes: Optional[bytes],
         raw_lrc: str,
+        trans_lrc: str,
         album_name: str,
     ) -> None:
         self.btn_apply.setEnabled(True)
@@ -508,6 +533,7 @@ class OnlineScraperDialog(WinUIModalDialog):
                 out_cover,
                 track_id=self.track.track_id,
                 overwrite=True,
+                trans_lrc=trans_lrc if self.chk_lyrics.isChecked() else "",
             )
             if saved_cov:
                 self.track.cover_path = saved_cov

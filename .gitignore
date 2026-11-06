@@ -33,6 +33,7 @@ player_state.json
 .cache/
 *.log
 scraper_cache/
+scratch/
 
 # Audio / Media files (exclude large local media files)
 *.mp3

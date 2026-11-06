@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
+from qt6_player.theme.nordic_palette import apply_apple_sans_globally
 from qt6_player.main_window import NordicWinUI3Window
 
 
@@ -13,6 +14,9 @@ def main() -> int:
     )
     app = QApplication(sys.argv)
     app.setApplicationName("Klang")
+
+    # 全局生效 Apple Sans (SF Pro Display / SF Mono) 字体体系
+    apply_apple_sans_globally(app)
 
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         base_dir = Path(sys._MEIPASS)

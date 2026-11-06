@@ -187,20 +187,33 @@ def _parse_filename_artist_title(stem: str) -> Tuple[str, str]:
     return "未知歌手", cleaned or stem
 
 
-def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, Optional[str]]:
-    """查找音频同目录下的同名 .lrc 歌词与封面图片"""
+def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]]:
+    """查找音频同目录下的同名 .lrc 歌词、伴生翻译 .tr.lrc 歌词与封面图片"""
     folder = audio_path.parent
     stem = audio_path.stem
     lrc_text = ""
-    lrc_candidate = folder / f"{stem}.lrc"
-    if lrc_candidate.is_file():
+    trans_text = ""
+
+    def _read_file_safe(candidate_path: Path) -> str:
         for enc in ("utf-8", "utf-8-sig", "gb18030", "utf-16"):
             try:
-                lrc_text = lrc_candidate.read_text(encoding=enc)
-                if lrc_text.strip():
-                    break
+                txt = candidate_path.read_text(encoding=enc)
+                if txt.strip():
+                    return txt
             except Exception:
                 continue
+        return ""
+
+    lrc_candidate = folder / f"{stem}.lrc"
+    if lrc_candidate.is_file():
+        lrc_text = _read_file_safe(lrc_candidate)
+
+    for trans_suffix in (f"{stem}.tr.lrc", f"{stem}.zh.lrc", f"{stem}.trans.lrc", f"{stem}.cn.lrc", f"{stem}_zh.lrc", f"{stem}_tr.lrc"):
+        tr_candidate = folder / trans_suffix
+        if tr_candidate.is_file():
+            trans_text = _read_file_safe(tr_candidate)
+            if trans_text.strip():
+                break
 
     cover_path: Optional[str] = None
     for img_name in (f"{stem}.jpg", f"{stem}.png", f"{stem}.jpeg", "cover.jpg", "cover.png", "folder.jpg"):
@@ -209,7 +222,7 @@ def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, Optional[str]]:
             cover_path = str(img_candidate)
             break
 
-    return lrc_text, cover_path
+    return lrc_text, trans_text, cover_path
 
 
 def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
@@ -229,11 +242,11 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
     final_artist = artist or fn_artist
     final_album = album or path_obj.parent.name
 
-    local_lrc, local_cover_path = _find_local_lrc_and_cover(path_obj)
+    local_lrc, local_trans_lrc, local_cover_path = _find_local_lrc_and_cover(path_obj)
     final_lrc = local_lrc or embedded_lrc
 
     if final_lrc:
-        lyrics = parse_lrc_text(final_lrc)
+        lyrics = parse_lrc_text(final_lrc, trans_lrc=local_trans_lrc)
     else:
         lyrics = create_lyric_lines(
             [

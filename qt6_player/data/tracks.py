@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 
 @dataclass
@@ -126,10 +126,71 @@ def create_lyric_lines(raw_items: List[dict]) -> List[LyricLine]:
 
 _LRC_TIME_PATTERN = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _WORD_TAG_PATTERN = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")
+_INLINE_SEP_PATTERN = re.compile(r"\s+(?://|/|\||——|--)\s+")
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fa5]")
+_HEADER_NOISE_PATTERN = re.compile(r"^(//|作词|作曲|编曲|制作|监制|混音|母带|by:|ti:|ar:|al:|offset:|qq:)", re.I)
 
 
-def _parse_raw_lrc_map(lrc_content: str) -> List[tuple]:
-    entries = []
+def _split_inline_bilingual(text: str) -> Tuple[str, str]:
+    """拆分单行中的外语原文与中文译文（支持 //、/、|、—— 以及尾部中文括号等形式）"""
+    text = text.strip()
+    if not text:
+        return "", ""
+
+    # 1. 常见显式双语分隔符 " // ", " / ", " | ", " —— ", " -- "
+    parts = _INLINE_SEP_PATTERN.split(text, maxsplit=1)
+    if len(parts) == 2:
+        p1, p2 = parts[0].strip(), parts[1].strip()
+        if _CJK_PATTERN.search(p2) and p1:
+            return p1, p2
+
+    # 2. 尾部中文括号翻译: "Hello world (世界你好)" / "Hello world（世界你好）"
+    m = re.search(r"^(.+?)\s*[（\(]([\u4e00-\u9fa5\s\d,，.。!！?？'’\"”]{2,})[）\)]\s*$", text)
+    if m:
+        p1, p2 = m.group(1).strip(), m.group(2).strip()
+        if p1 and p2:
+            return p1, p2
+
+    return text, ""
+
+
+def merge_lyrics_translations(lyrics: List[LyricLine], trans_lrc: str) -> bool:
+    """将外部翻译文本（如 NetEase tlyric）智能融合至已有 LyricLine 列表，保持原始打点与音节不变"""
+    if not lyrics or not trans_lrc.strip():
+        return False
+
+    trans_entries = _parse_raw_lrc_map(trans_lrc)
+    clean_trans = [
+        (t, txt.strip())
+        for t, txt in trans_entries
+        if txt.strip() and not _HEADER_NOISE_PATTERN.match(txt.strip())
+    ]
+    if not clean_trans:
+        return False
+
+    updated = False
+    for line in lyrics:
+        if line.is_interlude:
+            continue
+        if line.sub and _CJK_PATTERN.search(line.sub):
+            continue
+
+        best_txt = ""
+        best_d = 999.0
+        for tt, ttxt in clean_trans:
+            d = abs(tt - line.time)
+            if d < best_d:
+                best_d = d
+                best_txt = ttxt
+        if best_d <= 2.8 and best_txt and best_txt != line.text:
+            line.sub = best_txt
+            updated = True
+
+    return updated
+
+
+def _parse_raw_lrc_map(lrc_content: str) -> List[Tuple[float, str]]:
+    entries: List[Tuple[float, str]] = []
     if not lrc_content:
         return entries
 
@@ -162,43 +223,63 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "") -> List[LyricLine]:
         plain_lines = [ln.strip() for ln in (primary_lrc or "").splitlines() if ln.strip()]
         if not plain_lines:
             return []
-        raw_items = [{"time": idx * 4.0, "text": txt} for idx, txt in enumerate(plain_lines)]
+        raw_items = []
+        for idx, raw_t in enumerate(plain_lines):
+            p_txt, s_txt = _split_inline_bilingual(raw_t)
+            raw_items.append({"time": idx * 4.0, "text": p_txt, "sub": s_txt})
         return create_lyric_lines(raw_items)
 
-    trans_map: Dict[int, str] = {}
+    clean_trans: List[Tuple[float, str]] = []
     if trans_lrc:
         for t, txt in _parse_raw_lrc_map(trans_lrc):
-            if txt and not txt.startswith("//"):
-                trans_map[int(round(t * 2))] = txt
+            st = txt.strip()
+            if st and not _HEADER_NOISE_PATTERN.match(st):
+                clean_trans.append((t, st))
 
     merged_raw: List[dict] = []
-    for t, txt in primary_entries:
+    i = 0
+    n = len(primary_entries)
+    while i < n:
+        t, txt = primary_entries[i]
         if not txt:
-            continue
-        if merged_raw and abs(merged_raw[-1]["time"] - t) < 0.08:
-            if not merged_raw[-1].get("sub"):
-                merged_raw[-1]["sub"] = txt
+            i += 1
             continue
 
-        bucket = int(round(t * 2))
-        sub_txt = (
-            trans_map.get(bucket)
-            or trans_map.get(bucket - 1)
-            or trans_map.get(bucket + 1)
-            or ""
-        )
-        if sub_txt == txt:
-            sub_txt = ""
+        # 1. 先检查行内是否已有双语: "Midnight // 午夜时分"
+        p_txt, s_txt = _split_inline_bilingual(txt)
 
-        is_dots = txt in ("...", "· · ·", "•••", "~~~")
+        # 2. 检查单文件双时间轴/相连行翻译（如英文行后紧接着中文译文行）
+        if not s_txt and i + 1 < n:
+            next_t, next_txt = primary_entries[i + 1]
+            if abs(next_t - t) <= 1.25 and next_txt:
+                has_cjk_curr = bool(_CJK_PATTERN.search(p_txt))
+                has_cjk_next = bool(_CJK_PATTERN.search(next_txt))
+                if not has_cjk_curr and has_cjk_next:
+                    s_txt = next_txt
+                    i += 1  # 消费合并下一行
+
+        # 3. 若仍无译文且有外部 trans_lrc，按最近邻时间轴匹配（容差 2.8 秒）
+        if not s_txt and clean_trans:
+            best_sub = ""
+            best_d = 999.0
+            for tt, ttxt in clean_trans:
+                d = abs(tt - t)
+                if d < best_d:
+                    best_d = d
+                    best_sub = ttxt
+            if best_d <= 2.8 and best_sub and best_sub != p_txt:
+                s_txt = best_sub
+
+        is_dots = p_txt in ("...", "· · ·", "•••", "~~~")
         merged_raw.append(
             {
                 "time": t,
-                "text": "· · ·" if is_dots else txt,
-                "sub": sub_txt,
+                "text": "· · ·" if is_dots else p_txt,
+                "sub": s_txt,
                 "is_interlude": is_dots,
             }
         )
+        i += 1
 
     return create_lyric_lines(merged_raw)
 

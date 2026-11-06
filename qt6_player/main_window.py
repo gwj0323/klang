@@ -1,8 +1,9 @@
 import random
 from pathlib import Path
 from typing import List, Optional
-from PyQt6.QtCore import Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, QTimer, QEvent
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, QTimer, QEvent
 from PyQt6.QtGui import (
+    QFont,
     QPainter,
     QPen,
     QColor,
@@ -49,6 +50,7 @@ from qt6_player.components.transport_bar import TransportBar
 from qt6_player.components.desktop_lyric_overlay import DesktopLyricOverlay
 from qt6_player.components.equalizer_dialog import AudioSettingsDialog
 from qt6_player.components.mini_player_window import MiniPlayerWindow
+from qt6_player.components.immersive_window import ImmersiveFullscreenWindow
 from qt6_player.components.fluent_widgets import WinUIFlyoutMenu
 from qt6_player.services.window_effects import apply_window_system_theme_and_corners
 
@@ -98,6 +100,24 @@ class WindowFrameOverlay(QWidget):
             painter.drawPath(inner_path)
 
 
+class AutoTranslationWorker(QThread):
+    translationReady = pyqtSignal(str, str)  # track_id, tlyric
+
+    def __init__(self, track: NordicTrack, parent=None):
+        super().__init__(parent)
+        self.track_id = track.track_id
+        self.title = track.title
+        self.artist = track.artist
+
+    def run(self) -> None:
+        try:
+            from qt6_player.services.scraper_service import fetch_netease_translation_only
+            tlyric = fetch_netease_translation_only(self.title, self.artist)
+            self.translationReady.emit(self.track_id, tlyric or "")
+        except Exception:
+            self.translationReady.emit(self.track_id, "")
+
+
 class NordicWinUI3Window(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -116,6 +136,11 @@ class NordicWinUI3Window(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
+        # 注入 Apple Sans (SF Pro) 全局字体体系
+        from qt6_player.theme.nordic_palette import apply_apple_sans_globally, get_nordic_font
+        apply_apple_sans_globally()
+        self.setFont(get_nordic_font(13, QFont.Weight.Normal))
+
         # 读取持久化状态
         self._initializing: bool = True
         self._saved_state = load_player_state()
@@ -128,10 +153,16 @@ class NordicWinUI3Window(QMainWindow):
             init_idx = 0
         self.current_track_index: int = init_idx
         self.play_mode: str = self._saved_state.get("play_mode", "loop_list")
+        self.dolby_atmos_mode: str = str(self._saved_state.get("dolby_atmos_mode", "dolby_atmos"))
+        self.spatial_width: float = float(self._saved_state.get("spatial_width", 1.35))
+        self.spatial_height: float = float(self._saved_state.get("spatial_height", 0.65))
 
         self.audio = NordicAudioEngine(self)
+        self.audio.set_dolby_atmos_mode(self.dolby_atmos_mode)
+        self.audio.set_spatial_parameters(self.spatial_width, self.spatial_height)
         self.desktop_lyric = DesktopLyricOverlay()
         self.mini_player = MiniPlayerWindow()
+        self.immersive_window = ImmersiveFullscreenWindow(self)
         self._active_eq_dialog: Optional[AudioSettingsDialog] = None
         self._active_workers: List[AutoScrapeWorker] = []
 
@@ -268,6 +299,35 @@ class NordicWinUI3Window(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _toggle_immersive_mode(self) -> None:
+        if self.immersive_window.isVisible():
+            self.immersive_window.exit_immersive()
+        else:
+            cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+            scr = None
+            if self.windowHandle():
+                scr = self.windowHandle().screen()
+            if scr is None:
+                scr = self.screen()
+            self.immersive_window.enter_immersive(
+                current_track=cur_track,
+                is_playing=self.audio.is_playing,
+                current_time=self.audio.current_time,
+                duration=self.audio.duration,
+                play_mode=self.play_mode,
+                volume=self.audio.volume,
+                target_screen=scr,
+                show_translation=self.lyrics_stage.show_translation,
+                syllable_mode=self.lyrics_stage.syllable_mode,
+                dolby_atmos_active=self.audio.is_dolby_atmos_active,
+            )
+            self.hide()
+
+    def _on_immersive_closed(self) -> None:
+        self.showNormal() if not self._saved_state.get("is_maximized") else self.showMaximized()
+        self.raise_()
+        self.activateWindow()
+
     def schedule_save(self) -> None:
         """防抖自动保存设置到本地磁盘，避免卡顿 I/O"""
         if getattr(self, "_initializing", False):
@@ -302,6 +362,7 @@ class NordicWinUI3Window(QMainWindow):
         stage_hbox.setSpacing(48)
 
         self.cover_card = VinylCoverCard(stage_container)
+        self.cover_card.set_dolby_atmos_active(self.audio.is_dolby_atmos_active)
         stage_hbox.addWidget(self.cover_card, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.lyrics_stage = LyricsStage(stage_container)
@@ -395,6 +456,9 @@ class NordicWinUI3Window(QMainWindow):
         sound_profile = str(st.get("sound_profile", "原声自然"))
         saved_gains = st.get("eq_gains_db")
         saved_reverb = st.get("reverb_mix")
+        saved_out_mode = st.get("audio_output_mode", "binaural")
+        if hasattr(self.audio, "set_output_channel_mode"):
+            self.audio.set_output_channel_mode(saved_out_mode)
 
         self.audio.set_volume(vol)
         if muted:
@@ -485,6 +549,10 @@ class NordicWinUI3Window(QMainWindow):
             "sound_profile": str(self.audio.sound_profile),
             "eq_gains_db": [float(g) for g in self.audio.eq_gains_db],
             "reverb_mix": float(self.audio.reverb_mix),
+            "dolby_atmos_mode": str(self.audio.dolby_atmos_mode),
+            "spatial_width": float(self.audio.spatial_width),
+            "spatial_height": float(self.audio.spatial_height),
+            "audio_output_mode": str(getattr(self.audio, "output_channel_mode", "binaural")),
             "desktop_lyric_open": bool(hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible()),
             "desktop_lyric_pos": dt_pos,
             "desktop_lyric_font_size": int(self.desktop_lyric.font_size) if hasattr(self, "desktop_lyric") else 22,
@@ -505,6 +573,8 @@ class NordicWinUI3Window(QMainWindow):
                 pass
         if hasattr(self, "mini_player"):
             self.mini_player.close()
+        if hasattr(self, "immersive_window"):
+            self.immersive_window.close()
         if hasattr(self, "tray_icon"):
             self.tray_icon.hide()
         self.desktop_lyric.close()
@@ -517,12 +587,37 @@ class NordicWinUI3Window(QMainWindow):
         self.title_bar.scrapeClicked.connect(self._open_online_scraper_dialog)
         self.title_bar.fontSizeDeltaRequested.connect(self.lyrics_stage.adjust_lyric_font_size)
         self.title_bar.translationToggled.connect(self.lyrics_stage.set_show_translation)
+        self.title_bar.translationToggled.connect(self.immersive_window.set_show_translation)
+        self.title_bar.translationToggled.connect(self._on_translation_toggled_by_user)
         self.title_bar.translationToggled.connect(lambda _b: self.schedule_save())
         self.title_bar.syllableModeToggled.connect(self.lyrics_stage.set_syllable_mode)
+        self.title_bar.syllableModeToggled.connect(self.immersive_window.set_syllable_mode)
         self.title_bar.syllableModeToggled.connect(lambda _b: self.schedule_save())
         self.title_bar.desktopLyricToggled.connect(self._toggle_desktop_lyric)
         self.title_bar.miniPlayerClicked.connect(self._toggle_mini_player_mode)
+        self.title_bar.immersiveClicked.connect(self._toggle_immersive_mode)
         self.title_bar.themeToggled.connect(self._on_theme_toggled)
+
+        # 沉浸视界信号
+        self.immersive_window.playToggled.connect(self.audio.toggle_play)
+        self.immersive_window.prevRequested.connect(self._on_prev_track)
+        self.immersive_window.nextRequested.connect(self._on_next_track)
+        self.immersive_window.seekRatioRequested.connect(
+            lambda ratio: self.audio.seek(ratio * self.audio.duration, auto_play_on_seek=False, source="seek")
+        )
+        self.immersive_window.seekTimeRequested.connect(
+            lambda sec: self.audio.seek(sec, auto_play_on_seek=False, source="seek")
+        )
+        self.immersive_window.modeCycled.connect(self.transport_bar._cycle_play_mode)
+        self.immersive_window.volumeRequested.connect(self.audio.set_volume)
+        self.immersive_window.translationToggled.connect(self.lyrics_stage.set_show_translation)
+        self.immersive_window.translationToggled.connect(self.title_bar.set_translation_state)
+        self.immersive_window.translationToggled.connect(lambda _b: self.schedule_save())
+        self.immersive_window.translationFetchRequested.connect(self._fetch_translation_for_current_track)
+        self.immersive_window.syllableToggled.connect(self.lyrics_stage.set_syllable_mode)
+        self.immersive_window.syllableToggled.connect(self.title_bar.set_syllable_state)
+        self.immersive_window.syllableToggled.connect(lambda _b: self.schedule_save())
+        self.immersive_window.closed.connect(self._on_immersive_closed)
 
         # 左侧栏信号
         self.nav_pane.trackSelected.connect(lambda idx: self.select_track(idx, auto_play=True))
@@ -633,6 +728,8 @@ class NordicWinUI3Window(QMainWindow):
             self.cover_card.set_spectrum(bands)
         if self._active_eq_dialog is not None and self._active_eq_dialog.isVisible():
             self._active_eq_dialog.update_spectrum(bands)
+        if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
+            self.immersive_window.update_spectrum(bands)
 
     def _on_track_reordered(self, from_idx: int, to_idx: int) -> None:
         if not (0 <= from_idx < len(self.tracks)) or not (0 <= to_idx < len(self.tracks)):
@@ -678,6 +775,8 @@ class NordicWinUI3Window(QMainWindow):
         self.play_mode = mode
         mode_label = TransportBar._MODE_NAMES.get(mode, "列表循环")
         self.lyrics_stage._show_toast(f"播放模式: {mode_label}")
+        if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
+            self.immersive_window.update_play_mode(mode)
         self.schedule_save()
 
     def _on_rate_cycled(self) -> None:
@@ -748,9 +847,18 @@ class NordicWinUI3Window(QMainWindow):
             current_rate=self.audio.playback_rate,
             current_offset=cur_offset,
             sleep_remaining_sec=self.audio.sleep_remaining_sec,
+            dolby_mode=self.audio.dolby_atmos_mode,
+            spatial_width=self.audio.spatial_width,
+            spatial_height=self.audio.spatial_height,
+            audio_output_mode=getattr(self.audio, "output_channel_mode", "binaural"),
+            actual_channels=getattr(self.audio, "output_channels_actual", 2),
+            output_device_name=getattr(self.audio, "output_device_name", ""),
             theme=self.theme,
             parent=self,
         )
+        dlg.dolbyAtmosModeChanged.connect(self._on_dolby_mode_changed)
+        dlg.spatialParamsChanged.connect(self._on_spatial_params_changed)
+        dlg.outputModeChanged.connect(self._on_output_mode_changed)
         dlg.soundProfileChanged.connect(
             lambda prof: (
                 self.audio.set_sound_profile(prof, trigger_preview=True),
@@ -1038,17 +1146,26 @@ class NordicWinUI3Window(QMainWindow):
         self.transport_bar.update_progress(0.0, track.duration)
         self.mini_player.set_track(track)
         self.mini_player.update_progress(0.0, track.duration)
+        if hasattr(self, "immersive_window"):
+            self.immersive_window.update_track(track)
         if hasattr(self, "tray_icon"):
             self.tray_icon.setToolTip(f"Klang — {track.title} · {track.artist}")
         if track.lyrics:
             self.desktop_lyric.update_lyric(track.lyrics[0])
             self.mini_player.update_lyric(track.lyrics[0])
+            if not any(l.sub for l in track.lyrics):
+                import re as _re
+                has_foreign = any(_re.search(r"[a-zA-Z]", l.text) for l in track.lyrics if not l.is_interlude)
+                if has_foreign:
+                    self._fetch_translation_for_current_track(track, silent=True)
 
     def _on_play_state_changed(self, is_playing: bool) -> None:
         self.cover_card.set_playing(is_playing)
         self.transport_bar.set_playing_state(is_playing)
         self.nav_pane.set_playing_state(is_playing)
         self.mini_player.set_playing(is_playing)
+        if hasattr(self, "immersive_window"):
+            self.immersive_window.update_play_state(is_playing)
 
     def _on_time_updated(self, current_time: float, duration: float, source: str) -> None:
         if self.isVisible():
@@ -1058,6 +1175,8 @@ class NordicWinUI3Window(QMainWindow):
             self.lyrics_stage.sync_time(current_time, source=source)
         if self.mini_player.isVisible():
             self.mini_player.update_progress(current_time, duration)
+        if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
+            self.immersive_window.update_time(current_time, duration)
         if source == "init" and 0 <= self.current_track_index < len(self.nav_pane.item_buttons):
             self.nav_pane.item_buttons[self.current_track_index].update()
             self.schedule_save()
@@ -1150,6 +1269,11 @@ class NordicWinUI3Window(QMainWindow):
             return
         if key == Qt.Key.Key_MediaStop:
             self.audio.pause()
+            event.accept()
+            return
+
+        if key == Qt.Key.Key_F11:
+            self._toggle_immersive_mode()
             event.accept()
             return
 
@@ -1273,3 +1397,110 @@ class NordicWinUI3Window(QMainWindow):
 
         if self._cached_bg_pixmap is not None:
             painter.drawPixmap(0, 0, self._cached_bg_pixmap)
+
+
+    def _on_translation_toggled_by_user(self, show: bool) -> None:
+        if not show:
+            return
+        cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+        if cur_track and cur_track.lyrics and not any(l.sub for l in cur_track.lyrics):
+            self._fetch_translation_for_current_track(cur_track, silent=False)
+
+    def _fetch_translation_for_current_track(self, track: NordicTrack, silent: bool = False) -> None:
+        if not track or not track.lyrics:
+            return
+        if any(l.sub for l in track.lyrics):
+            return
+        if getattr(self, "_active_trans_track_id", None) == track.track_id:
+            return
+        self._active_trans_track_id = track.track_id
+
+        if not silent and hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast("正在自动检索在线歌词译文…")
+
+        worker = AutoTranslationWorker(track, self)
+        self._trans_worker = worker
+        worker.translationReady.connect(lambda tid, tlyric: self._on_translation_fetched(tid, tlyric, silent))
+        worker.start()
+
+    def _on_translation_fetched(self, track_id: str, tlyric: str, silent: bool) -> None:
+        self._active_trans_track_id = None
+        if not tlyric.strip():
+            if not silent and hasattr(self.lyrics_stage, "_show_toast"):
+                self.lyrics_stage._show_toast("未找到匹配的中文译文")
+            return
+
+        target_track = None
+        for t in self.tracks:
+            if t.track_id == track_id:
+                target_track = t
+                break
+        if not target_track or not target_track.lyrics:
+            return
+
+        from qt6_player.data.tracks import merge_lyrics_translations
+        merged = merge_lyrics_translations(target_track.lyrics, tlyric)
+        if merged:
+            if target_track.file_path:
+                try:
+                    p = Path(target_track.file_path)
+                    if p.parent.is_dir():
+                        (p.parent / f"{p.stem}.tr.lrc").write_text(tlyric, encoding="utf-8")
+                except Exception:
+                    pass
+
+            cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+            if cur_track and cur_track.track_id == track_id:
+                self.lyrics_stage.load_lyrics(cur_track.lyrics, lyric_offset=cur_track.lyric_offset)
+                if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
+                    self.immersive_window.lyrics_view.set_lyrics(cur_track.lyrics, offset=cur_track.lyric_offset)
+                if hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible():
+                    if cur_track.lyrics:
+                        self.desktop_lyric.update_lyric(cur_track.lyrics[0])
+
+            self.schedule_save()
+            if hasattr(self.lyrics_stage, "_show_toast"):
+                self.lyrics_stage._show_toast("已自动匹配并同步中文译文")
+
+    def _update_dolby_badges(self) -> None:
+        is_active = self.audio.is_dolby_atmos_active
+        ch = getattr(self.audio, "output_channels_actual", 2)
+        if hasattr(self, "cover_card") and self.cover_card:
+            self.cover_card.set_dolby_atmos_active(is_active, ch)
+        if hasattr(self, "immersive_window") and self.immersive_window:
+            self.immersive_window.set_dolby_atmos_active(is_active, ch)
+
+    def _on_dolby_mode_changed(self, mode: str) -> None:
+        self.audio.set_dolby_atmos_mode(mode)
+        self._update_dolby_badges()
+        mode_names = {"off": "传统立体声", "spatial_stereo": "空间立体声", "dolby_atmos": "杜比全景声 7.1.4"}
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast(f"空间声场: {mode_names.get(mode, mode)}")
+        self.schedule_save()
+
+    def _on_output_mode_changed(self, mode: str) -> None:
+        self.audio.set_output_channel_mode(mode)
+        self._update_dolby_badges()
+        if self._active_eq_dialog is not None:
+            self._active_eq_dialog._update_output_tip(
+                self.audio.output_channel_mode,
+                self.audio.output_channels_actual,
+                self.audio.output_device_name,
+            )
+        mode_names = {
+            "binaural": "耳机/双耳空间全景声 (2.0)",
+            "surround_51": "杜比 5.1 环绕多声道",
+            "surround_71": "杜比 7.1 全景声扩展",
+        }
+        msg = mode_names.get(mode, mode)
+        if self.audio.output_channels_actual > 2:
+            msg += f" · 物理 {self.audio.output_channels_actual} 声道输出中"
+        elif mode != "binaural":
+            msg += " · 已自动适配为双耳全景声"
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast(msg)
+        self.schedule_save()
+
+    def _on_spatial_params_changed(self, width: float, height: float) -> None:
+        self.audio.set_spatial_parameters(width, height)
+        self.schedule_save()

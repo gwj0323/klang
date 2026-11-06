@@ -251,10 +251,19 @@ class AudioSettingsDialog(WinUIModalDialog):
     playbackRateChanged = pyqtSignal(float)
     lyricOffsetDeltaRequested = pyqtSignal(float)    # e.g. -0.5, 0.0 (reset), +0.5
     sleepTimerRequested = pyqtSignal(int)            # minutes (0 = off)
+    dolbyAtmosModeChanged = pyqtSignal(str)          # 'off' | 'spatial_stereo' | 'dolby_atmos'
+    spatialParamsChanged = pyqtSignal(float, float)  # width, height
+    outputModeChanged = pyqtSignal(str)              # 'binaural' | 'surround_51' | 'surround_71'
 
     _PRESET_NAMES = ["原声自然", "北欧厅堂", "温暖人声", "深沉低音", "清澈器乐"]
     _RATE_VALUES = [0.75, 1.0, 1.25, 1.5, 2.0]
     _SLEEP_MINS = [0, 15, 30, 60]
+
+    _DOLBY_MODES = ["off", "spatial_stereo", "dolby_atmos"]
+    _DOLBY_LABELS = ["关闭 (立体声)", "空间立体声", "杜比全景声"]
+
+    _OUTPUT_MODES = ["binaural", "surround_51", "surround_71"]
+    _OUTPUT_LABELS = ["双耳全景声 (2.0)", "杜比 5.1 环绕", "杜比 7.1 全景声"]
 
     def __init__(
         self,
@@ -264,14 +273,38 @@ class AudioSettingsDialog(WinUIModalDialog):
         current_rate: float = 1.0,
         current_offset: float = 0.0,
         sleep_remaining_sec: int = 0,
+        dolby_mode: str = "dolby_atmos",
+        spatial_width: float = 1.35,
+        spatial_height: float = 0.65,
+        audio_output_mode: str = "binaural",
+        actual_channels: int = 2,
+        output_device_name: str = "",
         theme: NordicThemeColors = DAYLIGHT_THEME,
         parent: Optional[QWidget] = None,
     ):
-        super().__init__("声学均衡器与播放设置", 560, 456, theme=theme, parent=parent)
+        super().__init__("声学均衡器与播放设置", 560, 592, theme=theme, parent=parent)
         self.current_offset = current_offset
         self.current_reverb = current_reverb
+        self.current_dolby_mode = dolby_mode
+        self.current_spatial_width = spatial_width
+        self.current_spatial_height = spatial_height
+        self.current_output_mode = audio_output_mode
+        self.actual_channels = actual_channels
+        self.output_device_name = output_device_name
         init_gains = list(current_gains) if current_gains else list(SOUND_PROFILES.get(current_profile, ([0.0] * 5, 0.06))[0])
-        self._setup_body(current_profile, init_gains, current_reverb, current_rate, sleep_remaining_sec)
+        self._setup_body(
+            current_profile,
+            init_gains,
+            current_reverb,
+            current_rate,
+            sleep_remaining_sec,
+            dolby_mode,
+            spatial_width,
+            spatial_height,
+            audio_output_mode,
+            actual_channels,
+            output_device_name,
+        )
 
     def _setup_body(
         self,
@@ -280,6 +313,12 @@ class AudioSettingsDialog(WinUIModalDialog):
         current_reverb: float,
         current_rate: float,
         sleep_remaining_sec: int,
+        dolby_mode: str,
+        spatial_width: float,
+        spatial_height: float,
+        audio_output_mode: str = "binaural",
+        actual_channels: int = 2,
+        output_device_name: str = "",
     ) -> None:
         vbox = self._root_vbox
 
@@ -314,7 +353,99 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.eq_rack.gainsChangedByUser.connect(self._on_eq_rack_dragged)
         vbox.addWidget(self.eq_rack)
 
-        # 3. 北欧厅堂空间混响滑块
+        # 3. 杜比全景声与空间音频 3D 渲染控制
+        dolby_box = QVBoxLayout()
+        dolby_box.setSpacing(6)
+
+        dolby_header = QHBoxLayout()
+        lbl_dolby_title = QLabel("杜比空间音频", self)
+        lbl_dolby_title.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_dolby_title.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        dolby_header.addWidget(lbl_dolby_title)
+
+        lbl_atmos_badge = QLabel("DOLBY ATMOS", self)
+        lbl_atmos_badge.setFont(get_nordic_font(9, QFont.Weight.Bold, mono=True))
+        lbl_atmos_badge.setStyleSheet(
+            "background: rgba(110, 130, 119, 0.16); color: #5B9E83; "
+            "border: 1px solid rgba(110, 130, 119, 0.35); border-radius: 4px; padding: 1px 6px;"
+        )
+        dolby_header.addWidget(lbl_atmos_badge)
+        dolby_header.addStretch(1)
+
+        self.dolby_tabs = WinUISegmentedControl(self._DOLBY_LABELS, self)
+        self.dolby_tabs.set_theme(self.theme)
+        cur_idx = self._DOLBY_MODES.index(dolby_mode) if dolby_mode in self._DOLBY_MODES else 2
+        self.dolby_tabs.set_current_index(cur_idx, animate=False)
+        self.dolby_tabs.currentIndexChanged.connect(self._on_dolby_mode_tab_changed)
+        dolby_header.addWidget(self.dolby_tabs)
+        dolby_box.addLayout(dolby_header)
+
+        # 空间声场宽度与穹顶高度微调行
+        params_row = QHBoxLayout()
+        params_row.setSpacing(10)
+
+        lbl_w = QLabel("声场延展", self)
+        lbl_w.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        lbl_w.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        params_row.addWidget(lbl_w)
+
+        init_w_ratio = max(0.0, min(1.0, (spatial_width - 0.8) / 1.0))
+        self.spatial_width_slider = WinUISlider(init_w_ratio, self)
+        self.spatial_width_slider.set_theme(self.theme)
+        self.spatial_width_slider.valueChangedByUser.connect(self._on_spatial_slider_changed)
+        params_row.addWidget(self.spatial_width_slider, 1)
+
+        self.lbl_width_val = QLabel(f"{int(round(spatial_width * 100))}%", self)
+        self.lbl_width_val.setFixedWidth(38)
+        self.lbl_width_val.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
+        self.lbl_width_val.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        params_row.addWidget(self.lbl_width_val)
+
+        params_row.addSpacing(8)
+
+        lbl_h = QLabel("穹顶高度", self)
+        lbl_h.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        lbl_h.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        params_row.addWidget(lbl_h)
+
+        self.spatial_height_slider = WinUISlider(max(0.0, min(1.0, spatial_height)), self)
+        self.spatial_height_slider.set_theme(self.theme)
+        self.spatial_height_slider.valueChangedByUser.connect(self._on_spatial_slider_changed)
+        params_row.addWidget(self.spatial_height_slider, 1)
+
+        self.lbl_height_val = QLabel(f"{int(round(spatial_height * 100))}%", self)
+        self.lbl_height_val.setFixedWidth(38)
+        self.lbl_height_val.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
+        self.lbl_height_val.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        params_row.addWidget(self.lbl_height_val)
+
+        dolby_box.addLayout(params_row)
+
+        # 杜比全景声输出架构 (双耳渲染 vs 5.1/7.1 多声道直通)
+        out_mode_row = QHBoxLayout()
+        lbl_out = QLabel("输出架构", self)
+        lbl_out.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        lbl_out.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        out_mode_row.addWidget(lbl_out)
+        out_mode_row.addSpacing(6)
+
+        self.output_tabs = WinUISegmentedControl(self._OUTPUT_LABELS, self)
+        self.output_tabs.set_theme(self.theme)
+        cur_out_idx = self._OUTPUT_MODES.index(audio_output_mode) if audio_output_mode in self._OUTPUT_MODES else 0
+        self.output_tabs.set_current_index(cur_out_idx, animate=False)
+        self.output_tabs.currentIndexChanged.connect(self._on_output_tab_changed)
+        out_mode_row.addWidget(self.output_tabs, 1)
+        dolby_box.addLayout(out_mode_row)
+
+        self.lbl_output_tip = QLabel(self)
+        self.lbl_output_tip.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_output_tip.setWordWrap(True)
+        self._update_output_tip(audio_output_mode, actual_channels, output_device_name)
+        dolby_box.addWidget(self.lbl_output_tip)
+
+        vbox.addLayout(dolby_box)
+
+        # 4. 北欧厅堂空间混响滑块
         rev_row = QHBoxLayout()
         lbl_rev = QLabel("厅堂空间混响", self)
         lbl_rev.setFont(get_nordic_font(12, QFont.Weight.Medium))
@@ -418,3 +549,42 @@ class AudioSettingsDialog(WinUIModalDialog):
             self.current_offset = round(self.current_offset + delta, 1)
         self.lbl_offset.setText(f"歌词偏移 ({self.current_offset:+.1f}s)")
         self.lyricOffsetDeltaRequested.emit(delta)
+
+    def _on_dolby_mode_tab_changed(self, idx: int) -> None:
+        if 0 <= idx < len(self._DOLBY_MODES):
+            mode = self._DOLBY_MODES[idx]
+            self.current_dolby_mode = mode
+            self.dolbyAtmosModeChanged.emit(mode)
+
+    def _on_spatial_slider_changed(self, _val: float) -> None:
+        width = round(0.8 + self.spatial_width_slider.ratio * 1.0, 2)
+        height = round(self.spatial_height_slider.ratio, 2)
+        self.current_spatial_width = width
+        self.current_spatial_height = height
+        self.lbl_width_val.setText(f"{int(round(width * 100))}%")
+        self.lbl_height_val.setText(f"{int(round(height * 100))}%")
+        self.spatialParamsChanged.emit(width, height)
+
+    def _on_output_tab_changed(self, idx: int) -> None:
+        if 0 <= idx < len(self._OUTPUT_MODES):
+            mode = self._OUTPUT_MODES[idx]
+            self.current_output_mode = mode
+            self.outputModeChanged.emit(mode)
+
+    def _update_output_tip(self, mode: str, actual_channels: int, dev_name: str) -> None:
+        dev_display = f"[{dev_name}] " if dev_name else ""
+        if actual_channels > 2:
+            self.lbl_output_tip.setText(
+                f"🔊 {dev_display}已激活物理 {actual_channels} 声道离散直通 · 直达 HDMI 功放/多声道家庭影院"
+            )
+            self.lbl_output_tip.setStyleSheet("color: #5B9E83; background: transparent; padding-top: 2px;")
+        elif mode != "binaural":
+            self.lbl_output_tip.setText(
+                f"🎧 {dev_display}当前物理接口为立体声，已自动适配为双耳 360° 全景声渲染；外接 HDMI 功放时将物理直通"
+            )
+            self.lbl_output_tip.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent; padding-top: 2px;")
+        else:
+            self.lbl_output_tip.setText(
+                f"🎧 {dev_display}双耳 360° 球形 HRTF 全景声输出 · 适用于普通耳机、车载蓝牙与立体声音箱"
+            )
+            self.lbl_output_tip.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent; padding-top: 2px;")

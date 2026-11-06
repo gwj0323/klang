@@ -521,30 +521,61 @@ class NordicSpectrumWidget(QWidget):
 
 
 class AudioQualityBadge(QLabel):
-    """音频格式与采样率微章 (例如 FLAC · 44.1kHz)"""
+    """音频格式与采样率徽标 (支持普通无损与 DOLBY ATMOS 空间音频徽标)"""
 
     def __init__(self, parent: Optional[QWidget] = None):
-        super().__init__("SYNTH · 44.1kHz", parent)
+        super().__init__("DOLBY ATMOS · 空间音频", parent)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self.current_track: Optional[NordicTrack] = None
+        self._is_atmos: bool = True
+        self._actual_channels: int = 2
         self.setFont(get_nordic_font(10, QFont.Weight.DemiBold, mono=True))
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFixedHeight(20)
         self._update_style()
 
-    def set_track_format(self, track: NordicTrack) -> None:
-        if track.file_path:
+    def set_track_format(
+        self,
+        track: Optional[NordicTrack],
+        is_atmos: bool = True,
+        actual_channels: int = 2,
+    ) -> None:
+        self.current_track = track
+        self._is_atmos = bool(is_atmos)
+        self._actual_channels = int(actual_channels)
+        if track and track.file_path:
             ext = Path(track.file_path).suffix.upper().lstrip(".")
-            if ext in ("FLAC", "WAV", "APE"):
+            if is_atmos:
+                if actual_channels == 6:
+                    txt = f"{ext} · DOLBY ATMOS 5.1" if ext else "DOLBY ATMOS 5.1"
+                elif actual_channels == 8:
+                    txt = f"{ext} · DOLBY ATMOS 7.1" if ext else "DOLBY ATMOS 7.1"
+                else:
+                    txt = f"{ext} · DOLBY ATMOS" if ext else "DOLBY ATMOS · 空间音频"
+            elif ext in ("FLAC", "WAV", "APE"):
                 txt = f"{ext} LOSSLESS · 44.1kHz"
             elif ext:
                 txt = f"{ext} · 44.1kHz"
             else:
                 txt = "PCM · 44.1kHz"
         else:
-            txt = "NORDIC SYNTH · 44.1kHz"
+            if is_atmos:
+                txt = (
+                    "DOLBY ATMOS 5.1"
+                    if actual_channels == 6
+                    else ("DOLBY ATMOS 7.1" if actual_channels == 8 else "DOLBY ATMOS · 空间音频")
+                )
+            else:
+                txt = "NORDIC SYNTH · 44.1kHz"
         self.setText(txt)
         fm = self.fontMetrics()
         self.setFixedWidth(fm.horizontalAdvance(txt) + 16)
+        self._update_style()
+
+    def set_dolby_atmos_active(self, active: bool, actual_channels: int = 2) -> None:
+        self._is_atmos = bool(active)
+        self._actual_channels = int(actual_channels)
+        self.set_track_format(self.current_track, is_atmos=self._is_atmos, actual_channels=self._actual_channels)
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
@@ -552,16 +583,23 @@ class AudioQualityBadge(QLabel):
 
     def _update_style(self) -> None:
         t = self.theme
-        bg = f"rgba({t.sage_accent.red()}, {t.sage_accent.green()}, {t.sage_accent.blue()}, 0.13)"
-        border = f"rgba({t.sage_accent.red()}, {t.sage_accent.green()}, {t.sage_accent.blue()}, 0.30)"
+        if getattr(self, "_is_atmos", True):
+            bg = "rgba(110, 130, 119, 0.18)"
+            fg = "#5B9E83" if t.name == "daylight" else "#76C4A5"
+            border = "rgba(110, 130, 119, 0.45)"
+        else:
+            bg = f"rgba({t.sage_accent.red()}, {t.sage_accent.green()}, {t.sage_accent.blue()}, 0.13)"
+            fg = t.sage_accent.name()
+            border = f"rgba({t.sage_accent.red()}, {t.sage_accent.green()}, {t.sage_accent.blue()}, 0.30)"
         self.setStyleSheet(
             f"""
             QLabel {{
                 background-color: {bg};
-                color: {t.sage_accent.name()};
+                color: {fg};
                 border: 1px solid {border};
                 border-radius: 5px;
                 padding: 0px 6px;
+                font-weight: 600;
             }}
             """
         )
@@ -622,7 +660,11 @@ class VinylCoverCard(QWidget):
         self.album_label.setText(track.album or "")
         self.album_label.setVisible(bool(track.album))
         self.quality_badge.setVisible(True)
-        self.quality_badge.set_track_format(track)
+        self.quality_badge.set_track_format(
+            track,
+            is_atmos=getattr(self, "_is_atmos", True),
+            actual_channels=getattr(self, "_actual_channels", 2),
+        )
         c1, c2 = extract_ambient_colors(self.artwork.cover_pixmap, track)
         self.ambientColorsChanged.emit(c1, c2)
 
@@ -651,6 +693,17 @@ class VinylCoverCard(QWidget):
 
     def set_spectrum(self, bands: List[float]) -> None:
         self.spectrum_widget.set_spectrum(bands)
+
+    def set_dolby_atmos_active(self, active: bool, actual_channels: int = 2) -> None:
+        self._is_atmos = bool(active)
+        self._actual_channels = int(actual_channels)
+        cur_track = self.artwork.track if hasattr(self, "artwork") else None
+        if hasattr(self, "quality_badge") and self.quality_badge is not None:
+            self.quality_badge.set_track_format(
+                cur_track,
+                is_atmos=self._is_atmos,
+                actual_channels=self._actual_channels,
+            )
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme

@@ -210,6 +210,7 @@ class WinUITitleBar(QWidget):
     syllableModeToggled = pyqtSignal(bool)
     desktopLyricToggled = pyqtSignal(bool)
     miniPlayerClicked = pyqtSignal()
+    immersiveClicked = pyqtSignal()
     themeToggled = pyqtSignal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -299,6 +300,11 @@ class WinUITitleBar(QWidget):
         self.btn_mini.clicked.connect(self.miniPlayerClicked.emit)
         layout.addWidget(self.btn_mini)
 
+        self.btn_immersive = WinUIChipButton("沉浸", active=False, icon_kind="fullscreen", parent=self)
+        self.btn_immersive.setToolTip("全屏沉浸流光模式 (F11)")
+        self.btn_immersive.clicked.connect(self.immersiveClicked.emit)
+        layout.addWidget(self.btn_immersive)
+
         self.btn_theme = WinUIChipButton("浅色", active=False, icon_kind="sun", parent=self)
         self.btn_theme.setToolTip("切换北欧晨雾浅色 / 峡湾极夜深色主题")
         self.btn_theme.clicked.connect(self._on_toggle_theme)
@@ -345,6 +351,14 @@ class WinUITitleBar(QWidget):
             QTimer.singleShot(40, win._handle_window_state_change)
             QTimer.singleShot(120, win._handle_window_state_change)
 
+    def set_translation_state(self, show: bool) -> None:
+        self.show_translation = bool(show)
+        self.btn_trans.set_chip_active(self.show_translation)
+
+    def set_syllable_state(self, enabled: bool) -> None:
+        self.syllable_mode = bool(enabled)
+        self.btn_syllable.set_chip_active(self.syllable_mode)
+
     def _on_toggle_translation(self) -> None:
         self.show_translation = not self.show_translation
         self.btn_trans.set_chip_active(self.show_translation)
@@ -383,6 +397,7 @@ class WinUITitleBar(QWidget):
             self.btn_syllable,
             self.btn_desktop_lyric,
             self.btn_mini,
+            self.btn_immersive,
             self.btn_theme,
         ):
             btn.set_theme(theme)

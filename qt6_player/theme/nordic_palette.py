@@ -1,3 +1,5 @@
+import os
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 from PyQt6.QtGui import QColor, QFont, QFontDatabase
@@ -73,6 +75,30 @@ DUSK_THEME = NordicThemeColors(
 _CACHED_FAMILIES_SANS: List[str] = []
 _CACHED_FAMILIES_MONO: List[str] = []
 _FONT_CACHE: Dict[Tuple[int, int, bool], QFont] = {}
+_BUNDLED_FONTS_LOADED: bool = False
+
+
+def _ensure_bundled_fonts() -> None:
+    global _BUNDLED_FONTS_LOADED
+    if _BUNDLED_FONTS_LOADED:
+        return
+    _BUNDLED_FONTS_LOADED = True
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        fonts_dir = os.path.join(sys._MEIPASS, "qt6_player", "assets", "fonts")
+    else:
+        fonts_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets",
+            "fonts",
+        )
+    if os.path.isdir(fonts_dir):
+        for fname in os.listdir(fonts_dir):
+            if fname.lower().endswith((".ttf", ".otf")):
+                fpath = os.path.join(fonts_dir, fname)
+                try:
+                    QFontDatabase.addApplicationFont(fpath)
+                except Exception:
+                    pass
 
 
 def _resolve_ordered_families(mono: bool) -> List[str]:
@@ -82,9 +108,11 @@ def _resolve_ordered_families(mono: bool) -> List[str]:
     if not mono and _CACHED_FAMILIES_SANS:
         return _CACHED_FAMILIES_SANS
 
+    _ensure_bundled_fonts()
     available = set(QFontDatabase.families())
     if mono:
         candidates = [
+            "SF Mono",
             "JetBrains Mono",
             "Cascadia Code",
             "Consolas",
@@ -93,12 +121,19 @@ def _resolve_ordered_families(mono: bool) -> List[str]:
         ]
     else:
         candidates = [
-            "Inter",
+            "SF Pro Display",
+            "SF Pro Text",
+            "SF Pro",
+            "-apple-system",
+            "BlinkMacSystemFont",
+            "PingFang SC",
+            "HarmonyOS Sans SC",
+            "Noto Sans SC",
             "Segoe UI Variable Display",
             "Segoe UI Variable Text",
+            "Inter",
             "Segoe UI",
             "Microsoft YaHei UI",
-            "PingFang SC",
         ]
 
     ordered = [c for c in candidates if c in available]
@@ -139,3 +174,61 @@ def get_nordic_font(
         font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
     _FONT_CACHE[key] = font
     return QFont(font)
+
+
+def get_apple_sans_stylesheet() -> str:
+    """返回全应用全局样式表，确保所有 Qt 控件与对话框默认统一使用 Apple Sans (SF Pro) 字体族"""
+    sans_list = (
+        "'SF Pro Display', 'SF Pro Text', 'SF Pro', 'Apple Sans', -apple-system, "
+        "BlinkMacSystemFont, 'PingFang SC', 'HarmonyOS Sans SC', 'Noto Sans SC', "
+        "'Microsoft YaHei UI', sans-serif"
+    )
+    return f"""
+    * {{
+        font-family: {sans_list};
+    }}
+    QWidget {{
+        font-family: {sans_list};
+    }}
+    QToolTip {{
+        font-family: {sans_list};
+        font-size: 12px;
+    }}
+    QMenu {{
+        font-family: {sans_list};
+        font-size: 12px;
+    }}
+    QDialog {{
+        font-family: {sans_list};
+    }}
+    QLineEdit, QTextEdit, QPlainTextEdit {{
+        font-family: {sans_list};
+    }}
+    QListWidget, QListView, QTreeView, QTableView {{
+        font-family: {sans_list};
+    }}
+    """
+
+
+def apply_apple_sans_globally(app=None) -> None:
+    """全局注入 Apple Sans / SF Pro 字体体系至 Qt 应用程序全局上下文与字体替换表"""
+    _ensure_bundled_fonts()
+    sans_families = _resolve_ordered_families(mono=False)
+    mono_families = _resolve_ordered_families(mono=True)
+
+    for alias in ("Apple Sans", "apple sans", "San Francisco", "SF Pro", "SF Pro Display"):
+        QFont.insertSubstitutions(alias, sans_families)
+    for alias in ("SF Mono", "Apple Mono", "apple mono"):
+        QFont.insertSubstitutions(alias, mono_families)
+
+    if app is None:
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+
+    if app is not None:
+        app_font = get_nordic_font(13, QFont.Weight.Normal)
+        app.setFont(app_font)
+        curr_ss = app.styleSheet() or ""
+        font_ss = get_apple_sans_stylesheet()
+        if "SF Pro Display" not in curr_ss:
+            app.setStyleSheet(font_ss + "\n" + curr_ss)

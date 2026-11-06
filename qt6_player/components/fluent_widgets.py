@@ -194,6 +194,28 @@ def draw_nordic_icon(
         painter.setBrush(color)
         painter.drawRoundedRect(inner, 1.0, 1.0)
 
+    elif kind == "fullscreen":
+        s = 5.0
+        painter.drawLine(QPointF(cx - s, cy - s + 3.0), QPointF(cx - s, cy - s))
+        painter.drawLine(QPointF(cx - s, cy - s), QPointF(cx - s + 3.0, cy - s))
+        painter.drawLine(QPointF(cx + s - 3.0, cy - s), QPointF(cx + s, cy - s))
+        painter.drawLine(QPointF(cx + s, cy - s), QPointF(cx + s, cy - s + 3.0))
+        painter.drawLine(QPointF(cx - s, cy + s - 3.0), QPointF(cx - s, cy + s))
+        painter.drawLine(QPointF(cx - s, cy + s), QPointF(cx - s + 3.0, cy + s))
+        painter.drawLine(QPointF(cx + s - 3.0, cy + s), QPointF(cx + s, cy + s))
+        painter.drawLine(QPointF(cx + s, cy + s), QPointF(cx + s, cy + s - 3.0))
+
+    elif kind == "exit_fullscreen":
+        s = 5.0
+        painter.drawLine(QPointF(cx - s, cy - 2.0), QPointF(cx - s + 3.0, cy - 2.0))
+        painter.drawLine(QPointF(cx - s + 3.0, cy - 2.0), QPointF(cx - s + 3.0, cy - s))
+        painter.drawLine(QPointF(cx + s, cy - 2.0), QPointF(cx + s - 3.0, cy - 2.0))
+        painter.drawLine(QPointF(cx + s - 3.0, cy - 2.0), QPointF(cx + s - 3.0, cy - s))
+        painter.drawLine(QPointF(cx - s, cy + 2.0), QPointF(cx - s + 3.0, cy + 2.0))
+        painter.drawLine(QPointF(cx - s + 3.0, cy + 2.0), QPointF(cx - s + 3.0, cy + s))
+        painter.drawLine(QPointF(cx + s, cy + 2.0), QPointF(cx + s - 3.0, cy + 2.0))
+        painter.drawLine(QPointF(cx + s - 3.0, cy + 2.0), QPointF(cx + s - 3.0, cy + s))
+
     painter.restore()
 
 
