@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QPointF, QRectF, QVariantAnimation, QEasingCurve, QTimer
@@ -381,11 +382,19 @@ class WinUITitleBar(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            winHandle = self.window().windowHandle()
+            win = self.window()
+            if sys.platform == "win32" and win and hasattr(win, "windowEffect"):
+                try:
+                    win.windowEffect.moveWindow(int(win.winId()))
+                    return
+                except Exception:
+                    pass
+            winHandle = win.windowHandle() if win else None
             if winHandle is not None and hasattr(winHandle, "startSystemMove"):
                 winHandle.startSystemMove()
                 return
-            self._drag_pos = event.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
+            if win:
+                self._drag_pos = event.globalPosition().toPoint() - win.frameGeometry().topLeft()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:

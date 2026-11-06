@@ -53,7 +53,8 @@ from qt6_player.components.lyric_poster_dialog import LyricPosterDialog
 from qt6_player.components.mini_player_window import MiniPlayerWindow
 from qt6_player.components.immersive_window import ImmersiveFullscreenWindow
 from qt6_player.components.fluent_widgets import WinUIFlyoutMenu
-from qt6_player.services.window_effects import apply_window_system_theme_and_corners
+from qframelesswindow import FramelessMainWindow
+from qt6_player.services.window_effects import apply_window_system_theme_and_corners, apply_window_backdrop
 from qt6_player.services.media_control_service import WindowsMediaControlService
 
 
@@ -120,9 +121,13 @@ class AutoTranslationWorker(QThread):
             self.translationReady.emit(self.track_id, "")
 
 
-class NordicWinUI3Window(QMainWindow):
+class NordicWinUI3Window(FramelessMainWindow):
     def __init__(self):
         super().__init__()
+        if hasattr(self, "titleBar"):
+            self.titleBar.hide()
+        self.setStyleSheet("NordicWinUI3Window { background: transparent; }")
+
         self.setWindowTitle("Klang")
         icon_path = Path(__file__).resolve().parent / "assets" / "klang_icon.ico"
         if not icon_path.exists():
@@ -134,9 +139,6 @@ class NordicWinUI3Window(QMainWindow):
         self.setMinimumSize(940, 640)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
-
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         # 注入 Apple Sans (SF Pro) 全局字体体系
         from qt6_player.theme.nordic_palette import apply_apple_sans_globally, get_nordic_font
@@ -343,7 +345,6 @@ class NordicWinUI3Window(QMainWindow):
     def _setup_ui(self) -> None:
         central = QWidget(self)
         central.setMouseTracking(True)
-        central.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setCentralWidget(central)
 
         root_vbox = QVBoxLayout(central)
@@ -384,18 +385,18 @@ class NordicWinUI3Window(QMainWindow):
 
     def _apply_backdrop_to_window(self) -> None:
         try:
-            hwnd = int(self.winId()) if self.winId() else 0
-            if hwnd:
-                tint = self.theme.mist_white.name() if self.theme.name == "daylight" else self.theme.dusk_night.name()
-                apply_window_system_theme_and_corners(
-                    hwnd,
-                    is_dark=(self.theme.name == "dusk"),
-                    is_maximized=self.isMaximized(),
-                    backdrop_material=getattr(self, "backdrop_material", "mica"),
-                    tint_hex=tint,
-                )
+            tint = self.theme.mist_white.name() if self.theme.name == "daylight" else self.theme.dusk_night.name()
+            apply_window_backdrop(
+                self,
+                material=getattr(self, "backdrop_material", "mica"),
+                is_dark=(self.theme.name == "dusk"),
+                is_maximized=self.isMaximized(),
+                tint_hex=tint,
+            )
         except Exception:
             pass
+
+
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -1431,22 +1432,22 @@ class NordicWinUI3Window(QMainWindow):
         fill_col = QColor(self._bg_col_cur)
         mat = getattr(self, "backdrop_material", "mica")
         if mat == "mica":
-            # 云母材质：适度透明度让壁纸动态色彩与云母微颗粒透映，保留北欧温润原色
-            fill_col.setAlpha(128 if self.theme.name == "daylight" else 150)
+            # 云母材质：适度微光底色，透映系统桌面壁纸毛玻璃与云母微颗粒，保留北欧原色温润
+            fill_col.setAlpha(26 if self.theme.name == "daylight" else 36)
         elif mat == "acrylic":
-            # 亚克力材质：更透彻的毛玻璃磨砂感，让窗口后方的应用/桌面呈现柔和虚化
-            fill_col.setAlpha(70 if self.theme.name == "daylight" else 95)
+            # 亚克力材质：极低前景色，DWM 硬件亚克力滤镜自带柔和底色，透视模糊后方桌面/应用
+            fill_col.setAlpha(12 if self.theme.name == "daylight" else 18)
         else:
             # 标准纯色模式：完全不透明 (255)
             fill_col.setAlpha(255)
         bp.fillPath(path, fill_col)
 
         # 封面自适应双核流光背景 (Ambient Mesh Glow，缓存在位图中避免每帧全屏径向渐变计算)
-        base_alpha = 28 if self.theme.name == "daylight" else 36
+        base_alpha = 24 if self.theme.name == "daylight" else 32
         if mat == "acrylic":
-            base_alpha = int(base_alpha * 0.55)
+            base_alpha = int(base_alpha * 0.45)
         elif mat == "mica":
-            base_alpha = int(base_alpha * 0.75)
+            base_alpha = int(base_alpha * 0.65)
         c1 = QColor(self._amb1_cur)
         c1.setAlpha(base_alpha)
         orb1 = QRadialGradient(QPointF(w * 0.28, h * 0.40), 500.0)
@@ -1466,6 +1467,7 @@ class NordicWinUI3Window(QMainWindow):
         self._bg_dirty = False
 
     def paintEvent(self, event) -> None:
+        super().paintEvent(event)
         dpr = max(1.0, self.devicePixelRatioF())
         if (
             self._bg_dirty
@@ -1475,15 +1477,9 @@ class NordicWinUI3Window(QMainWindow):
         ):
             self._rebuild_bg_cache()
 
-        dirty = event.rect()
-        painter = QPainter(self)
-        painter.setClipRect(dirty)
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        painter.fillRect(dirty, Qt.GlobalColor.transparent)
-        painter.restore()
-
         if self._cached_bg_pixmap is not None:
+            painter = QPainter(self)
+            painter.setClipRect(event.rect())
             painter.drawPixmap(0, 0, self._cached_bg_pixmap)
 
 

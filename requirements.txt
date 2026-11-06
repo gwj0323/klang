@@ -1,4 +1,6 @@
 PyQt6>=6.6.0
+PyQt6-Frameless-Window>=0.8.2
+pywin32>=312; sys_platform == 'win32'
 numpy>=1.24.0
 scipy>=1.11.0
 Pillow>=10.0.0
