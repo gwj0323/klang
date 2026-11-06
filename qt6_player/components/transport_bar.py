@@ -1,15 +1,12 @@
-"""
-底部播放控制栏组件 (Qt6)
-特性：
-1. 底部左右 12px 圆角裁切与描边，与窗口顶部圆角完全对称。
-2. 完整播放控制：播放模式切换 (列表循环/单曲循环/随机播放/顺序播放)、上一曲、播放/暂停、下一曲、倍速切换 (0.75x~2.0x)。
-3. 左侧迷你专辑封面、歌名/歌词实时显示、红心收藏按钮。
-4. 右侧音效/定时设置按钮、静音切换、双环音量滑块与百分比显示。
-"""
-
-import math
 from typing import Optional
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
+from PyQt6.QtCore import (
+    Qt,
+    QRectF,
+    QPointF,
+    QVariantAnimation,
+    QEasingCurve,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (
     QPainter,
     QPen,
@@ -27,7 +24,6 @@ from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, g
 from qt6_player.components.fluent_widgets import draw_nordic_icon
 
 
-
 class WinUISlider(QWidget):
     valueChangedByUser = pyqtSignal(float)
 
@@ -36,9 +32,19 @@ class WinUISlider(QWidget):
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.ratio: float = max(0.0, min(1.0, initial_ratio))
         self.is_dragging: bool = False
+        self._hover_prog: float = 0.0
         self.setFixedHeight(22)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
+
+        self._hover_anim = QVariantAnimation(self)
+        self._hover_anim.setDuration(180)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._hover_anim.valueChanged.connect(self._on_hover_val)
+
+    def _on_hover_val(self, val: float) -> None:
+        self._hover_prog = float(val)
+        self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
@@ -46,8 +52,11 @@ class WinUISlider(QWidget):
 
     def set_ratio(self, ratio: float) -> None:
         if not self.is_dragging:
-            self.ratio = max(0.0, min(1.0, float(ratio)))
-            self.update()
+            clamped = max(0.0, min(1.0, float(ratio)))
+            if abs(clamped - self.ratio) > 0.0008:
+                self.ratio = clamped
+                if self.isVisible():
+                    self.update()
 
     def _update_from_pos(self, x: float) -> None:
         margin = 8.0
@@ -55,6 +64,21 @@ class WinUISlider(QWidget):
         self.ratio = max(0.0, min(1.0, (x - margin) / usable_w))
         self.valueChangedByUser.emit(self.ratio)
         self.update()
+
+    def enterEvent(self, event) -> None:
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_prog)
+        self._hover_anim.setEndValue(1.0)
+        self._hover_anim.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self.is_dragging:
+            self._hover_anim.stop()
+            self._hover_anim.setStartValue(self._hover_prog)
+            self._hover_anim.setEndValue(0.0)
+            self._hover_anim.start()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -65,53 +89,61 @@ class WinUISlider(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self.is_dragging:
             self._update_from_pos(event.position().x())
-        else:
-            self.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.is_dragging:
             self.is_dragging = False
             self._update_from_pos(event.position().x())
+            if not self.underMouse():
+                self._hover_anim.stop()
+                self._hover_anim.setStartValue(self._hover_prog)
+                self._hover_anim.setEndValue(0.0)
+                self._hover_anim.start()
         super().mouseReleaseEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.update()
-        super().leaveEvent(event)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        margin = 8.0
+        margin = 9.0
         cy = self.height() / 2.0
         usable_w = max(1.0, self.width() - margin * 2.0)
         thumb_x = margin + usable_w * self.ratio
 
-        track_rect = QRectF(margin, cy - 2.0, usable_w, 4.0)
+        track_h = 3.8 + 1.8 * self._hover_prog
+        track_r = track_h / 2.0
+        track_rect = QRectF(margin, cy - track_r, usable_w, track_h)
         track_path = QPainterPath()
-        track_path.addRoundedRect(track_rect, 2.0, 2.0)
+        track_path.addRoundedRect(track_rect, track_r, track_r)
         track_bg = QColor(self.theme.slate_muted)
         track_bg.setAlpha(46)
         painter.fillPath(track_path, track_bg)
 
         if self.ratio > 0.001:
-            fill_rect = QRectF(margin, cy - 2.0, max(4.0, thumb_x - margin), 4.0)
+            fill_rect = QRectF(margin, cy - track_r, max(track_h, thumb_x - margin), track_h)
             fill_path = QPainterPath()
-            fill_path.addRoundedRect(fill_rect, 2.0, 2.0)
+            fill_path.addRoundedRect(fill_rect, track_r, track_r)
             painter.fillPath(fill_path, self.theme.sage_accent)
 
-        outer_r = 8.0
+        # 悬停/拖拽外圈柔光晕
+        if self._hover_prog > 0.02 or self.is_dragging:
+            halo_r = 8.0 + 3.2 * self._hover_prog + (1.2 if self.is_dragging else 0.0)
+            halo_col = QColor(self.theme.sage_accent)
+            halo_col.setAlphaF(0.18 * max(self._hover_prog, 0.8 if self.is_dragging else 0.0))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(halo_col)
+            painter.drawEllipse(QPointF(thumb_x, cy), halo_r, halo_r)
+
+        outer_r = 7.2 + 1.2 * self._hover_prog
         painter.setPen(QPen(self.theme.stroke_outer, 1.0))
         painter.setBrush(self.theme.card_elevated)
         painter.drawEllipse(QPointF(thumb_x, cy), outer_r, outer_r)
 
         if self.is_dragging:
             inner_r = 3.4
-        elif self.underMouse():
-            inner_r = 4.8
         else:
-            inner_r = 4.0
+            inner_r = 3.8 + 1.1 * self._hover_prog
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(self.theme.sage_accent)
@@ -134,14 +166,20 @@ class MiniCoverThumb(QPushButton):
         self.theme = theme
         self.update()
 
-    def set_track(self, track: NordicTrack) -> None:
+    def set_track(self, track: Optional[NordicTrack]) -> None:
         self.track = track
         self.pixmap = None
-        pix = QPixmap()
-        if track.cover_bytes and pix.loadFromData(track.cover_bytes):
-            self.pixmap = pix
-        elif track.cover_path and pix.load(track.cover_path):
-            self.pixmap = pix
+        if track is not None:
+            pix = QPixmap()
+            if (track.cover_bytes and pix.loadFromData(track.cover_bytes)) or (
+                track.cover_path and pix.load(track.cover_path)
+            ):
+                self.pixmap = pix.scaled(
+                    88,
+                    88,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -184,10 +222,12 @@ class TransportIconButton(QPushButton):
         self.play_mode = "loop_list"  # "loop_list" | "loop_one" | "shuffle" | "sequential"
         self.badge_text = "1.0x"
         self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self._scale_factor: float = 1.0
+        self._morph_prog: float = 0.0  # 0.0 = play icon, 1.0 = pause icon
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         if is_primary:
-            self.setFixedSize(40, 40)
+            self.setFixedSize(42, 42)
         elif kind == "eq":
             self.setFixedSize(58, 28)
         elif kind == "rate":
@@ -195,6 +235,58 @@ class TransportIconButton(QPushButton):
         else:
             self.setFixedSize(32, 32)
         self.is_eq_active = False
+
+        # 弹性按压回弹动画
+        self._bounce_anim = QVariantAnimation(self)
+        self._bounce_anim.setDuration(260)
+        b_curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        b_curve.setOvershoot(2.2)
+        self._bounce_anim.setEasingCurve(b_curve)
+        self._bounce_anim.valueChanged.connect(self._on_scale_val)
+
+        # 播放/暂停矢量变形过渡动画
+        self._morph_anim = QVariantAnimation(self)
+        self._morph_anim.setDuration(220)
+        self._morph_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._morph_anim.valueChanged.connect(self._on_morph_val)
+
+    def _on_scale_val(self, val: float) -> None:
+        self._scale_factor = float(val)
+        self.update()
+
+    def _on_morph_val(self, val: float) -> None:
+        self._morph_prog = float(val)
+        self.update()
+
+    def set_playing_animated(self, playing: bool) -> None:
+        changed = self.is_playing != bool(playing)
+        self.is_playing = bool(playing)
+        if changed:
+            self._morph_anim.stop()
+            self._morph_anim.setStartValue(self._morph_prog)
+            self._morph_anim.setEndValue(1.0 if self.is_playing else 0.0)
+            self._morph_anim.start()
+        else:
+            self._morph_prog = 1.0 if self.is_playing else 0.0
+            self.update()
+
+    def trigger_pulse(self, start_scale: float = 0.78) -> None:
+        self._bounce_anim.stop()
+        self._bounce_anim.setStartValue(start_scale)
+        self._bounce_anim.setEndValue(1.0)
+        self._bounce_anim.start()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._bounce_anim.stop()
+            self._scale_factor = 0.86
+            self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.trigger_pulse(0.86)
+        super().mouseReleaseEvent(event)
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
@@ -204,6 +296,10 @@ class TransportIconButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         cx, cy = self.width() / 2.0, self.height() / 2.0
+
+        painter.translate(cx, cy)
+        painter.scale(self._scale_factor, self._scale_factor)
+        painter.translate(-cx, -cy)
 
         if self.is_primary:
             bg = QColor(self.theme.sage_accent)
@@ -232,16 +328,32 @@ class TransportIconButton(QPushButton):
         painter.setBrush(fg)
 
         if self.kind == "play":
-            if self.is_playing:
-                painter.drawRoundedRect(QRectF(cx - 5.0, cy - 6.0, 3.2, 12.0), 1.0, 1.0)
-                painter.drawRoundedRect(QRectF(cx + 1.8, cy - 6.0, 3.2, 12.0), 1.0, 1.0)
-            else:
+            p = self._morph_prog
+            # 播放三角形与暂停双竖线平滑旋转缩放交融过渡
+            if p < 0.99:
+                painter.save()
+                painter.setOpacity(1.0 - p)
+                painter.translate(cx, cy)
+                painter.rotate(p * 45.0)
+                s_tri = 1.0 - p * 0.35
+                painter.scale(s_tri, s_tri)
                 tri = QPainterPath()
-                tri.moveTo(cx - 3.5, cy - 6.2)
-                tri.lineTo(cx + 6.5, cy)
-                tri.lineTo(cx - 3.5, cy + 6.2)
+                tri.moveTo(-3.5, -6.2)
+                tri.lineTo(6.5, 0.0)
+                tri.lineTo(-3.5, 6.2)
                 tri.closeSubpath()
                 painter.drawPath(tri)
+                painter.restore()
+            if p > 0.01:
+                painter.save()
+                painter.setOpacity(p)
+                painter.translate(cx, cy)
+                painter.rotate((1.0 - p) * -45.0)
+                s_bar = 0.65 + p * 0.35
+                painter.scale(s_bar, s_bar)
+                painter.drawRoundedRect(QRectF(-5.0, -6.0, 3.2, 12.0), 1.0, 1.0)
+                painter.drawRoundedRect(QRectF(1.8, -6.0, 3.2, 12.0), 1.0, 1.0)
+                painter.restore()
         elif self.kind == "prev":
             painter.drawRoundedRect(QRectF(cx - 6.0, cy - 5.5, 2.0, 11.0), 0.8, 0.8)
             tri = QPainterPath()
@@ -302,7 +414,6 @@ class TransportIconButton(QPushButton):
                 int(Qt.AlignmentFlag.AlignCenter),
                 self.badge_text,
             )
-
         elif self.kind == "mute":
             spk = QPainterPath()
             spk.moveTo(cx - 6.0, cy - 2.5)
@@ -347,7 +458,6 @@ class TransportBar(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.setFixedHeight(90)
 
@@ -378,7 +488,7 @@ class TransportBar(QWidget):
         self.btn_fav = TransportIconButton("fav", parent=left_box)
         self.btn_fav.setFixedSize(24, 24)
         self.btn_fav.setToolTip("收藏到「我喜欢」")
-        self.btn_fav.clicked.connect(self.favoriteToggled.emit)
+        self.btn_fav.clicked.connect(self._on_fav_clicked)
         title_fav_row.addWidget(self.status_caption, 1)
         title_fav_row.addWidget(self.btn_fav)
 
@@ -482,6 +592,10 @@ class TransportBar(QWidget):
         root_layout.addWidget(right_box)
         self.set_theme(DAYLIGHT_THEME)
 
+    def _on_fav_clicked(self) -> None:
+        self.btn_fav.trigger_pulse(0.68)
+        self.favoriteToggled.emit()
+
     def _cycle_play_mode(self) -> None:
         cur = self.btn_mode.play_mode
         idx = (self._MODE_ORDER.index(cur) + 1) % len(self._MODE_ORDER) if cur in self._MODE_ORDER else 0
@@ -505,7 +619,6 @@ class TransportBar(QWidget):
         self.btn_eq.setToolTip(f"当前音效：{profile}（点击打开均衡器与定时设置）")
         self.btn_eq.update()
 
-
     def set_track_info(self, track: NordicTrack) -> None:
         self.cover_thumb.set_track(track)
         self.btn_fav.is_favorite = track.is_favorite
@@ -516,18 +629,35 @@ class TransportBar(QWidget):
         )
         self.snippet_label.setText(track.artist)
 
+    def clear_track_info(self) -> None:
+        self.cover_thumb.set_track(None)
+        self.btn_fav.is_favorite = False
+        self.btn_fav.update()
+        self.status_caption.setText("未加载曲目")
+        self.snippet_label.setText("Klang")
+        self._last_cur_str = "00:00"
+        self._last_dur_str = "00:00"
+        self.lbl_cur_time.setText("00:00")
+        self.lbl_dur_time.setText("00:00")
+        self.timeline_slider.set_ratio(0.0)
+
     def set_status_message(self, msg: str) -> None:
         fm = self.snippet_label.fontMetrics()
         self.snippet_label.setText(fm.elidedText(msg, Qt.TextElideMode.ElideRight, 195))
 
     def set_playing_state(self, is_playing: bool) -> None:
-        self.btn_play.is_playing = is_playing
-        self.btn_play.update()
+        self.btn_play.set_playing_animated(is_playing)
 
     def update_progress(self, current_time: float, duration: float) -> None:
         safe_dur = max(1.0, duration)
-        self.lbl_cur_time.setText(format_timecode(current_time))
-        self.lbl_dur_time.setText(format_timecode(safe_dur))
+        cur_str = format_timecode(current_time)
+        dur_str = format_timecode(safe_dur)
+        if getattr(self, "_last_cur_str", None) != cur_str:
+            self._last_cur_str = cur_str
+            self.lbl_cur_time.setText(cur_str)
+        if getattr(self, "_last_dur_str", None) != dur_str:
+            self._last_dur_str = dur_str
+            self.lbl_dur_time.setText(dur_str)
         self.timeline_slider.set_ratio(current_time / safe_dur)
 
     def update_volume(self, volume: float, is_muted: bool) -> None:
@@ -568,50 +698,5 @@ class TransportBar(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
-        painter.restore()
-
-        w, h = float(self.width()), float(self.height())
-        is_max = self.window().isMaximized()
-        r = 0.0 if is_max else 11.0
-
-        # 构造顶部直角、底部左右圆角的路径，使底部圆角与窗口顶部完全对称
-        path = QPainterPath()
-        if r > 0.0:
-            path.moveTo(0.0, 0.0)
-            path.lineTo(w, 0.0)
-            path.lineTo(w, h - r)
-            path.arcTo(QRectF(w - 2 * r, h - 2 * r, 2 * r, 2 * r), 0.0, -90.0)
-            path.lineTo(r, h)
-            path.arcTo(QRectF(0.0, h - 2 * r, 2 * r, 2 * r), -90.0, -90.0)
-            path.closeSubpath()
-        else:
-            path.addRect(QRectF(0.0, 0.0, w, h))
-
-        painter.save()
-        painter.setClipPath(path)
-
-        # WinUI 3 Acrylic 磨砂玻璃层：微透光垂直光感渐变，大幅降低透明度并提升对比度
-        grad = QLinearGradient(0.0, 0.0, 0.0, h)
-        if self.theme.name == "dusk":
-            grad.setColorAt(0.0, QColor(40, 45, 52, 246))
-            grad.setColorAt(0.35, QColor(34, 38, 44, 242))
-            grad.setColorAt(1.0, QColor(28, 31, 36, 246))
-        else:
-            grad.setColorAt(0.0, QColor(255, 254, 252, 248))
-            grad.setColorAt(0.35, QColor(250, 249, 246, 243))
-            grad.setColorAt(1.0, QColor(244, 242, 237, 246))
-        painter.fillPath(path, grad)
-
-        # 顶部分割线（WinUI 3 极细微层次分割）
         painter.setPen(QPen(self.theme.divider, 1.0))
-        painter.drawLine(0, 0, int(w), 0)
-
-        # 顶边内侧 1px 细微光感高光（模拟 WinUI 3 玻璃折射光）
-        highlight = QColor(255, 255, 255, 175) if self.theme.name == "daylight" else QColor(255, 255, 255, 20)
-        painter.setPen(QPen(highlight, 1.0))
-        painter.drawLine(0, 1, int(w), 1)
-        painter.restore()
+        painter.drawLine(0, 0, self.width(), 0)

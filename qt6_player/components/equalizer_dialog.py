@@ -1,11 +1,3 @@
-"""
-音效均衡器、厅堂混响、倍速播放、歌词时间偏移与睡眠定时面板 (WinUI 3 Custom Frameless Modal)
-彻底移除传统 QComboBox 与原生 QDialog 边框，提供：
-1. 五大北欧音效预设分段切换 + 动态平滑过渡的 5 段参量均衡器推子 (60Hz / 230Hz / 910Hz / 3.6kHz / 12kHz) 与频响曲线
-2. 北欧厅堂混响空间感无级滑块 + 实时音色试听按钮
-3. 现代分段胶囊式倍速切换、歌词时间轴微调与睡眠定时控制
-"""
-
 from typing import List, Optional
 from PyQt6.QtCore import Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, pyqtSignal
 from PyQt6.QtGui import (
@@ -35,12 +27,7 @@ from qt6_player.services.audio_engine import SOUND_PROFILES, EQ_BAND_LABELS
 
 
 class EqualizerRackWidget(QWidget):
-    """
-    5 段交互式均衡器推子与实时贝塞尔频响曲线画布 (-12dB ~ +12dB)
-    支持预设切换时的丝滑曲线动画与鼠标直接拖拽任意频段推子。
-    """
-
-    gainsChangedByUser = pyqtSignal(list, bool)  # gains_db(5), is_release
+    gainsChangedByUser = pyqtSignal(list, bool)
 
     def __init__(self, initial_gains: List[float], parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -48,6 +35,7 @@ class EqualizerRackWidget(QWidget):
         self.gains: List[float] = list((initial_gains + [0.0] * 5)[:5])
         self._start_gains: List[float] = list(self.gains)
         self._target_gains: List[float] = list(self.gains)
+        self._spectrum_bars: List[float] = [0.0] * 24
         self.dragging_band: int = -1
         self.hovered_band: int = -1
 
@@ -62,6 +50,13 @@ class EqualizerRackWidget(QWidget):
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
+        self.update()
+
+    def set_spectrum(self, bands: List[float]) -> None:
+        if not bands:
+            return
+        for i in range(min(len(self._spectrum_bars), len(bands))):
+            self._spectrum_bars[i] = self._spectrum_bars[i] * 0.45 + float(bands[i]) * 0.55
         self.update()
 
     def animate_to_gains(self, target_gains: List[float]) -> None:
@@ -155,6 +150,24 @@ class EqualizerRackWidget(QWidget):
         top_y = 26.0
         bot_y = self.height() - 32.0
         mid_y = (top_y + bot_y) / 2.0
+
+        # 底层 24 段实时音频频谱半透明衬底
+        n_spec = len(self._spectrum_bars)
+        if n_spec > 0:
+            spec_left = 24.0
+            spec_w = max(10.0, self.width() - 48.0)
+            bw = 5.0
+            gap = (spec_w - n_spec * bw) / max(1, n_spec - 1)
+            max_sh = (bot_y - top_y) * 0.85
+            spec_col = QColor(self.theme.sage_accent)
+            spec_col.setAlpha(28)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(spec_col)
+            for si, sv in enumerate(self._spectrum_bars):
+                if sv > 0.02:
+                    sh = sv * max_sh
+                    sx = spec_left + si * (bw + gap)
+                    painter.drawRoundedRect(QRectF(sx, bot_y - sh, bw, sh), 2.0, 2.0)
 
         # 0dB 基准虚线
         dash_pen = QPen(self.theme.divider, 1.0, Qt.PenStyle.DashLine)
@@ -290,6 +303,8 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.preset_tabs.set_theme(self.theme)
         if current_profile in self._PRESET_NAMES:
             self.preset_tabs.set_current_index(self._PRESET_NAMES.index(current_profile), animate=False)
+        else:
+            self.preset_tabs.clear_selection()
         self.preset_tabs.currentIndexChanged.connect(self._on_preset_tab_changed)
         vbox.addWidget(self.preset_tabs)
 
@@ -363,11 +378,12 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.sleep_tabs.setFixedWidth(186)
         self.sleep_tabs.set_theme(self.theme)
         if sleep_remaining_sec > 0:
-            rem_m = sleep_remaining_sec // 60
-            for i, m in enumerate(self._SLEEP_MINS):
-                if m > 0 and abs(rem_m - m) <= 10:
-                    self.sleep_tabs.set_current_index(i, animate=False)
-                    break
+            rem_m = sleep_remaining_sec / 60.0
+            best_i = min(
+                range(1, len(self._SLEEP_MINS)),
+                key=lambda i: abs(rem_m - self._SLEEP_MINS[i]),
+            )
+            self.sleep_tabs.set_current_index(best_i, animate=False)
         self.sleep_tabs.currentIndexChanged.connect(
             lambda idx: self.sleepTimerRequested.emit(self._SLEEP_MINS[idx])
         )
@@ -385,7 +401,11 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.soundProfileChanged.emit(name)
 
     def _on_eq_rack_dragged(self, gains: List[float], is_release: bool) -> None:
+        self.preset_tabs.clear_selection()
         self.customEqChanged.emit(gains, self.reverb_slider.ratio, is_release)
+
+    def update_spectrum(self, bands: List[float]) -> None:
+        self.eq_rack.set_spectrum(bands)
 
     def _on_reverb_changed(self, ratio: float) -> None:
         self.lbl_rev_pct.setText(f"{int(round(ratio * 100))}%")

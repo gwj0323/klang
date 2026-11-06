@@ -1,18 +1,12 @@
-"""
-播放器状态与播放列表持久化服务 (Storage Service)
-自动保存与恢复：用户导入的本地歌曲列表、收藏状态、歌词时间偏移、字号、播放模式、倍速、音量、5段自定义EQ增益、混响、桌面歌词位置与主题配置。
-采用原子写入与防抖落盘机制，彻底杜绝异常退出导致的配置丢失。
-"""
-
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from qt6_player.data.tracks import NordicTrack, NORDIC_TRACKS, LyricLine
 from qt6_player.services.metadata_service import create_track_from_file
 
-import os
-import sys
 
 def _get_config_path() -> Path:
     if getattr(sys, "frozen", False):
@@ -28,11 +22,11 @@ def _get_config_path() -> Path:
             return app_data / "player_state.json"
     return Path(__file__).resolve().parent.parent.parent / "player_state.json"
 
+
 _CONFIG_PATH = _get_config_path()
 
 
 def _make_json_safe(obj: Any) -> Any:
-    """递归将 numpy 标量、布尔值及特殊类型转换为原生 Python JSON 可序列化类型"""
     if hasattr(obj, "item") and callable(obj.item):
         return obj.item()
     if isinstance(obj, dict):
@@ -52,7 +46,7 @@ def load_player_state() -> Dict[str, Any]:
     default_state: Dict[str, Any] = {
         "volume": 0.72,
         "is_muted": False,
-        "play_mode": "loop_list",       # "loop_list" | "loop_one" | "shuffle" | "sequential"
+        "play_mode": "loop_list",
         "playback_rate": 1.0,
         "lyric_font_size": 20,
         "show_translation": True,
@@ -66,10 +60,10 @@ def load_player_state() -> Dict[str, Any]:
         "desktop_lyric_open": False,
         "desktop_lyric_pos": None,
         "desktop_lyric_font_size": 22,
-        "window_geometry": None,        # [x, y, w, h]
+        "window_geometry": None,
         "is_maximized": False,
         "last_track_index": 0,
-        "playlist": None,               # 完整播放列表（含排序与曲目删除状态）
+        "playlist": None,
         "local_tracks": [],
         "builtin_overrides": {},
     }
@@ -88,7 +82,6 @@ def save_player_state(
     tracks: List[NordicTrack],
     settings: Dict[str, Any],
 ) -> bool:
-    """原子写入保存播放器配置与播放列表到 player_state.json"""
     playlist_data = []
     local_tracks_data = []
     builtin_overrides = {}
@@ -126,6 +119,7 @@ def save_player_state(
             builtin_overrides[t.track_id] = {
                 "is_favorite": bool(t.is_favorite),
                 "lyric_offset": float(t.lyric_offset),
+                "cover_path": str(t.cover_path) if t.cover_path else "",
             }
 
     payload = dict(settings)
@@ -137,7 +131,6 @@ def save_player_state(
 
     try:
         _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # 先写临时文件再重命名，避免写盘中途断电或崩溃导致 JSON 损坏
         tmp_file = _CONFIG_PATH.with_suffix(".tmp")
         tmp_file.write_text(
             json.dumps(safe_payload, ensure_ascii=False, indent=2),
@@ -177,73 +170,53 @@ def _parse_saved_lyrics(lyrics_list: list) -> List[LyricLine]:
                 text=txt,
                 sub=sub,
                 is_interlude=is_inter,
-                syllables=build_syllables(txt, st, et),
+                syllables=[] if is_inter else build_syllables(txt, st, et),
             )
         )
     return result
 
 
-def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
-    """从持久化配置中还原播放列表（精准保留用户增删曲目与排序）"""
-    tracks: List[NordicTrack] = []
-    builtin_map = {bt.track_id: bt for bt in NORDIC_TRACKS}
+_LEGACY_BUILTIN_IDS = {"bergen-mist", "oslo-atelier"}
 
-    # 1. 优先使用完整播放列表顺序与项
+
+def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
+    tracks: List[NordicTrack] = []
+
     saved_playlist = state.get("playlist")
     if saved_playlist and isinstance(saved_playlist, list):
         for idx, item in enumerate(saved_playlist):
+            tid = str(item.get("track_id", ""))
+            if tid in _LEGACY_BUILTIN_IDS:
+                continue
             fp = item.get("file_path")
-            tid = item.get("track_id", "")
-            if fp and Path(fp).is_file():
-                tr = create_track_from_file(fp, index_hint=idx)
-                if item.get("title"):
-                    tr.title = str(item["title"])
-                if item.get("artist"):
-                    tr.artist = str(item["artist"])
-                if item.get("album"):
-                    tr.album = str(item["album"])
-                if item.get("duration"):
-                    tr.duration = float(item["duration"])
-                tr.is_favorite = bool(item.get("is_favorite", False))
-                tr.lyric_offset = float(item.get("lyric_offset", 0.0))
-                saved_lyrics = _parse_saved_lyrics(item.get("lyrics", []))
-                if saved_lyrics:
-                    tr.lyrics = saved_lyrics
-                tracks.append(tr)
-            elif tid in builtin_map:
-                bt = builtin_map[tid]
-                bt.is_favorite = bool(item.get("is_favorite", bt.is_favorite))
-                bt.lyric_offset = float(item.get("lyric_offset", bt.lyric_offset))
-                saved_lyrics = _parse_saved_lyrics(item.get("lyrics", []))
-                if saved_lyrics:
-                    bt.lyrics = saved_lyrics
-                tracks.append(bt)
-            elif item.get("title"):
-                tr = NordicTrack(
-                    track_id=tid or f"saved_track_{idx}",
-                    title=str(item.get("title", "未知曲目")),
-                    artist=str(item.get("artist", "未知歌手")),
-                    album=str(item.get("album", "")),
-                    duration=float(item.get("duration", 0.0)),
-                    file_path=fp if fp else None,
-                    cover_path=str(item.get("cover_path", "")),
-                    is_favorite=bool(item.get("is_favorite", False)),
-                    lyric_offset=float(item.get("lyric_offset", 0.0)),
-                    lyrics=_parse_saved_lyrics(item.get("lyrics", [])),
-                )
-                tracks.append(tr)
-        if tracks:
-            return tracks
+            if not fp or not Path(fp).is_file():
+                continue
+            saved_cov = item.get("cover_path")
+            valid_cov = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
 
-    # 2. 向下兼容老版本 local_tracks + builtin_overrides 格式
-    overrides = state.get("builtin_overrides") or {}
-    for bt in NORDIC_TRACKS:
-        ov = overrides.get(bt.track_id) or {}
-        bt.is_favorite = bool(ov.get("is_favorite", bt.is_favorite))
-        bt.lyric_offset = float(ov.get("lyric_offset", bt.lyric_offset))
-        tracks.append(bt)
+            tr = create_track_from_file(fp, index_hint=idx)
+            if item.get("title"):
+                tr.title = str(item["title"])
+            if item.get("artist"):
+                tr.artist = str(item["artist"])
+            if item.get("album"):
+                tr.album = str(item["album"])
+            if item.get("duration"):
+                tr.duration = float(item["duration"])
+            if valid_cov and not tr.cover_path:
+                tr.cover_path = valid_cov
+            tr.is_favorite = bool(item.get("is_favorite", False))
+            tr.lyric_offset = float(item.get("lyric_offset", 0.0))
+            saved_lyrics = _parse_saved_lyrics(item.get("lyrics", []))
+            if saved_lyrics:
+                tr.lyrics = saved_lyrics
+            tracks.append(tr)
+        return tracks
 
     for idx, item in enumerate(state.get("local_tracks") or []):
+        tid = str(item.get("track_id", ""))
+        if tid in _LEGACY_BUILTIN_IDS:
+            continue
         fp = item.get("file_path")
         if not fp or not Path(fp).is_file():
             continue
@@ -256,6 +229,9 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
             tr.album = str(item["album"])
         if item.get("duration"):
             tr.duration = float(item["duration"])
+        saved_cov = item.get("cover_path")
+        if saved_cov and Path(str(saved_cov)).is_file() and not tr.cover_path:
+            tr.cover_path = str(saved_cov)
         tr.is_favorite = bool(item.get("is_favorite", False))
         tr.lyric_offset = float(item.get("lyric_offset", 0.0))
         tracks.append(tr)

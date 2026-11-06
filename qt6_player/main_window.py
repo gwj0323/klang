@@ -1,15 +1,3 @@
-"""
-Klang 音乐播放器主窗口 (Qt6)
-完整功能集成：
-1. 顶底完全对称 12px 圆角无边框窗口 + 四周 8 方向鼠标拖拽缩放大小 (startSystemResize)
-2. 本地音乐文件 / 文件夹 / LRC 歌词导入与拖拽导入
-3. 在线歌词与专辑封面自动静默刮削 + 手动搜索匹配弹窗
-4. 播放模式切换 (列表循环 / 单曲循环 / 随机播放 / 顺序播放)
-5. 倍速播放 (0.75x ~ 2.0x)、音效模式、歌词时间轴微调 (-0.5s / +0.5s)、睡眠定时
-6. 桌面悬浮歌词窗 (DesktopLyricOverlay)、双语译文开关、左对齐/居中切换、歌词字号无级调节
-7. 播放列表搜索过滤、「我喜欢」红心收藏分组、右键单曲管理与状态持久化保存
-"""
-
 import random
 from pathlib import Path
 from typing import List, Optional
@@ -17,6 +5,7 @@ from PyQt6.QtCore import Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, Q
 from PyQt6.QtGui import (
     QPainter,
     QPen,
+    QColor,
     QPainterPath,
     QRadialGradient,
     QKeyEvent,
@@ -27,6 +16,7 @@ from PyQt6.QtGui import (
     QShowEvent,
     QMoveEvent,
     QIcon,
+    QPixmap,
 )
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -34,6 +24,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QFileDialog,
+    QSystemTrayIcon,
 )
 
 from qt6_player.data.tracks import NordicTrack, LyricLine, parse_lrc_text
@@ -51,18 +42,28 @@ from qt6_player.services.storage_service import (
     restore_tracks_from_state,
 )
 from qt6_player.components.title_bar import WinUITitleBar
-from qt6_player.components.navigation_pane import NavigationPane
+from qt6_player.components.navigation_pane import NavigationPane, TrackMetadataDialog
 from qt6_player.components.vinyl_cover_card import VinylCoverCard
 from qt6_player.components.lyrics_stage import LyricsStage
 from qt6_player.components.transport_bar import TransportBar
 from qt6_player.components.desktop_lyric_overlay import DesktopLyricOverlay
 from qt6_player.components.equalizer_dialog import AudioSettingsDialog
+from qt6_player.components.mini_player_window import MiniPlayerWindow
+from qt6_player.components.fluent_widgets import WinUIFlyoutMenu
 from qt6_player.services.window_effects import apply_window_system_theme_and_corners
 
 
-class WindowFrameOverlay(QWidget):
-    """顶层透明描边覆盖层：确保窗口四角（含顶部与底部左右圆角）拥有完全对称的 1px 内外高光边框"""
+def _lerp_color(c_from: QColor, c_to: QColor, t: float) -> QColor:
+    p = max(0.0, min(1.0, float(t)))
+    return QColor(
+        int(round(c_from.red() + (c_to.red() - c_from.red()) * p)),
+        int(round(c_from.green() + (c_to.green() - c_from.green()) * p)),
+        int(round(c_from.blue() + (c_to.blue() - c_from.blue()) * p)),
+        int(round(c_from.alpha() + (c_to.alpha() - c_from.alpha()) * p)),
+    )
 
+
+class WindowFrameOverlay(QWidget):
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
@@ -74,6 +75,8 @@ class WindowFrameOverlay(QWidget):
         self.update()
 
     def paintEvent(self, event) -> None:
+        if self.rect().adjusted(14, 14, -14, -14).contains(event.rect()):
+            return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -114,17 +117,47 @@ class NordicWinUI3Window(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         # 读取持久化状态
+        self._initializing: bool = True
         self._saved_state = load_player_state()
         self.theme: NordicThemeColors = (
             DUSK_THEME if self._saved_state.get("theme") == "dusk" else DAYLIGHT_THEME
         )
         self.tracks: List[NordicTrack] = restore_tracks_from_state(self._saved_state)
-        self.current_track_index: int = 0
+        init_idx = int(self._saved_state.get("last_track_index", 0))
+        if not (0 <= init_idx < len(self.tracks)):
+            init_idx = 0
+        self.current_track_index: int = init_idx
         self.play_mode: str = self._saved_state.get("play_mode", "loop_list")
 
         self.audio = NordicAudioEngine(self)
         self.desktop_lyric = DesktopLyricOverlay()
+        self.mini_player = MiniPlayerWindow()
+        self._active_eq_dialog: Optional[AudioSettingsDialog] = None
         self._active_workers: List[AutoScrapeWorker] = []
+
+        # 环境流光色彩与日夜平滑插值过渡状态
+        self._bg_col_start: QColor = QColor(self.theme.mist_white)
+        self._bg_col_target: QColor = QColor(self.theme.mist_white)
+        self._bg_col_cur: QColor = QColor(self.theme.mist_white)
+        self._amb1_start: QColor = QColor("#6E8277")
+        self._amb1_target: QColor = QColor("#6E8277")
+        self._amb1_cur: QColor = QColor("#6E8277")
+        self._amb2_start: QColor = QColor("#C9BBAE")
+        self._amb2_target: QColor = QColor("#C9BBAE")
+        self._amb2_cur: QColor = QColor("#C9BBAE")
+        self._audio_energy: float = 0.0
+        self._cached_bg_pixmap: Optional[QPixmap] = None
+        self._bg_dirty: bool = True
+
+        self._ambient_anim = QVariantAnimation(self)
+        self._ambient_anim.setDuration(760)
+        self._ambient_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._ambient_anim.valueChanged.connect(self._on_ambient_anim_val)
+
+        self._theme_anim = QVariantAnimation(self)
+        self._theme_anim.setDuration(340)
+        self._theme_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._theme_anim.valueChanged.connect(self._on_theme_anim_val)
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -132,16 +165,116 @@ class NordicWinUI3Window(QMainWindow):
         self._autosave_timer.timeout.connect(self._save_current_state)
 
         self._setup_ui()
+        self._setup_system_tray(icon_path)
         self._bind_signals()
         self._apply_restored_settings()
+        if self.tracks:
+            self.select_track(init_idx, auto_play=False)
+        else:
+            self._clear_now_playing_ui()
+        self._initializing = False
+        self._save_current_state()
 
-        init_idx = int(self._saved_state.get("last_track_index", 0))
-        if not (0 <= init_idx < len(self.tracks)):
-            init_idx = 0
-        self.select_track(init_idx, auto_play=False)
+    def _on_ambient_anim_val(self, val: float) -> None:
+        p = float(val)
+        self._amb1_cur = _lerp_color(self._amb1_start, self._amb1_target, p)
+        self._amb2_cur = _lerp_color(self._amb2_start, self._amb2_target, p)
+        self._bg_dirty = True
+        self.update()
+
+    def _on_theme_anim_val(self, val: float) -> None:
+        self._bg_col_cur = _lerp_color(self._bg_col_start, self._bg_col_target, float(val))
+        self._bg_dirty = True
+        self.update()
+
+    def _on_ambient_colors_updated(self, c1: QColor, c2: QColor) -> None:
+        self._amb1_start = QColor(self._amb1_cur)
+        self._amb2_start = QColor(self._amb2_cur)
+        self._amb1_target = QColor(c1)
+        self._amb2_target = QColor(c2)
+        self._ambient_anim.stop()
+        self._ambient_anim.setStartValue(0.0)
+        self._ambient_anim.setEndValue(1.0)
+        self._ambient_anim.start()
+
+    def _setup_system_tray(self, icon_path: Path) -> None:
+        self.tray_icon = QSystemTrayIcon(self)
+        if icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(icon_path)))
+            self.mini_player.setWindowIcon(QIcon(str(icon_path)))
+        self.tray_icon.setToolTip("Klang — Nordic Minimalist Audio Player")
+        self.tray_icon.activated.connect(self._on_tray_activated)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon.show()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._restore_from_mini_or_tray()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            from PyQt6.QtGui import QCursor
+            items = [
+                ("toggle_play", "music_file", "暂停播放" if self.audio.is_playing else "开始播放"),
+                ("prev", "chevron_down", "上一首曲目"),
+                ("next", "chevron_down", "下一首曲目"),
+                ("desktop_lyric", "desktop_lyric", "开关桌面歌词"),
+                ("mini_mode", "mini_player", "切换迷你悬浮模式"),
+                ("show_main", "sparkle", "显示主窗口"),
+                ("quit", "close", "退出 Klang"),
+            ]
+            self._tray_menu = WinUIFlyoutMenu(items, theme=self.theme, parent=None)
+            self._tray_menu.actionTriggered.connect(self._on_tray_menu_action)
+            pos = QCursor.pos()
+            self._tray_menu.popup_animated(pos - self._tray_menu.rect().bottomLeft())
+
+    def _on_tray_menu_action(self, act: str) -> None:
+        if act == "toggle_play":
+            self.audio.toggle_play()
+        elif act == "prev":
+            self._on_prev_track()
+        elif act == "next":
+            self._on_next_track()
+        elif act == "desktop_lyric":
+            self.title_bar._on_toggle_desktop_lyric()
+        elif act == "mini_mode":
+            self._toggle_mini_player_mode()
+        elif act == "show_main":
+            self._restore_from_mini_or_tray()
+        elif act == "quit":
+            self.close()
+
+    def _toggle_mini_player_mode(self) -> None:
+        if self.mini_player.isVisible():
+            self._restore_from_mini_or_tray()
+        else:
+            self._enter_mini_player_mode()
+
+    def _enter_mini_player_mode(self) -> None:
+        if 0 <= self.current_track_index < len(self.tracks):
+            self.mini_player.set_track(self.tracks[self.current_track_index])
+        self.mini_player.set_playing(self.audio.is_playing)
+        self.mini_player.set_theme(self.theme)
+        geo = self.frameGeometry()
+        self.mini_player.move(
+            geo.center().x() - self.mini_player.width() // 2,
+            geo.center().y() - self.mini_player.height() // 2,
+        )
+        self.hide()
+        self.mini_player.show_animated()
+
+    def _restore_from_mini_or_tray(self) -> None:
+        if self.mini_player.isVisible():
+            self.mini_player.hide()
+        self.showNormal() if not self._saved_state.get("is_maximized") else self.showMaximized()
+        self.raise_()
+        self.activateWindow()
 
     def schedule_save(self) -> None:
         """防抖自动保存设置到本地磁盘，避免卡顿 I/O"""
+        if getattr(self, "_initializing", False):
+            return
         if hasattr(self, "_autosave_timer"):
             self._autosave_timer.start()
 
@@ -155,11 +288,9 @@ class NordicWinUI3Window(QMainWindow):
         root_vbox.setContentsMargins(1, 1, 1, 1)
         root_vbox.setSpacing(0)
 
-        # 1. 顶部栏
         self.title_bar = WinUITitleBar(central)
         root_vbox.addWidget(self.title_bar)
 
-        # 2. 主工作区
         workspace = QWidget(central)
         ws_hbox = QHBoxLayout(workspace)
         ws_hbox.setContentsMargins(0, 0, 0, 0)
@@ -182,11 +313,9 @@ class NordicWinUI3Window(QMainWindow):
         ws_hbox.addWidget(stage_container, 1)
         root_vbox.addWidget(workspace, 1)
 
-        # 3. 底部控制栏
         self.transport_bar = TransportBar(central)
         root_vbox.addWidget(self.transport_bar)
 
-        # 4. 顶层对称圆角边框覆盖层
         self.frame_overlay = WindowFrameOverlay(central)
         self.frame_overlay.raise_()
 
@@ -229,6 +358,7 @@ class NordicWinUI3Window(QMainWindow):
             self.transport_bar.update()
         if hasattr(self, "title_bar"):
             self.title_bar.set_window_maximized(self.isMaximized())
+        self._bg_dirty = True
         self.update()
         self.schedule_save()
 
@@ -251,6 +381,7 @@ class NordicWinUI3Window(QMainWindow):
                 )
         except Exception:
             pass
+        self._bg_dirty = True
         self.update()
         self.schedule_save()
 
@@ -370,6 +501,15 @@ class NordicWinUI3Window(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self.audio.pause()
         self.audio._decoder.stop()
+        for w in list(self._active_workers):
+            try:
+                w.scrapeCompleted.disconnect(self._on_auto_scrape_completed)
+            except Exception:
+                pass
+        if hasattr(self, "mini_player"):
+            self.mini_player.close()
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.hide()
         self.desktop_lyric.close()
         self._save_current_state()
         super().closeEvent(event)
@@ -384,18 +524,30 @@ class NordicWinUI3Window(QMainWindow):
         self.title_bar.syllableModeToggled.connect(self.lyrics_stage.set_syllable_mode)
         self.title_bar.syllableModeToggled.connect(lambda _b: self.schedule_save())
         self.title_bar.desktopLyricToggled.connect(self._toggle_desktop_lyric)
+        self.title_bar.miniPlayerClicked.connect(self._toggle_mini_player_mode)
         self.title_bar.themeToggled.connect(self._on_theme_toggled)
 
         # 左侧栏信号
         self.nav_pane.trackSelected.connect(lambda idx: self.select_track(idx, auto_play=True))
         self.nav_pane.favoriteChanged.connect(self._on_nav_favorite_changed)
         self.nav_pane.trackActionRequested.connect(self._on_track_context_action)
+        self.nav_pane.trackReordered.connect(self._on_track_reordered)
         self.nav_pane.importFilesRequested.connect(self._on_import_files)
         self.nav_pane.importFolderRequested.connect(self._on_import_folder)
         self.nav_pane.importLrcRequested.connect(self._on_import_lrc_file)
 
-        # 封面点击快捷匹配词图
+        # 封面点击快捷匹配词图 & 环境流光主色通知
         self.cover_card.scrapeRequested.connect(self._open_online_scraper_dialog)
+        self.cover_card.ambientColorsChanged.connect(self._on_ambient_colors_updated)
+
+        # 迷你悬浮播放器信号
+        self.mini_player.playToggled.connect(self.audio.toggle_play)
+        self.mini_player.prevClicked.connect(self._on_prev_track)
+        self.mini_player.nextClicked.connect(self._on_next_track)
+        self.mini_player.seekRatioRequested.connect(
+            lambda ratio: self.audio.seek(ratio * self.audio.duration, auto_play_on_seek=True, source="seek")
+        )
+        self.mini_player.restoreRequested.connect(self._restore_from_mini_or_tray)
 
         # 歌词舞台信号
         self.lyrics_stage.seekRequested.connect(
@@ -442,6 +594,7 @@ class NordicWinUI3Window(QMainWindow):
         self.audio.soundProfileChanged.connect(
             lambda name, _g, _r: (self.transport_bar.set_sound_profile_badge(name), self.schedule_save())
         )
+        self.audio.spectrumUpdated.connect(self._on_spectrum_updated)
         self.audio.trackEnded.connect(self._on_track_naturally_ended)
 
     def _on_sidebar_anim_val(self, val: float) -> None:
@@ -473,7 +626,51 @@ class NordicWinUI3Window(QMainWindow):
 
     def _on_active_lyric_line_changed(self, line: LyricLine) -> None:
         self.transport_bar.update_lyric_snippet(line)
-        self.desktop_lyric.update_lyric(line)
+        if self.desktop_lyric.isVisible():
+            self.desktop_lyric.update_lyric(line)
+        if self.mini_player.isVisible():
+            self.mini_player.update_lyric(line)
+
+    def _on_spectrum_updated(self, bands: List[float]) -> None:
+        if self.isVisible():
+            self.cover_card.set_spectrum(bands)
+        if self._active_eq_dialog is not None and self._active_eq_dialog.isVisible():
+            self._active_eq_dialog.update_spectrum(bands)
+
+    def _on_track_reordered(self, from_idx: int, to_idx: int) -> None:
+        if not (0 <= from_idx < len(self.tracks)) or not (0 <= to_idx < len(self.tracks)):
+            return
+        if from_idx == to_idx:
+            return
+        cur_track_obj = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+        moved = self.tracks.pop(from_idx)
+        self.tracks.insert(to_idx, moved)
+        if cur_track_obj is not None and cur_track_obj in self.tracks:
+            self.current_track_index = self.tracks.index(cur_track_obj)
+        self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+        self.lyrics_stage._show_toast("已调整曲目播放顺序")
+        self.schedule_save()
+
+    def _open_edit_metadata_dialog(self, index: int) -> None:
+        if not (0 <= index < len(self.tracks)):
+            return
+        target = self.tracks[index]
+        dlg = TrackMetadataDialog(target, theme=self.theme, parent=self)
+
+        def _apply_meta(new_title: str, new_artist: str, new_album: str) -> None:
+            target.title = new_title
+            target.artist = new_artist
+            target.album = new_album
+            self.nav_pane.refresh_item(index)
+            if index == self.current_track_index:
+                self.cover_card.update_track(target)
+                self.transport_bar.set_track_info(target)
+                self.mini_player.set_track(target)
+            self.lyrics_stage._show_toast("已保存曲目信息")
+            self.schedule_save()
+
+        dlg.metadataSaved.connect(_apply_meta)
+        dlg.exec()
 
     def _on_lyric_offset_changed(self, new_offset: float) -> None:
         if 0 <= self.current_track_index < len(self.tracks):
@@ -512,30 +709,29 @@ class NordicWinUI3Window(QMainWindow):
         if action == "play":
             self.select_track(index, auto_play=True)
         elif action == "scrape":
-            self.select_track(index, auto_play=False)
-            self._open_online_scraper_dialog()
+            self._open_online_scraper_dialog(index)
         elif action == "import_lrc":
-            self.select_track(index, auto_play=False)
-            self._on_import_lrc_file()
+            self._on_import_lrc_file(index)
+        elif action == "edit_tags":
+            self._open_edit_metadata_dialog(index)
         elif action == "remove":
-            if len(self.tracks) <= 1:
-                self.lyrics_stage._show_toast("至少保留一首曲目")
-                return
-
             was_playing = self.audio.is_playing
             is_removing_current = (index == self.current_track_index)
 
             self.tracks.pop(index)
 
-            if is_removing_current:
-                # 删除的是当前正在播放的曲目：切换到同一索引的新曲目并继续播放
+            if not self.tracks:
+                self.current_track_index = 0
+                self.nav_pane.rebuild_list(self.tracks, active_index=-1)
+                self._clear_now_playing_ui()
+                self.lyrics_stage._show_toast("已清空播放列表")
+            elif is_removing_current:
                 if self.current_track_index >= len(self.tracks):
                     self.current_track_index = max(0, len(self.tracks) - 1)
                 self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
                 self.select_track(self.current_track_index, auto_play=was_playing)
                 self.lyrics_stage._show_toast("已移除当前曲目，自动播放下一首")
             else:
-                # 删除的是非当前播放曲目：当前歌曲连续播放完全不受任何影响，保持原进度与音频流
                 if index < self.current_track_index:
                     self.current_track_index -= 1
                 self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
@@ -574,12 +770,11 @@ class NordicWinUI3Window(QMainWindow):
         dlg.playbackRateChanged.connect(lambda r: (self.audio.set_playback_rate(r), self.schedule_save()))
         dlg.lyricOffsetDeltaRequested.connect(self.lyrics_stage.adjust_lyric_offset)
         dlg.sleepTimerRequested.connect(self.audio.set_sleep_timer)
+        self._active_eq_dialog = dlg
         dlg.exec()
+        self._active_eq_dialog = None
         self.schedule_save()
 
-    # =========================================================
-    # 音乐文件 / 文件夹 / LRC 歌词导入与拖拽支持
-    # =========================================================
     def _on_import_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
             self,
@@ -597,12 +792,16 @@ class NordicWinUI3Window(QMainWindow):
             if audio_files:
                 self._append_audio_files(audio_files, auto_play_first=True)
 
-    def _on_import_lrc_file(self) -> None:
+    def _on_import_lrc_file(self, target_index: Optional[int] = None) -> None:
         if not self.tracks:
             return
+        idx = self.current_track_index if (target_index is None or isinstance(target_index, bool)) else int(target_index)
+        if not (0 <= idx < len(self.tracks)):
+            idx = self.current_track_index
+        target_track = self.tracks[idx]
         lrc_file, _ = QFileDialog.getOpenFileName(
             self,
-            "为当前歌曲导入本地 LRC 歌词",
+            f"为「{target_track.title}」导入本地 LRC 歌词",
             "",
             "LRC 歌词文件 (*.lrc *.txt);;所有文件 (*.*)",
         )
@@ -615,10 +814,10 @@ class NordicWinUI3Window(QMainWindow):
                 if content.strip():
                     parsed = parse_lrc_text(content)
                     if parsed:
-                        cur = self.tracks[self.current_track_index]
-                        cur.lyrics = parsed
-                        self.lyrics_stage.load_lyrics(parsed, lyric_offset=cur.lyric_offset)
-                        self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
+                        target_track.lyrics = parsed
+                        if idx == self.current_track_index:
+                            self.lyrics_stage.load_lyrics(parsed, lyric_offset=target_track.lyric_offset)
+                            self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
                         self.transport_bar.set_status_message(f"已加载歌词：{p.name}")
                         self.schedule_save()
                     break
@@ -689,9 +888,6 @@ class NordicWinUI3Window(QMainWindow):
                     continue
         event.acceptProposedAction()
 
-    # =========================================================
-    # 在线歌词与专辑封面刮削
-    # =========================================================
     def _trigger_auto_scrape_if_needed(self, track: NordicTrack) -> None:
         has_real_lyrics = len(track.lyrics) > 2
         has_cover = bool(track.cover_bytes or track.cover_path)
@@ -702,9 +898,10 @@ class NordicWinUI3Window(QMainWindow):
             track,
             need_lyrics=(not has_real_lyrics),
             need_cover=(not has_cover),
-            parent=self,
+            parent=None,
         )
         worker.scrapeCompleted.connect(self._on_auto_scrape_completed)
+        worker.finished.connect(lambda w=worker: self._active_workers.remove(w) if w in self._active_workers else None)
         self._active_workers.append(worker)
         worker.start()
 
@@ -734,45 +931,65 @@ class NordicWinUI3Window(QMainWindow):
                 self.schedule_save()
                 break
 
-    def _open_online_scraper_dialog(self) -> None:
+    def _open_online_scraper_dialog(self, target_index: Optional[int] = None) -> None:
         if not self.tracks:
             return
-        cur_track = self.tracks[self.current_track_index]
-        dlg = OnlineScraperDialog(cur_track, theme=self.theme, parent=self)
+        idx = self.current_track_index if (target_index is None or isinstance(target_index, bool)) else int(target_index)
+        if not (0 <= idx < len(self.tracks)):
+            idx = self.current_track_index
+        target_track = self.tracks[idx]
+        dlg = OnlineScraperDialog(target_track, theme=self.theme, parent=self)
         dlg.matchApplied.connect(
-            lambda lyrics, cover_bytes, album_name: self._apply_scraped_to_current(
-                lyrics, cover_bytes, album_name
+            lambda lyrics, cover_bytes, album_name, i=idx: self._apply_scraped_to_track(
+                i, lyrics, cover_bytes, album_name
             )
         )
         dlg.exec()
 
-    def _apply_scraped_to_current(
+    def _apply_scraped_to_track(
         self,
+        index: int,
         lyrics: List[LyricLine],
         cover_bytes: Optional[bytes],
         album_name: str,
     ) -> None:
-        cur_track = self.tracks[self.current_track_index]
+        if not (0 <= index < len(self.tracks)):
+            return
+        target_track = self.tracks[index]
         if lyrics:
-            cur_track.lyrics = lyrics
-            self.lyrics_stage.load_lyrics(lyrics, lyric_offset=cur_track.lyric_offset)
-            self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
+            target_track.lyrics = lyrics
+            if index == self.current_track_index:
+                self.lyrics_stage.load_lyrics(lyrics, lyric_offset=target_track.lyric_offset)
+                self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
         if cover_bytes:
-            cur_track.cover_bytes = cover_bytes
+            target_track.cover_bytes = cover_bytes
         if album_name:
-            cur_track.album = album_name
+            target_track.album = album_name
 
-        self.cover_card.update_track(cur_track)
-        self.transport_bar.set_track_info(cur_track)
-        self.nav_pane.refresh_item(self.current_track_index)
+        if index == self.current_track_index:
+            self.cover_card.update_track(target_track)
+            self.transport_bar.set_track_info(target_track)
+        self.nav_pane.refresh_item(index)
         self.transport_bar.set_status_message("已更新在线歌词与封面")
         self.schedule_save()
 
-    # =========================================================
-    # 播放与模式调度
-    # =========================================================
+    def _clear_now_playing_ui(self) -> None:
+        self.audio.pause()
+        self.audio._decoder.stop()
+        self.audio.current_track = None
+        self.audio.current_time = 0.0
+        self.audio.duration = 0.0
+        self.cover_card.clear_track()
+        self.lyrics_stage.load_lyrics([], lyric_offset=0.0)
+        self.transport_bar.clear_track_info()
+        self.transport_bar.set_playing_state(False)
+        self.nav_pane.set_playing_state(False)
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.setToolTip("Klang — Nordic Minimalist Audio Player")
+
     def select_track(self, index: int, auto_play: bool = False) -> None:
         if not self.tracks:
+            self._clear_now_playing_ui()
             return
         self.current_track_index = index % len(self.tracks)
         track = self.tracks[self.current_track_index]
@@ -816,25 +1033,47 @@ class NordicWinUI3Window(QMainWindow):
         self.lyrics_stage.load_lyrics(track.lyrics, lyric_offset=track.lyric_offset)
         self.transport_bar.set_track_info(track)
         self.transport_bar.update_progress(0.0, track.duration)
+        self.mini_player.set_track(track)
+        self.mini_player.update_progress(0.0, track.duration)
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.setToolTip(f"Klang — {track.title} · {track.artist}")
         if track.lyrics:
             self.desktop_lyric.update_lyric(track.lyrics[0])
+            self.mini_player.update_lyric(track.lyrics[0])
 
     def _on_play_state_changed(self, is_playing: bool) -> None:
         self.cover_card.set_playing(is_playing)
         self.transport_bar.set_playing_state(is_playing)
+        self.nav_pane.set_playing_state(is_playing)
+        self.mini_player.set_playing(is_playing)
 
     def _on_time_updated(self, current_time: float, duration: float, source: str) -> None:
-        self.transport_bar.update_progress(current_time, duration)
-        self.lyrics_stage.sync_time(current_time, source=source)
+        if self.isVisible():
+            self.transport_bar.update_progress(current_time, duration)
+            self.lyrics_stage.sync_time(current_time, source=source)
+        elif source != "tick":
+            self.lyrics_stage.sync_time(current_time, source=source)
+        if self.mini_player.isVisible():
+            self.mini_player.update_progress(current_time, duration)
 
     def _on_theme_toggled(self, theme_name: str) -> None:
-        self.theme = DUSK_THEME if theme_name == "dusk" else DAYLIGHT_THEME
+        new_theme = DUSK_THEME if theme_name == "dusk" else DAYLIGHT_THEME
+        self._bg_col_start = QColor(self._bg_col_cur)
+        self._bg_col_target = QColor(new_theme.mist_white)
+        self.theme = new_theme
+        self._bg_dirty = True
+        self._theme_anim.stop()
+        self._theme_anim.setStartValue(0.0)
+        self._theme_anim.setEndValue(1.0)
+        self._theme_anim.start()
+
         self.title_bar.set_theme(self.theme)
         self.nav_pane.set_theme(self.theme)
         self.cover_card.set_theme(self.theme)
         self.lyrics_stage.set_theme(self.theme)
         self.transport_bar.set_theme(self.theme)
         self.desktop_lyric.set_theme(self.theme)
+        self.mini_player.set_theme(self.theme)
         self.frame_overlay.set_theme(self.theme)
         try:
             hwnd = int(self.winId()) if self.winId() else 0
@@ -847,9 +1086,6 @@ class NordicWinUI3Window(QMainWindow):
         self.update()
         self.schedule_save()
 
-    # =========================================================
-    # 无边框窗口四周 8 方向鼠标拖拽缩放支持
-    # =========================================================
     def _detect_resize_edges(self, pos: QPointF) -> Qt.Edge:
         if self.isMaximized():
             return Qt.Edge(0)
@@ -890,46 +1126,144 @@ class NordicWinUI3Window(QMainWindow):
         super().mouseMoveEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Space:
+        key = event.key()
+        mods = event.modifiers()
+
+        # 系统多媒体键支持
+        if key in (Qt.Key.Key_MediaTogglePlayPause, Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaPause):
             self.audio.toggle_play()
             event.accept()
             return
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+        if key == Qt.Key.Key_MediaPrevious:
+            self._on_prev_track()
+            event.accept()
+            return
+        if key == Qt.Key.Key_MediaNext:
+            self._on_next_track()
+            event.accept()
+            return
+        if key == Qt.Key.Key_MediaStop:
+            self.audio.pause()
+            event.accept()
+            return
+
+        if key == Qt.Key.Key_Space:
+            self.audio.toggle_play()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Slash and not (mods & Qt.KeyboardModifier.ControlModifier):
+            if not getattr(self, "_sidebar_expanded", True):
+                self._toggle_sidebar()
+            self.nav_pane.search_box.edit.setFocus()
+            event.accept()
+            return
+
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
                 self.lyrics_stage.adjust_lyric_font_size(2)
                 event.accept()
                 return
-            if event.key() == Qt.Key.Key_Minus:
+            if key == Qt.Key.Key_Minus:
                 self.lyrics_stage.adjust_lyric_font_size(-2)
                 event.accept()
                 return
-            if event.key() == Qt.Key.Key_Left:
+            if key == Qt.Key.Key_Left:
                 self._on_prev_track()
                 event.accept()
                 return
-            if event.key() == Qt.Key.Key_Right:
+            if key == Qt.Key.Key_Right:
                 self._on_next_track()
+                event.accept()
+                return
+            if key == Qt.Key.Key_F:
+                if not getattr(self, "_sidebar_expanded", True):
+                    self._toggle_sidebar()
+                self.nav_pane.search_box.edit.setFocus()
+                event.accept()
+                return
+            if key == Qt.Key.Key_M:
+                self._toggle_mini_player_mode()
+                event.accept()
+                return
+            if key == Qt.Key.Key_D:
+                self.title_bar._on_toggle_desktop_lyric()
+                event.accept()
+                return
+        else:
+            if key == Qt.Key.Key_Left:
+                self.audio.seek(max(0.0, self.audio.current_time - 5.0), auto_play_on_seek=False, source="seek")
+                event.accept()
+                return
+            if key == Qt.Key.Key_Right:
+                self.audio.seek(min(self.audio.duration, self.audio.current_time + 5.0), auto_play_on_seek=False, source="seek")
+                event.accept()
+                return
+            if key == Qt.Key.Key_Up:
+                self.audio.set_volume(min(1.0, self.audio.volume + 0.05))
+                self.lyrics_stage._show_toast(f"音量: {int(round(self.audio.volume * 100))}%")
+                event.accept()
+                return
+            if key == Qt.Key.Key_Down:
+                self.audio.set_volume(max(0.0, self.audio.volume - 0.05))
+                self.lyrics_stage._show_toast(f"音量: {int(round(self.audio.volume * 100))}%")
                 event.accept()
                 return
         super().keyPressEvent(event)
 
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _rebuild_bg_cache(self) -> None:
+        dpr = max(1.0, self.devicePixelRatioF())
+        w, h = max(1, self.width()), max(1, self.height())
+        pix = QPixmap(int(w * dpr), int(h * dpr))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.GlobalColor.transparent)
 
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
-        painter.restore()
+        bp = QPainter(pix)
+        bp.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        rect = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
         radius = 0.0 if self.isMaximized() else 12.0
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
 
-        painter.fillPath(path, self.theme.mist_white)
+        bp.fillPath(path, self._bg_col_cur)
 
-        ambient = QRadialGradient(QPointF(self.width() * 0.28, self.height() * 0.42), 520.0)
-        ambient.setColorAt(0.0, self.theme.sage_soft)
-        ambient.setColorAt(1.0, Qt.GlobalColor.transparent)
-        painter.fillPath(path, ambient)
+        # 封面自适应双核流光背景 (Ambient Mesh Glow，缓存在位图中避免每帧全屏径向渐变计算)
+        base_alpha = 28 if self.theme.name == "daylight" else 36
+        c1 = QColor(self._amb1_cur)
+        c1.setAlpha(base_alpha)
+        orb1 = QRadialGradient(QPointF(w * 0.28, h * 0.40), 500.0)
+        orb1.setColorAt(0.0, c1)
+        orb1.setColorAt(1.0, Qt.GlobalColor.transparent)
+        bp.fillPath(path, orb1)
+
+        c2 = QColor(self._amb2_cur)
+        c2.setAlpha(int(round(base_alpha * 0.78)))
+        orb2 = QRadialGradient(QPointF(w * 0.72, h * 0.62), 440.0)
+        orb2.setColorAt(0.0, c2)
+        orb2.setColorAt(1.0, Qt.GlobalColor.transparent)
+        bp.fillPath(path, orb2)
+        bp.end()
+
+        self._cached_bg_pixmap = pix
+        self._bg_dirty = False
+
+    def paintEvent(self, event) -> None:
+        dpr = max(1.0, self.devicePixelRatioF())
+        if (
+            self._bg_dirty
+            or self._cached_bg_pixmap is None
+            or self._cached_bg_pixmap.width() != int(self.width() * dpr)
+            or self._cached_bg_pixmap.height() != int(self.height() * dpr)
+        ):
+            self._rebuild_bg_cache()
+
+        dirty = event.rect()
+        painter = QPainter(self)
+        painter.setClipRect(dirty)
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(dirty, Qt.GlobalColor.transparent)
+        painter.restore()
+
+        if self._cached_bg_pixmap is not None:
+            painter.drawPixmap(0, 0, self._cached_bg_pixmap)

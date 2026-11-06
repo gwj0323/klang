@@ -1,38 +1,33 @@
-"""
-Nordic Minimalist × WinUI 3 Qt6 Design System Palette
-色彩规范：采用低饱和度自然冷色调与大地色系（晨雾白、浅桦木、炭黑、板岩灰、灰鼠尾草绿），严禁高饱和霓虹渐变。
-"""
-
 from dataclasses import dataclass
+from typing import Dict, List, Tuple
 from PyQt6.QtGui import QColor, QFont, QFontDatabase
 
 
 @dataclass(frozen=True)
 class NordicThemeColors:
     name: str
-    mist_white: QColor          # 主窗口底层 (Mica Base)
-    warm_birch: QColor          # 次级暖白/浅桦木底色
-    oat_surface: QColor         # Acrylic 磨砂浮层底色
-    card_elevated: QColor       # 悬浮卡片底色
-    subtle_hover: QColor        # WinUI 3 Subtle Fill Hover
-    subtle_active: QColor       # WinUI 3 Subtle Fill Pressed
+    mist_white: QColor
+    warm_birch: QColor
+    oat_surface: QColor
+    card_elevated: QColor
+    subtle_hover: QColor
+    subtle_active: QColor
 
-    charcoal: QColor            # 炭黑：主标题与当前高亮歌词色
-    slate_dark: QColor          # 深板岩灰：副标题与控制图标
-    slate_muted: QColor         # 板岩灰：未激活歌词基准色與次要信息
-    slate_faint: QColor         # 浅板岩：时间戳与辅助刻度
+    charcoal: QColor
+    slate_dark: QColor
+    slate_muted: QColor
+    slate_faint: QColor
 
-    sage_accent: QColor         # 灰鼠尾草绿：唯一克制强调色
-    sage_soft: QColor           # 鼠尾草柔光底衬
-    sage_border: QColor         # 鼠尾草细描边
-    wood_warm: QColor           # 浅木色装饰点缀
+    sage_accent: QColor
+    sage_soft: QColor
+    sage_border: QColor
+    wood_warm: QColor
 
-    stroke_outer: QColor        # 1px 超细外边框
-    stroke_inner: QColor        # 1px 顶边内侧微高光
-    divider: QColor             # 区域分割超细线
+    stroke_outer: QColor
+    stroke_inner: QColor
+    divider: QColor
 
 
-# 北欧晨雾白主题 (Scandinavian Daylight)
 DAYLIGHT_THEME = NordicThemeColors(
     name="daylight",
     mist_white=QColor("#F6F5F1"),
@@ -54,7 +49,6 @@ DAYLIGHT_THEME = NordicThemeColors(
     divider=QColor(38, 41, 46, 16),
 )
 
-# 北欧峡湾极夜主题 (Nordic Fjord Dusk - 同样严守低饱和自然冷色调)
 DUSK_THEME = NordicThemeColors(
     name="dusk",
     mist_white=QColor("#1C1F23"),
@@ -76,13 +70,18 @@ DUSK_THEME = NordicThemeColors(
     divider=QColor(255, 255, 255, 15),
 )
 
+_CACHED_FAMILIES_SANS: List[str] = []
+_CACHED_FAMILIES_MONO: List[str] = []
+_FONT_CACHE: Dict[Tuple[int, int, bool], QFont] = {}
 
-def get_nordic_font(
-    pixel_size: int = 14,
-    weight: QFont.Weight = QFont.Weight.Normal,
-    mono: bool = False,
-) -> QFont:
-    """获取极简几何无衬线字体（配置中英文混合回退链与清晰抗锯齿渲染策略）"""
+
+def _resolve_ordered_families(mono: bool) -> List[str]:
+    global _CACHED_FAMILIES_SANS, _CACHED_FAMILIES_MONO
+    if mono and _CACHED_FAMILIES_MONO:
+        return _CACHED_FAMILIES_MONO
+    if not mono and _CACHED_FAMILIES_SANS:
+        return _CACHED_FAMILIES_SANS
+
     available = set(QFontDatabase.families())
     if mono:
         candidates = [
@@ -102,21 +101,41 @@ def get_nordic_font(
             "PingFang SC",
         ]
 
-    ordered_families = [c for c in candidates if c in available]
-    if not ordered_families:
-        ordered_families = ["Microsoft YaHei UI", "Segoe UI", "Sans Serif"]
+    ordered = [c for c in candidates if c in available]
+    if not ordered:
+        ordered = ["Microsoft YaHei UI", "Segoe UI", "Sans Serif"]
+
+    if mono:
+        _CACHED_FAMILIES_MONO = ordered
+    else:
+        _CACHED_FAMILIES_SANS = ordered
+    return ordered
+
+
+def get_nordic_font(
+    pixel_size: int = 14,
+    weight: QFont.Weight = QFont.Weight.Normal,
+    mono: bool = False,
+) -> QFont:
+    px = max(8, int(pixel_size))
+    w_val = int(weight.value) if hasattr(weight, "value") else int(weight)
+    key = (px, w_val, bool(mono))
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return QFont(cached)
+
+    ordered_families = _resolve_ordered_families(bool(mono))
 
     font = QFont(ordered_families[0])
     font.setFamilies(ordered_families)
-    font.setPixelSize(max(8, int(pixel_size)))
+    font.setPixelSize(px)
     font.setWeight(weight)
     font.setStyleStrategy(
         QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
     )
-    # 小字号 UI 控件使用系统垂直微调保证笔画横平竖直，大字号歌词同样保持清晰垂直对齐
-    if pixel_size <= 15:
+    if px <= 15:
         font.setHintingPreference(QFont.HintingPreference.PreferDefaultHinting)
     else:
         font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
-    return font
-
+    _FONT_CACHE[key] = font
+    return QFont(font)

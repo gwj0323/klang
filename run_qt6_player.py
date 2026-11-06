@@ -1,10 +1,7 @@
-"""
-KLANG · Nordic Minimalist WinUI 3 Music Player (Qt6 Edition)
-启动入口脚本：直接运行 `py run_qt6_player.py` 即可启动原生 Qt6 桌面应用。
-"""
-
 import sys
+from pathlib import Path
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from qt6_player.main_window import NordicWinUI3Window
@@ -16,9 +13,6 @@ def main() -> int:
     )
     app = QApplication(sys.argv)
     app.setApplicationName("Klang")
-
-    from pathlib import Path
-    from PyQt6.QtGui import QIcon
 
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         base_dir = Path(sys._MEIPASS)

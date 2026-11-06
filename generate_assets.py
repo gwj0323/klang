@@ -4,17 +4,14 @@ from PIL import Image
 assets_dir = Path("qt6_player/assets")
 assets_dir.mkdir(parents=True, exist_ok=True)
 
-# 1. Overwrite klang_icon.png with pure master
 pure_img = Image.open(assets_dir / "klang_icon_pure.png")
 pure_img.save(assets_dir / "klang_icon.png", format="PNG")
 print("Saved klang_icon.png (512x512)")
 
-# 2. Generate multi-resolution .ico for Windows
 ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 pure_img.save(assets_dir / "klang_icon.ico", format="ICO", sizes=ico_sizes)
 print("Saved klang_icon.ico (16~256px)")
 
-# 3. Generate SVG file with exact matching vectors
 svg_content = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="fjordSlate" x1="0%" y1="0%" x2="100%" y2="100%">

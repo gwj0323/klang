@@ -1,12 +1,4 @@
-"""
-左侧播放列表与音乐库管理面板 (Qt6)
-支持：
-1. 全部音乐 / 我喜欢 分组切换（带滑动胶囊指示器 + 列表切换平滑缓动过渡）
-2. 自定义 WinUI 3 矢量搜索过滤框 (歌名 / 歌手 / 专辑)
-3. 单曲矢量红心收藏切换、平滑弹出右键菜单 (WinUIFlyoutMenu)
-4. 底部单一下拉/弹出式「导入音乐」入口（彻底消除重复与杂乱按钮）
-"""
-
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -17,6 +9,7 @@ from PyQt6.QtCore import (
     QRectF,
     QPointF,
     QPoint,
+    QTimer,
     QVariantAnimation,
     QEasingCurve,
 )
@@ -37,6 +30,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QFrame,
+    QLabel,
+    QLineEdit,
 )
 
 from qt6_player.data.tracks import NordicTrack, format_timecode
@@ -46,12 +41,93 @@ from qt6_player.components.fluent_widgets import (
     WinUISegmentedControl,
     WinUISearchBox,
     WinUIFlyoutMenu,
+    WinUIModalDialog,
 )
+
+
+class TrackMetadataDialog(WinUIModalDialog):
+    metadataSaved = pyqtSignal(str, str, str)
+
+    def __init__(
+        self,
+        track: NordicTrack,
+        theme: NordicThemeColors = DAYLIGHT_THEME,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__("编辑曲目信息", 420, 296, theme=theme, parent=parent)
+        self.track = track
+        self._setup_body()
+
+    def _setup_body(self) -> None:
+        vbox = self._root_vbox
+        t = self.theme
+        input_style = f"""
+            QLineEdit {{
+                background-color: {t.card_elevated.name()};
+                color: {t.charcoal.name()};
+                border: 1px solid rgba({t.sage_accent.red()}, {t.sage_accent.green()}, {t.sage_accent.blue()}, 0.35);
+                border-radius: 6px;
+                padding: 6px 10px;
+            }}
+        """
+
+        def _make_field(label_txt: str, init_val: str) -> QLineEdit:
+            row = QVBoxLayout()
+            row.setSpacing(4)
+            lbl = QLabel(label_txt, self)
+            lbl.setFont(get_nordic_font(11, QFont.Weight.Medium))
+            lbl.setStyleSheet(f"color: {t.slate_muted.name()}; background: transparent;")
+            edit = QLineEdit(init_val, self)
+            edit.setFont(get_nordic_font(12))
+            edit.setStyleSheet(input_style)
+            row.addWidget(lbl)
+            row.addWidget(edit)
+            vbox.addLayout(row)
+            return edit
+
+        self.edit_title = _make_field("歌曲标题", self.track.title)
+        self.edit_artist = _make_field("歌手 / 艺术家", self.track.artist)
+        self.edit_album = _make_field("所属专辑", self.track.album or "")
+
+        vbox.addStretch(1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        btn_cancel = QPushButton("取消", self)
+        btn_cancel.setFixedSize(76, 30)
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setFont(get_nordic_font(12, QFont.Weight.Medium))
+        btn_cancel.setStyleSheet(
+            f"QPushButton {{ background: {t.oat_surface.name()}; color: {t.slate_dark.name()}; border-radius: 6px; border: 1px solid {t.stroke_outer.name()}; }}"
+        )
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_save = QPushButton("保存修改", self)
+        btn_save.setFixedSize(88, 30)
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        btn_save.setStyleSheet(
+            f"QPushButton {{ background: {t.sage_accent.name()}; color: #FAF9F6; border-radius: 6px; border: none; }}"
+        )
+        btn_save.clicked.connect(self._on_save)
+
+        btn_row.addWidget(btn_cancel)
+        btn_row.addSpacing(8)
+        btn_row.addWidget(btn_save)
+        vbox.addLayout(btn_row)
+
+    def _on_save(self) -> None:
+        new_title = self.edit_title.text().strip() or self.track.title
+        new_artist = self.edit_artist.text().strip() or "未知歌手"
+        new_album = self.edit_album.text().strip()
+        self.metadataSaved.emit(new_title, new_artist, new_album)
+        self.accept()
 
 
 class NavTrackItemButton(QPushButton):
     favoriteToggled = pyqtSignal(int)
     contextActionRequested = pyqtSignal(int, str)  # track_index, action_name
+    dragReorderRequested = pyqtSignal(int, int)    # from_index, to_index
 
     def __init__(
         self,
@@ -64,10 +140,15 @@ class NavTrackItemButton(QPushButton):
         self.index = index
         self.track = track
         self.is_selected = selected
+        self.is_playing = False
+        self.eq_phase: float = 0.0
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self._thumb_pixmap: Optional[QPixmap] = None
         self._hover_alpha: float = 0.0
         self._reveal_progress: float = 1.0
+        self._fav_scale: float = 1.0
+        self._press_y: Optional[float] = None
+        self._dragging_item: bool = False
 
         self.setFixedHeight(52)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -78,11 +159,28 @@ class NavTrackItemButton(QPushButton):
         self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._hover_anim.valueChanged.connect(self._on_hover_val)
 
+        self._fav_anim = QVariantAnimation(self)
+        self._fav_anim.setDuration(260)
+        fav_curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        fav_curve.setOvershoot(2.6)
+        self._fav_anim.setEasingCurve(fav_curve)
+        self._fav_anim.valueChanged.connect(self._on_fav_scale)
+
         self.refresh_thumbnail()
 
     def _on_hover_val(self, val: float) -> None:
         self._hover_alpha = float(val)
         self.update()
+
+    def _on_fav_scale(self, val: float) -> None:
+        self._fav_scale = float(val)
+        self.update()
+
+    def trigger_fav_bounce(self) -> None:
+        self._fav_anim.stop()
+        self._fav_anim.setStartValue(0.58)
+        self._fav_anim.setEndValue(1.0)
+        self._fav_anim.start()
 
     def set_reveal_progress(self, prog: float) -> None:
         self._reveal_progress = max(0.0, min(1.0, float(prog)))
@@ -105,10 +203,15 @@ class NavTrackItemButton(QPushButton):
     def refresh_thumbnail(self) -> None:
         self._thumb_pixmap = None
         pix = QPixmap()
-        if self.track.cover_bytes and pix.loadFromData(self.track.cover_bytes):
-            self._thumb_pixmap = pix
-        elif self.track.cover_path and pix.load(self.track.cover_path):
-            self._thumb_pixmap = pix
+        if (self.track.cover_bytes and pix.loadFromData(self.track.cover_bytes)) or (
+            self.track.cover_path and pix.load(self.track.cover_path)
+        ):
+            self._thumb_pixmap = pix.scaled(
+                72,
+                72,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
@@ -126,15 +229,38 @@ class NavTrackItemButton(QPushButton):
         if event.button() == Qt.MouseButton.LeftButton:
             if self._fav_rect().adjusted(-3, -3, 3, 3).contains(event.position()):
                 self.track.is_favorite = not self.track.is_favorite
+                self.trigger_fav_bounce()
                 self.favoriteToggled.emit(self.index)
                 self.update()
                 event.accept()
                 return
+            self._press_y = event.position().y()
+            self._dragging_item = False
         elif event.button() == Qt.MouseButton.RightButton:
             self._show_context_menu(event.globalPosition().toPoint())
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._press_y is not None and (event.buttons() & Qt.MouseButton.LeftButton):
+            dy = event.position().y() - self._press_y
+            if abs(dy) >= 34.0:
+                step = int(round(dy / 54.0))
+                if step != 0:
+                    self._dragging_item = True
+                    self.dragReorderRequested.emit(self.index, self.index + step)
+                    self._press_y = event.position().y()
+                    return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._press_y = None
+        if self._dragging_item:
+            self._dragging_item = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
         fav_label = "取消喜欢收藏" if self.track.is_favorite else "添加到「我喜欢」"
@@ -144,6 +270,7 @@ class NavTrackItemButton(QPushButton):
             ("fav", fav_icon, fav_label),
             ("scrape", "sparkle", "在线匹配歌词与封面"),
             ("import_lrc", "lrc", "加载本地 LRC 歌词"),
+            ("edit_tags", "edit", "编辑曲目信息"),
         ]
         if self.track.file_path and Path(self.track.file_path).exists():
             items.append(("open_dir", "folder", "在文件夹中显示"))
@@ -156,6 +283,7 @@ class NavTrackItemButton(QPushButton):
     def _on_ctx_action(self, act: str) -> None:
         if act == "fav":
             self.track.is_favorite = not self.track.is_favorite
+            self.trigger_fav_bounce()
             self.favoriteToggled.emit(self.index)
             self.update()
         elif act == "open_dir":
@@ -168,11 +296,12 @@ class NavTrackItemButton(QPushButton):
             self.contextActionRequested.emit(self.index, act)
 
     def paintEvent(self, event) -> None:
+        dirty = event.rect()
         painter = QPainter(self)
+        painter.setClipRect(dirty)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # Tab 切换时的丝滑纵向位移与淡入动效
         painter.setOpacity(self._reveal_progress)
         slide_y = (1.0 - self._reveal_progress) * 10.0
         painter.translate(0.0, slide_y)
@@ -215,9 +344,33 @@ class NavTrackItemButton(QPushButton):
             painter.setPen(QPen(self.theme.stroke_outer, 1.0))
             painter.drawPath(swatch_path)
 
-            painter.setPen(QColor(self.track.palette["ink"]))
-            painter.setFont(get_nordic_font(11, QFont.Weight.DemiBold, mono=True))
-            painter.drawText(swatch_rect, int(Qt.AlignmentFlag.AlignCenter), f"{self.index + 1:02d}")
+            if not (self.is_selected and self.is_playing):
+                painter.setPen(QColor(self.track.palette["ink"]))
+                painter.setFont(get_nordic_font(11, QFont.Weight.DemiBold, mono=True))
+                painter.drawText(swatch_rect, int(Qt.AlignmentFlag.AlignCenter), f"{self.index + 1:02d}")
+
+        # 正在播放曲目：绘制动态跳动三柱小音轨指示器 (Now Playing Equalizer Bars)
+        if self.is_selected and self.is_playing:
+            painter.save()
+            painter.setClipPath(swatch_path)
+            ov_col = QColor(24, 27, 32, 145) if self._thumb_pixmap is not None else QColor(self.theme.sage_soft)
+            painter.fillPath(swatch_path, ov_col)
+            bar_color = QColor("#FAF9F6") if self._thumb_pixmap is not None else self.theme.sage_accent
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(bar_color)
+            base_y = swatch_rect.bottom() - 7.0
+            cx_s = swatch_rect.center().x()
+            phases = (0.0, 2.1, 4.2)
+            offsets = (-6.0, 0.0, 6.0)
+            for bx_off, ph in zip(offsets, phases):
+                ratio = 0.28 + 0.72 * (0.5 + 0.5 * math.sin(self.eq_phase + ph))
+                bh = 4.0 + ratio * 13.0
+                b_rect = QRectF(cx_s + bx_off - 1.4, base_y - bh, 2.8, bh)
+                painter.drawRoundedRect(b_rect, 1.3, 1.3)
+            painter.restore()
+
+        if dirty.right() <= 50:
+            return
 
         # 标题与歌手
         text_left = 53.0
@@ -247,10 +400,15 @@ class NavTrackItemButton(QPushButton):
             elided_artist,
         )
 
-        # 矢量心形收藏图标（已收藏或鼠标移入时显示）
+        # 矢量心形收藏图标（带点击心跳缩放动效）
         if self.track.is_favorite or self._hover_alpha > 0.1:
             fav_r = self._fav_rect()
             ic_col = self.theme.sage_accent if self.track.is_favorite else self.theme.slate_faint
+            painter.save()
+            fc = fav_r.center()
+            painter.translate(fc)
+            painter.scale(self._fav_scale, self._fav_scale)
+            painter.translate(-fc)
             draw_nordic_icon(
                 painter,
                 "heart_filled" if self.track.is_favorite else "heart_outline",
@@ -258,6 +416,7 @@ class NavTrackItemButton(QPushButton):
                 ic_col,
                 stroke_w=1.35,
             )
+            painter.restore()
 
         # 右侧时长
         painter.setPen(self.theme.slate_faint)
@@ -274,7 +433,6 @@ class UnifiedImportSplitButton(QPushButton):
     单一整洁的 WinUI 3 音乐导入分割按钮 (Split Button)
     左侧主区域点击：直接添加本地音频文件
     右侧下拉箭头点击：弹出平滑动画菜单（添加音乐文件 / 扫描音乐文件夹 / 导入本地 LRC 歌词）
-    彻底解决「导入音乐按钮重复」与底部按钮堆砌问题。
     """
 
     importFilesClicked = pyqtSignal()
@@ -341,7 +499,6 @@ class UnifiedImportSplitButton(QPushButton):
         painter.setPen(QPen(border, 1.0))
         painter.drawPath(path)
 
-        # 右侧分割线与下拉箭头
         split_x = self.width() - 34.0
         painter.setPen(QPen(self.theme.divider, 1.0))
         painter.drawLine(QPointF(split_x, 7.0), QPointF(split_x, self.height() - 7.0))
@@ -376,6 +533,7 @@ class NavigationPane(QWidget):
     trackSelected = pyqtSignal(int)
     favoriteChanged = pyqtSignal(int)
     trackActionRequested = pyqtSignal(int, str)
+    trackReordered = pyqtSignal(int, int)  # from_idx, to_idx
     importFilesRequested = pyqtSignal()
     importFolderRequested = pyqtSignal()
     importLrcRequested = pyqtSignal()
@@ -386,6 +544,8 @@ class NavigationPane(QWidget):
         super().__init__(parent)
         self.tracks = tracks
         self.active_index: int = 0
+        self.is_playing: bool = False
+        self._eq_phase: float = 0.0
         self.filter_favorites_only: bool = False
         self.search_keyword: str = ""
         self.theme: NordicThemeColors = DAYLIGHT_THEME
@@ -454,8 +614,34 @@ class NavigationPane(QWidget):
         self._list_reveal_anim.setEasingCurve(QEasingCurve.Type.OutQuint)
         self._list_reveal_anim.valueChanged.connect(self._on_list_reveal_val)
 
+        # 正在播放曲目小音轨跳动定时器
+        self._eq_timer = QTimer(self)
+        self._eq_timer.setInterval(55)
+        self._eq_timer.timeout.connect(self._step_eq_bars)
+
         self.rebuild_list(tracks, active_index=0)
         self.set_theme(DAYLIGHT_THEME)
+
+    def _step_eq_bars(self) -> None:
+        if not self.isVisible():
+            return
+        self._eq_phase = (self._eq_phase + 0.38) % (math.pi * 2.0)
+        if 0 <= self.active_index < len(self.item_buttons):
+            btn = self.item_buttons[self.active_index]
+            btn.eq_phase = self._eq_phase
+            if btn.isVisible():
+                btn.update(11, int(btn.height() / 2 - 18), 36, 36)
+
+    def set_playing_state(self, is_playing: bool) -> None:
+        self.is_playing = bool(is_playing)
+        for i, btn in enumerate(self.item_buttons):
+            btn.is_playing = self.is_playing and (i == self.active_index)
+            btn.update()
+        if self.is_playing:
+            if not self._eq_timer.isActive():
+                self._eq_timer.start()
+        else:
+            self._eq_timer.stop()
 
     def _open_import_flyout(self, global_pos: QPoint) -> None:
         items = [
@@ -481,7 +667,6 @@ class NavigationPane(QWidget):
         total = len(visible_btns)
         if total == 0:
             return
-        # 非线性级联错峰入场 (Staggered Non-linear Cascade)
         for i, btn in enumerate(visible_btns):
             stagger = (min(i, 10) / 10.0) * 0.36
             sub_p = max(0.0, min(1.0, (p - stagger) / max(0.01, 1.0 - stagger)))
@@ -533,15 +718,24 @@ class NavigationPane(QWidget):
         self.item_buttons.clear()
         for idx, track in enumerate(tracks):
             btn = NavTrackItemButton(idx, track, selected=(idx == active_index), parent=self.list_container)
+            btn.is_playing = self.is_playing and (idx == active_index)
             btn.set_theme(self.theme)
             btn.clicked.connect(lambda checked=False, i=idx: self._on_item_clicked(i))
             btn.favoriteToggled.connect(self._on_item_fav_toggled)
             btn.contextActionRequested.connect(self.trackActionRequested.emit)
+            btn.dragReorderRequested.connect(self._on_drag_reorder)
             self.list_vbox.addWidget(btn)
             self.item_buttons.append(btn)
 
         self.list_vbox.addStretch(1)
         self._apply_visibility_filter()
+
+    def _on_drag_reorder(self, from_idx: int, to_idx: int) -> None:
+        if self.filter_favorites_only or self.search_keyword:
+            return
+        clamped_to = max(0, min(len(self.tracks) - 1, to_idx))
+        if clamped_to != from_idx:
+            self.trackReordered.emit(from_idx, clamped_to)
 
     def _on_item_fav_toggled(self, index: int) -> None:
         self._apply_visibility_filter()
@@ -561,6 +755,7 @@ class NavigationPane(QWidget):
         self.active_index = index
         for i, btn in enumerate(self.item_buttons):
             btn.set_selected(i == index)
+            btn.is_playing = self.is_playing and (i == index)
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme

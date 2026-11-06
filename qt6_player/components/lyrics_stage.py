@@ -1,16 +1,3 @@
-"""
-滚动歌词核心组件 (Qt6 Offscreen Alpha-Masked QPainter + Staggered Spring Physics Engine)
-功能特性：
-1. 连续阻尼弹簧物理引擎 + 逐行错峰级联惯性 (Staggered Spring Cascade)：
-   告别生硬整块平移，当前行领航滚动、相邻行带柔和物理惯性依次跟随，中途切行或滚轮滑动均保持连续速度。
-2. 当前高亮行 (Active)：微量放大 scale(1.03)，透明度从 0.35 平滑过渡到 1.0，带柔和呼吸偏移。
-3. 边缘羽化：使用 QPainter.CompositionMode_DestinationIn 叠加顶底线性渐变遮罩 (复刻 mask-image)。
-4. 逐字柔光推进：采用带边缘柔化渐变的字重与透明度过渡，避免生硬切边与俗气 KTV 变色。
-5. 字号无级可调：支持 14px ~ 32px 实时调节（顶部 A-/A+ 按钮或按住 Ctrl + 鼠标滚轮）。
-6. 译文显示开关、左对齐/居中对齐切换、歌词时间轴偏移微调 (-0.5s / +0.5s)。
-7. 点击任意一行歌词立即丝滑跳转到对应时刻。
-"""
-
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -47,7 +34,6 @@ from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, g
 class LineVisualState:
     y_top: float = 0.0
     height: float = 78.0
-    # 每行独立弹簧物理位置与速度，实现错峰级联丝滑滚动
     visual_y: float = 0.0
     vel_y: float = 0.0
     current_scale: float = 1.0
@@ -62,10 +48,10 @@ class LineVisualState:
 
 
 class LyricsStage(QWidget):
-    seekRequested = pyqtSignal(float)        # 点击任意歌词行触发跳转秒数
-    activeLineChanged = pyqtSignal(object)   # 当前激活 LyricLine 变更
-    fontSizeChanged = pyqtSignal(int)        # 歌词字号变更通知 (14 ~ 32)
-    lyricOffsetChanged = pyqtSignal(float)   # 歌词偏移变更通知
+    seekRequested = pyqtSignal(float)
+    activeLineChanged = pyqtSignal(object)
+    fontSizeChanged = pyqtSignal(int)
+    lyricOffsetChanged = pyqtSignal(float)
 
     MIN_FONT_SIZE = 14
     MAX_FONT_SIZE = 32
@@ -110,6 +96,10 @@ class LyricsStage(QWidget):
         # 屏幕刷新率动态自适应物理与视觉插值驱动器 (60Hz / 90Hz / 120Hz / 144Hz / 165Hz / 240Hz+)
         self.screen_refresh_rate: float = 60.0
         self._screen_signals_connected: bool = False
+        self._buffer_img: Optional[QImage] = None
+        self._last_painted_prog: float = -1.0
+        self._idle_ticks: int = 0
+        self._springs_active: bool = True
         self._phys_clock = QElapsedTimer()
         self._phys_clock.start()
         self._motion_timer = QTimer(self)
@@ -117,6 +107,14 @@ class LyricsStage(QWidget):
         self._motion_timer.timeout.connect(self._step_spring_physics)
         self._update_refresh_rate()
         self._motion_timer.start()
+
+    def _wake_physics(self, wake_springs: bool = True) -> None:
+        self._idle_ticks = 0
+        if wake_springs:
+            self._springs_active = True
+        if not self._motion_timer.isActive():
+            self._phys_clock.restart()
+            self._motion_timer.start()
 
     def _detect_screen_refresh_rate(self) -> float:
         screen: Optional[QScreen] = None
@@ -148,7 +146,10 @@ class LyricsStage(QWidget):
     def _on_screen_changed(self, new_screen: Optional[QScreen]) -> None:
         if new_screen is not None:
             try:
-                new_screen.refreshRateChanged.connect(self._on_refresh_rate_changed)
+                new_screen.refreshRateChanged.connect(
+                    self._on_refresh_rate_changed,
+                    Qt.ConnectionType.UniqueConnection,
+                )
             except Exception:
                 pass
             self._update_refresh_rate(new_screen.refreshRate())
@@ -169,7 +170,10 @@ class LyricsStage(QWidget):
                 scr = wh.screen()
                 if scr is not None:
                     try:
-                        scr.refreshRateChanged.connect(self._on_refresh_rate_changed)
+                        scr.refreshRateChanged.connect(
+                            self._on_refresh_rate_changed,
+                            Qt.ConnectionType.UniqueConnection,
+                        )
                     except Exception:
                         pass
         self._update_refresh_rate()
@@ -240,6 +244,7 @@ class LyricsStage(QWidget):
         self.active_index = -1
         self.hovered_index = -1
         self.current_time = 0.0
+        self._last_painted_prog = -1.0
         self.user_scrolling = False
         self._user_scroll_timer.stop()
 
@@ -251,7 +256,7 @@ class LyricsStage(QWidget):
         for i, st in enumerate(self.visual_states):
             st.visual_y = st.y_top + min(36.0, (i + 1) * 6.5)
             st.vel_y = 0.0
-        self._phys_clock.restart()
+        self._wake_physics()
         self.update()
 
     def _recalculate_layout(self, snap_immediately: bool = False) -> None:
@@ -276,6 +281,7 @@ class LyricsStage(QWidget):
                 st.visual_y = y_cursor
                 st.vel_y = 0.0
             y_cursor += row_height + max(8.0, round(self.lyric_font_size * 0.42))
+        self._wake_physics()
 
     def center_line_smoothly(self, line_index: int, immediate: bool = False, duration_ms: int = 560) -> None:
         if not (0 <= line_index < len(self.visual_states)):
@@ -283,6 +289,7 @@ class LyricsStage(QWidget):
         st = self.visual_states[line_index]
         target_y = st.y_top + st.height / 2.0
         self.scroll_target_y = target_y
+        self._wake_physics()
 
         if immediate or duration_ms <= 0:
             self.scroll_y = target_y
@@ -305,8 +312,10 @@ class LyricsStage(QWidget):
             else:
                 break
 
-        if found != self.active_index:
+        line_changed = found != self.active_index
+        if line_changed:
             self.active_index = found
+            self._last_painted_prog = -1.0
             self._update_target_states()
             if source == "init":
                 for i, st in enumerate(self.visual_states):
@@ -318,11 +327,21 @@ class LyricsStage(QWidget):
             self.activeLineChanged.emit(self.lyrics[found])
 
             if not self.user_scrolling or source in ("seek", "init"):
+                if source == "seek":
+                    self.user_scrolling = False
+                    self._user_scroll_timer.stop()
                 self.center_line_smoothly(found, immediate=(source == "init"))
+        elif source == "seek":
+            self.user_scrolling = False
+            self._user_scroll_timer.stop()
+            self.center_line_smoothly(found, immediate=False)
 
-        self.update()
+        self._wake_physics(wake_springs=(line_changed or source != "tick"))
+        if source != "tick" or line_changed:
+            self.update()
 
     def _update_target_states(self) -> None:
+        self._wake_physics(wake_springs=True)
         for idx, st in enumerate(self.visual_states):
             dist = abs(idx - self.active_index)
             is_active = idx == self.active_index
@@ -355,86 +374,102 @@ class LyricsStage(QWidget):
                 st.target_x_offset = 0.0
 
     def _step_spring_physics(self) -> None:
-        """
-        60fps 临界阻尼弹簧求解器 (Critically-Damped Spring + Per-Row Cascade)
-        确保无论自动切行、点击跳转还是滚轮滑动，都具有连续的速度与波浪式行间级联感。
-        """
         raw_dt = self._phys_clock.restart() / 1000.0
-        # 动态自适应屏幕物理刷新率，覆盖 24Hz 到 360Hz 超高刷电竞与高阶 ProMotion 显示屏
         fallback_dt = 1.0 / max(30.0, getattr(self, "screen_refresh_rate", 60.0))
         dt = max(0.002, min(0.045, raw_dt if raw_dt > 0 else fallback_dt))
         needs_repaint = False
 
-        # 1. 全局视口中心位置阻尼弹簧 (omega = 9.8 rad/s, 临界阻尼平滑缓出)
-        omega_scroll = 9.8
-        disp = self.scroll_y - self.scroll_target_y
-        if abs(disp) > 0.08 or abs(self.scroll_vel) > 0.4:
-            accel = -(omega_scroll * omega_scroll) * disp - 2.0 * omega_scroll * self.scroll_vel
-            self.scroll_vel += accel * dt
-            self.scroll_y += self.scroll_vel * dt
-            needs_repaint = True
-        else:
-            self.scroll_y = self.scroll_target_y
-            self.scroll_vel = 0.0
+        if self._springs_active:
+            spring_moved = False
+            omega_scroll = 9.8
+            disp = self.scroll_y - self.scroll_target_y
+            if abs(disp) > 0.25 or abs(self.scroll_vel) > 1.2:
+                accel = -(omega_scroll * omega_scroll) * disp - 2.0 * omega_scroll * self.scroll_vel
+                self.scroll_vel += accel * dt
+                self.scroll_y += self.scroll_vel * dt
+                spring_moved = True
+            else:
+                self.scroll_y = self.scroll_target_y
+                self.scroll_vel = 0.0
 
-        # 2. 每一行的错峰级联弹簧 + 视觉属性平滑过渡
-        alpha_lerp = 1.0 - math.exp(-11.5 * dt)
-        active_idx = max(0, self.active_index)
+            alpha_lerp = 1.0 - math.exp(-11.5 * dt)
+            active_idx = max(0, self.active_index)
 
-        for idx, st in enumerate(self.visual_states):
-            # 距离当前激活行越远的行，弹簧固有频率略低，形成细腻的波浪跟随感
-            row_dist = min(6, abs(idx - active_idx))
-            omega_row = max(7.2, 13.5 - row_dist * 0.95)
-            # 当视口正在滚动时，给每行目标位置施加微小的惯性滞后偏移，产生手风琴级联弹性
-            cascade_lag = -self.scroll_vel * (0.008 * row_dist)
-            row_target_y = st.y_top + cascade_lag
+            for idx, st in enumerate(self.visual_states):
+                row_dist = min(6, abs(idx - active_idx))
+                omega_row = max(7.2, 13.5 - row_dist * 0.95)
+                cascade_lag = -self.scroll_vel * (0.008 * row_dist)
+                row_target_y = st.y_top + cascade_lag
 
-            dy = st.visual_y - row_target_y
-            if abs(dy) > 0.06 or abs(st.vel_y) > 0.3:
-                acc_y = -(omega_row * omega_row) * dy - 2.0 * omega_row * st.vel_y
-                st.vel_y += acc_y * dt
-                st.visual_y += st.vel_y * dt
+                dy = st.visual_y - row_target_y
+                if abs(dy) > 0.25 or abs(st.vel_y) > 1.2:
+                    acc_y = -(omega_row * omega_row) * dy - 2.0 * omega_row * st.vel_y
+                    st.vel_y += acc_y * dt
+                    st.visual_y += st.vel_y * dt
+                    spring_moved = True
+                else:
+                    st.visual_y = row_target_y
+                    st.vel_y = 0.0
+
+                ds = st.target_scale - st.current_scale
+                do = st.target_opacity - st.current_opacity
+                db = st.target_bg_alpha - st.current_bg_alpha
+                dx = st.target_x_offset - st.current_x_offset
+                target_pill = 1.0 if idx == self.active_index else 0.0
+                dp = target_pill - st.pill_scale
+
+                if (
+                    abs(ds) > 0.002
+                    or abs(do) > 0.006
+                    or abs(db) > 0.008
+                    or abs(dx) > 0.08
+                    or abs(dp) > 0.01
+                ):
+                    st.current_scale += ds * alpha_lerp
+                    st.current_opacity += do * alpha_lerp
+                    st.current_bg_alpha += db * alpha_lerp
+                    st.current_x_offset += dx * alpha_lerp
+                    st.pill_scale += dp * alpha_lerp
+                    spring_moved = True
+                else:
+                    st.current_scale = st.target_scale
+                    st.current_opacity = st.target_opacity
+                    st.current_bg_alpha = st.target_bg_alpha
+                    st.current_x_offset = st.target_x_offset
+                    st.pill_scale = target_pill
+
+            if spring_moved:
                 needs_repaint = True
             else:
-                st.visual_y = row_target_y
-                st.vel_y = 0.0
+                self._springs_active = False
 
-            ds = st.target_scale - st.current_scale
-            do = st.target_opacity - st.current_opacity
-            db = st.target_bg_alpha - st.current_bg_alpha
-            dx = st.target_x_offset - st.current_x_offset
-            target_pill = 1.0 if idx == self.active_index else 0.0
-            dp = target_pill - st.pill_scale
-
-            if (
-                abs(ds) > 0.0003
-                or abs(do) > 0.001
-                or abs(db) > 0.002
-                or abs(dx) > 0.02
-                or abs(dp) > 0.002
-            ):
-                st.current_scale += ds * alpha_lerp
-                st.current_opacity += do * alpha_lerp
-                st.current_bg_alpha += db * alpha_lerp
-                st.current_x_offset += dx * alpha_lerp
-                st.pill_scale += dp * alpha_lerp
-                needs_repaint = True
-            else:
-                st.current_scale = st.target_scale
-                st.current_opacity = st.target_opacity
-                st.current_bg_alpha = st.target_bg_alpha
-                st.current_x_offset = st.target_x_offset
-                st.pill_scale = target_pill
-
-        # 3. 逐字柔光羽化与间奏动效在歌曲播放区间的高刷连贯渲染
+        # 3. 逐字柔光羽化与间奏动效在歌曲播放区间的平滑渲染
+        syllable_only = False
         if self.syllable_mode and 0 <= self.active_index < len(self.lyrics):
             cur_line = self.lyrics[self.active_index]
             eff_t = max(0.0, self.current_time + self.lyric_offset)
             if cur_line.time <= eff_t <= cur_line.end_time + 0.15:
-                needs_repaint = True
+                prog = self._compute_line_progress_ratio(cur_line)
+                if abs(prog - self._last_painted_prog) > 0.006:
+                    self._last_painted_prog = prog
+                    if not needs_repaint:
+                        syllable_only = True
+                    needs_repaint = True
 
         if needs_repaint:
-            self.update()
+            self._idle_ticks = 0
+            if self.isVisible():
+                if syllable_only and 0 <= self.active_index < len(self.visual_states):
+                    st = self.visual_states[self.active_index]
+                    sy = int(self.height() / 2.0 + (st.visual_y - self.scroll_y) - 6.0)
+                    sh = int(st.height + 12.0)
+                    self.update(0, sy, self.width(), sh)
+                else:
+                    self.update()
+        else:
+            self._idle_ticks += 1
+            if self._idle_ticks > 8:
+                self._motion_timer.stop()
 
     def _compute_line_progress_ratio(self, line: LyricLine) -> float:
         eff_time = max(0.0, self.current_time + self.lyric_offset)
@@ -458,22 +493,42 @@ class LyricsStage(QWidget):
 
     def paintEvent(self, event) -> None:
         w, h = self.width(), self.height()
-        if w <= 10 or h <= 10 or not self.lyrics:
+        if w <= 10 or h <= 10:
+            return
+        if not self.lyrics:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            align_flag = Qt.AlignmentFlag.AlignHCenter if self.align_center else Qt.AlignmentFlag.AlignLeft
+            x_pad = 0.0 if self.align_center else 18.0
+            title_font = get_nordic_font(self.lyric_font_size, QFont.Weight.Medium)
+            sub_font = get_nordic_font(max(12, round(self.lyric_font_size * 0.65)), QFont.Weight.Normal)
+            painter.setFont(title_font)
+            painter.setPen(self.theme.slate_dark)
+            painter.drawText(
+                QRectF(x_pad, h / 2.0 - 28.0, w - 36.0, 32.0),
+                int(align_flag | Qt.AlignmentFlag.AlignVCenter),
+                "暂无播放曲目",
+            )
+            painter.setFont(sub_font)
+            painter.setPen(self.theme.slate_muted)
+            painter.drawText(
+                QRectF(x_pad, h / 2.0 + 8.0, w - 36.0, 26.0),
+                int(align_flag | Qt.AlignmentFlag.AlignVCenter),
+                "可通过左侧栏导入音乐文件、文件夹，或直接拖拽音频至此窗口",
+            )
             return
 
-        dpr = self.devicePixelRatioF()
-        buffer = QImage(
-            int(w * dpr),
-            int(h * dpr),
-            QImage.Format.Format_ARGB32_Premultiplied,
-        )
-        buffer.setDevicePixelRatio(dpr)
-        buffer.fill(Qt.GlobalColor.transparent)
+        dirty = event.rect()
+        dirty_top = float(dirty.top()) - 8.0
+        dirty_bottom = float(dirty.bottom()) + 8.0
 
-        bp = QPainter(buffer)
-        bp.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bp.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        bp.setRenderHint(QPainter.RenderHint.VerticalSubpixelPositioning)
+        main_painter = QPainter(self)
+        main_painter.setClipRect(dirty)
+        main_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        main_painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        main_painter.setRenderHint(QPainter.RenderHint.VerticalSubpixelPositioning)
+        bp = main_painter
 
         viewport_center_y = h / 2.0
         primary_line_h = round(self.lyric_font_size * 1.68)
@@ -481,20 +536,35 @@ class LyricsStage(QWidget):
         sub_line_h = round(sub_font_size * 1.65)
         pad_v = round(self.lyric_font_size * 0.62)
 
+        active_font = get_nordic_font(self.lyric_font_size + 1, QFont.Weight.DemiBold)
+        inactive_font = get_nordic_font(self.lyric_font_size, QFont.Weight.Medium)
+        active_fm = QFontMetricsF(active_font)
+        inactive_fm = QFontMetricsF(inactive_font)
+        sub_font = get_nordic_font(sub_font_size, QFont.Weight.Normal)
+        sub_fm = QFontMetricsF(sub_font)
+
         align_flag = Qt.AlignmentFlag.AlignHCenter if self.align_center else Qt.AlignmentFlag.AlignLeft
+        fade_zone = max(24.0, h * 0.20)
 
         for idx, line in enumerate(self.lyrics):
             st = self.visual_states[idx]
             screen_y = viewport_center_y + (st.visual_y - self.scroll_y)
 
-            if screen_y + st.height < -60 or screen_y > h + 60:
+            if screen_y + st.height < max(-40.0, dirty_top) or screen_y > min(h + 40.0, dirty_bottom):
                 continue
-
-            bp.save()
-            bp.setOpacity(st.current_opacity)
 
             anchor_x = (w / 2.0) if self.align_center else 18.0
             anchor_y = screen_y + st.height / 2.0
+
+            # 顶底 20% 区域平滑边缘羽化衰减（无需全屏离屏 QImage 与 DestinationIn 混合开销）
+            edge_t = min(1.0, max(0.0, anchor_y / fade_zone), max(0.0, (h - anchor_y) / fade_zone))
+            edge_fade = edge_t * edge_t * (3.0 - 2.0 * edge_t)
+            eff_opacity = st.current_opacity * edge_fade
+            if eff_opacity <= 0.01:
+                continue
+
+            bp.save()
+            bp.setOpacity(eff_opacity)
 
             row_rect = QRectF(10.0, screen_y, w - 46.0, st.height)
 
@@ -530,13 +600,7 @@ class LyricsStage(QWidget):
             max_text_w = max(80.0, w - text_left - 96.0)
             is_active = idx == self.active_index
 
-            # 文字缩放：仅在激活或悬停存在微缩放时启用平滑浮点字号/变换，确保未激活歌词 100% 像素级锐利
-            bp.save()
-            if abs(st.current_scale - 1.0) > 0.001:
-                bp.translate(anchor_x + st.current_x_offset, anchor_y)
-                bp.scale(st.current_scale, st.current_scale)
-                bp.translate(-(anchor_x + st.current_x_offset), -anchor_y)
-
+            # 保持 1:1 矩阵变换以命中 Qt6 DirectWrite 硬件字形位图缓存，大幅降低 CPU 矢量光栅化开销
             if line.is_interlude:
                 ratio = self._compute_line_progress_ratio(line) if is_active else 0.0
                 base_x = (w / 2.0 - 16.0) if self.align_center else (text_left + 8.0)
@@ -549,12 +613,12 @@ class LyricsStage(QWidget):
                     bp.setBrush(dot_col)
                     bp.drawEllipse(QPointF(base_x + d_i * 16.0, screen_y + st.height / 2.0), dot_r, dot_r)
             else:
-                base_weight = QFont.Weight.DemiBold if is_active else QFont.Weight.Medium
-                primary_font = get_nordic_font(self.lyric_font_size, base_weight)
+                primary_font = active_font if is_active else inactive_font
+                fm = active_fm if is_active else inactive_fm
                 bp.setFont(primary_font)
-                fm = QFontMetricsF(primary_font)
                 primary_rect = QRectF(text_left, screen_y + pad_v, max_text_w, float(primary_line_h))
                 elided_main = fm.elidedText(line.text, Qt.TextElideMode.ElideRight, max_text_w)
+                text_flags = int(align_flag | Qt.AlignmentFlag.AlignVCenter)
 
                 if is_active and self.syllable_mode:
                     prog = self._compute_line_progress_ratio(line)
@@ -564,38 +628,26 @@ class LyricsStage(QWidget):
                         if self.align_center
                         else text_left
                     )
-                    # 使用带 18px 柔化过渡带的水平渐变画笔渲染逐字柔光推进（告别生硬矩形裁切）
-                    wipe_grad = QLinearGradient(start_x, 0.0, start_x + actual_text_w, 0.0)
-                    lit_col = QColor(self.theme.charcoal)
                     unlit_col = QColor(self.theme.charcoal)
-                    unlit_col.setAlphaF(0.54)
+                    unlit_col.setAlphaF(0.52)
+                    bp.setPen(unlit_col)
+                    bp.drawText(primary_rect, text_flags, elided_main)
 
-                    feather = 0.06
-                    p_left = max(0.0, min(1.0, prog - feather * 0.5))
-                    p_right = max(0.0, min(1.0, prog + feather * 0.5))
-                    wipe_grad.setColorAt(0.0, lit_col)
-                    wipe_grad.setColorAt(p_left, lit_col)
-                    wipe_grad.setColorAt(p_right, unlit_col)
-                    wipe_grad.setColorAt(1.0, unlit_col)
-
-                    bp.setPen(QPen(QBrush(wipe_grad), 1.0))
-                    bp.drawText(
-                        primary_rect,
-                        int(align_flag | Qt.AlignmentFlag.AlignVCenter),
-                        elided_main,
-                    )
+                    if prog > 0.005:
+                        bp.save()
+                        bp.setClipRect(
+                            QRectF(start_x, primary_rect.top(), actual_text_w * prog, primary_rect.height()),
+                            Qt.ClipOperation.IntersectClip,
+                        )
+                        bp.setPen(self.theme.charcoal)
+                        bp.drawText(primary_rect, text_flags, elided_main)
+                        bp.restore()
                 else:
                     bp.setPen(self.theme.charcoal)
-                    bp.drawText(
-                        primary_rect,
-                        int(align_flag | Qt.AlignmentFlag.AlignVCenter),
-                        elided_main,
-                    )
+                    bp.drawText(primary_rect, text_flags, elided_main)
 
             if line.sub and self.show_translation:
-                sub_font = get_nordic_font(sub_font_size, QFont.Weight.Normal)
                 bp.setFont(sub_font)
-                sub_fm = QFontMetricsF(sub_font)
                 bp.setPen(self.theme.slate_dark if is_active else self.theme.slate_muted)
                 sub_rect = QRectF(text_left, screen_y + pad_v + primary_line_h + 2.0, max_text_w, float(sub_line_h))
                 elided_sub = sub_fm.elidedText(line.sub, Qt.TextElideMode.ElideRight, max_text_w)
@@ -604,8 +656,6 @@ class LyricsStage(QWidget):
                     int(align_flag | Qt.AlignmentFlag.AlignVCenter),
                     elided_sub,
                 )
-
-            bp.restore()
 
             if idx == self.hovered_index:
                 badge_w, badge_h = 64.0, 24.0
@@ -631,22 +681,7 @@ class LyricsStage(QWidget):
                 )
 
             bp.restore()
-
-        # 上下边缘线性渐变遮罩 (CompositionMode_DestinationIn)
-        bp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        edge_mask = QLinearGradient(0.0, 0.0, 0.0, float(h))
-        edge_mask.setColorAt(0.00, QColor(0, 0, 0, 0))
-        edge_mask.setColorAt(0.08, QColor(0, 0, 0, 48))
-        edge_mask.setColorAt(0.20, QColor(0, 0, 0, 255))
-        edge_mask.setColorAt(0.80, QColor(0, 0, 0, 255))
-        edge_mask.setColorAt(0.92, QColor(0, 0, 0, 48))
-        edge_mask.setColorAt(1.00, QColor(0, 0, 0, 0))
-        bp.fillRect(0, 0, w, h, edge_mask)
-        bp.end()
-
-        main_painter = QPainter(self)
-        main_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        main_painter.drawImage(0, 0, buffer)
+        bp.setOpacity(1.0)
 
         # 鼠标在歌词区悬浮时，左下角显示微弱快捷微调胶囊 (词距 -0.5s / +0.5s / 对齐切换)
         self._hud_buttons.clear()
@@ -794,6 +829,7 @@ class LyricsStage(QWidget):
         self.scroll_target_y = max(min_y, min(max_y, self.scroll_target_y + delta_y))
         self.user_scrolling = True
         self._user_scroll_timer.start()
+        self._wake_physics()
         event.accept()
 
     def _resume_auto_center(self) -> None:

@@ -1,12 +1,3 @@
-"""
-在线歌词与专辑封面刮削服务 (Multi-Source Scraper Service)
-集成音源：
-1. 网易云音乐接口 (支持双语滚动 LRC 歌词 + 高清专辑封面)
-2. LRCLIB 开放歌词库接口 (全球曲目精准时间轴 LRC)
-3. Apple iTunes Search 接口 (600x600 官方高清专辑封面)
-支持后台自动静默刮削与手动搜索匹配弹窗，并支持将刮削到的 .lrc 自动保存至本地音频同目录。
-"""
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -193,37 +184,55 @@ def download_image_bytes(url: str) -> Optional[bytes]:
     return None
 
 
+_RUNNING_SCRAPER_THREADS: List[QThread] = []
+
+
+def _retain_thread(worker: QThread) -> None:
+    _RUNNING_SCRAPER_THREADS.append(worker)
+    worker.finished.connect(lambda w=worker: _RUNNING_SCRAPER_THREADS.remove(w) if w in _RUNNING_SCRAPER_THREADS else None)
+
+
 def save_scraped_files_alongside_audio(
     audio_file_path: Optional[str],
     primary_lrc: str,
     cover_bytes: Optional[bytes],
+    track_id: str = "",
+    overwrite: bool = False,
 ) -> Optional[str]:
-    """若为本地音频文件，将刮削到的 .lrc 歌词和同名封面保存到音频所在目录"""
-    if not audio_file_path:
-        return None
+    """若为本地音频文件，将刮削到的 .lrc 歌词和同名封面保存到音频所在目录；否则缓存封面至用户配置目录"""
     saved_cover_path: Optional[str] = None
-    try:
-        p = Path(audio_file_path)
-        if not p.parent.is_dir():
-            return None
-        if primary_lrc.strip():
-            lrc_path = p.parent / f"{p.stem}.lrc"
-            if not lrc_path.exists():
-                lrc_path.write_text(primary_lrc, encoding="utf-8")
-        if cover_bytes:
-            cov_path = p.parent / f"{p.stem}.jpg"
-            if not cov_path.exists():
-                cov_path.write_bytes(cover_bytes)
+    if audio_file_path:
+        try:
+            p = Path(audio_file_path)
+            if p.parent.is_dir():
+                if primary_lrc.strip():
+                    lrc_path = p.parent / f"{p.stem}.lrc"
+                    if overwrite or not lrc_path.exists():
+                        lrc_path.write_text(primary_lrc, encoding="utf-8")
+                if cover_bytes:
+                    cov_path = p.parent / f"{p.stem}.jpg"
+                    if overwrite or not cov_path.exists():
+                        cov_path.write_bytes(cover_bytes)
+                    saved_cover_path = str(cov_path)
+        except Exception:
+            pass
+
+    if cover_bytes and not saved_cover_path and track_id:
+        try:
+            cache_dir = Path.home() / ".nordic_minimalist_player" / "covers"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            safe_id = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in track_id)
+            cov_path = cache_dir / f"{safe_id}.jpg"
+            cov_path.write_bytes(cover_bytes)
             saved_cover_path = str(cov_path)
-    except Exception:
-        pass
+        except Exception:
+            pass
+
     return saved_cover_path
 
 
 class AutoScrapeWorker(QThread):
-    """后台静默刮削线程：自动为缺失歌词或封面的曲目匹配在线词图"""
-
-    scrapeCompleted = pyqtSignal(str, list, object, str)  # track_id, List[LyricLine], Optional[bytes], album_name
+    scrapeCompleted = pyqtSignal(str, list, object, str)
 
     def __init__(self, track: NordicTrack, need_lyrics: bool = True, need_cover: bool = True, parent=None):
         super().__init__(parent)
@@ -241,7 +250,6 @@ class AutoScrapeWorker(QThread):
         cover_url = ""
         album_name = self.track.album
 
-        # 1. 优先通过网易云搜索获取双语歌词 + 封面
         ne_list = search_netease_candidates(query, limit=3)
         if ne_list:
             best = ne_list[0]
@@ -253,7 +261,6 @@ class AutoScrapeWorker(QThread):
             if self.need_cover and c_url:
                 cover_url = c_url
 
-        # 2. 若网易云未命中歌词，回退至 LRCLIB
         if self.need_lyrics and not primary_lrc.strip():
             lrc_list = search_lrclib_candidates(query, limit=2)
             if not lrc_list and artist_clean:
@@ -263,7 +270,6 @@ class AutoScrapeWorker(QThread):
                 if not album_name and lrc_list[0].album:
                     album_name = lrc_list[0].album
 
-        # 3. 若封面仍缺失，回退至 iTunes Search
         if self.need_cover and not cover_url:
             cover_url = fetch_itunes_cover_url(query) or fetch_itunes_cover_url(self.track.title)
 
@@ -271,7 +277,15 @@ class AutoScrapeWorker(QThread):
         parsed_lyrics: List[LyricLine] = parse_lrc_text(primary_lrc, trans_lrc) if primary_lrc.strip() else []
 
         if primary_lrc.strip() or cover_bytes:
-            save_scraped_files_alongside_audio(self.track.file_path, primary_lrc, cover_bytes)
+            saved_cov = save_scraped_files_alongside_audio(
+                self.track.file_path,
+                primary_lrc,
+                cover_bytes,
+                track_id=self.track.track_id,
+                overwrite=False,
+            )
+            if saved_cov:
+                self.track.cover_path = saved_cov
 
         self.scrapeCompleted.emit(self.track.track_id, parsed_lyrics, cover_bytes, album_name)
 
@@ -438,7 +452,8 @@ class OnlineScraperDialog(WinUIModalDialog):
         self.status_label.setText(f"正在从网易云音乐、LRCLIB、iTunes 搜索「{kw}」…")
         self.btn_search.setEnabled(False)
 
-        self._search_worker = SearchWorker(kw, self)
+        self._search_worker = SearchWorker(kw, None)
+        _retain_thread(self._search_worker)
         self._search_worker.resultsReady.connect(self._on_search_results)
         self._search_worker.start()
 
@@ -470,7 +485,8 @@ class OnlineScraperDialog(WinUIModalDialog):
         self.status_label.setText(f"正在下载「{cand.title}」的滚动歌词与高清封面…")
         self.btn_apply.setEnabled(False)
 
-        self._detail_worker = FetchCandidateDetailWorker(cand, self)
+        self._detail_worker = FetchCandidateDetailWorker(cand, None)
+        _retain_thread(self._detail_worker)
         self._detail_worker.detailReady.connect(self._on_detail_ready)
         self._detail_worker.start()
 
@@ -485,12 +501,16 @@ class OnlineScraperDialog(WinUIModalDialog):
         out_lyrics = lyrics if self.chk_lyrics.isChecked() else []
         out_cover = cover_bytes if self.chk_cover.isChecked() else None
 
-        if self.chk_save_local.isChecked() and self.track.file_path:
-            save_scraped_files_alongside_audio(
+        if self.chk_save_local.isChecked():
+            saved_cov = save_scraped_files_alongside_audio(
                 self.track.file_path,
                 raw_lrc if self.chk_lyrics.isChecked() else "",
                 out_cover,
+                track_id=self.track.track_id,
+                overwrite=True,
             )
+            if saved_cov:
+                self.track.cover_path = saved_cov
 
         self.matchApplied.emit(out_lyrics, out_cover, album_name)
         self.accept()

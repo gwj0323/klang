@@ -1,9 +1,3 @@
-"""
-顶部标题栏与快捷工具栏组件 (Qt6)
-包含：侧边栏折叠开关 (带矢量分栏图标)、在线词图、歌词字号调节 (A-/A+)、译文开关、逐字开关、桌面歌词开关、浅色/深色主题切换与窗口控制键。
-已移除与左侧导航栏重复的「导入音乐」按钮，统一收拢至左侧音乐库导航栏。
-"""
-
 from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QPointF, QRectF, QVariantAnimation, QEasingCurve, QTimer
@@ -215,6 +209,7 @@ class WinUITitleBar(QWidget):
     translationToggled = pyqtSignal(bool)
     syllableModeToggled = pyqtSignal(bool)
     desktopLyricToggled = pyqtSignal(bool)
+    miniPlayerClicked = pyqtSignal()
     themeToggled = pyqtSignal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -295,9 +290,14 @@ class WinUITitleBar(QWidget):
         layout.addWidget(self.btn_syllable)
 
         self.btn_desktop_lyric = WinUIChipButton("桌面词", active=False, icon_kind="desktop_lyric", parent=self)
-        self.btn_desktop_lyric.setToolTip("打开 / 关闭置顶桌面悬浮歌词窗")
+        self.btn_desktop_lyric.setToolTip("打开 / 关闭置顶桌面悬浮歌词窗 (Ctrl+D)")
         self.btn_desktop_lyric.clicked.connect(self._on_toggle_desktop_lyric)
         layout.addWidget(self.btn_desktop_lyric)
+
+        self.btn_mini = WinUIChipButton("迷你窗", active=False, icon_kind="mini_player", parent=self)
+        self.btn_mini.setToolTip("切换为置顶迷你黑胶悬浮播放器 (Ctrl+M)")
+        self.btn_mini.clicked.connect(self.miniPlayerClicked.emit)
+        layout.addWidget(self.btn_mini)
 
         self.btn_theme = WinUIChipButton("浅色", active=False, icon_kind="sun", parent=self)
         self.btn_theme.setToolTip("切换北欧晨雾浅色 / 峡湾极夜深色主题")
@@ -382,6 +382,7 @@ class WinUITitleBar(QWidget):
             self.btn_trans,
             self.btn_syllable,
             self.btn_desktop_lyric,
+            self.btn_mini,
             self.btn_theme,
         ):
             btn.set_theme(theme)

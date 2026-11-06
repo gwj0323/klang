@@ -1,8 +1,4 @@
-"""
-本地音乐导入与音频标签/同目录词图解析服务
-支持解析文件名、MP3 ID3v2 内嵌标题/歌手/专辑/封面、FLAC Vorbis 注释与图片块，以及自动加载同目录同名 .lrc 与封面图。
-"""
-
+import hashlib
 import os
 import re
 import struct
@@ -13,7 +9,6 @@ from qt6_player.data.tracks import NordicTrack, parse_lrc_text, create_lyric_lin
 
 SUPPORTED_AUDIO_EXTS = {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac", ".wma"}
 
-# 柔和北欧色卡预设池（用于无封面时的默认色卡）
 _NORDIC_PALETTES = [
     {"bg_primary": "#E7EAE6", "bg_secondary": "#D7DFDA", "accent": "#6E8277", "wood": "#C9BBAE", "ink": "#26292E"},
     {"bg_primary": "#EAE6DF", "bg_secondary": "#DED8CE", "accent": "#7B847E", "wood": "#BFAFB2", "ink": "#2A2D32"},
@@ -85,6 +80,17 @@ def _extract_mp3_id3v2(file_path: str) -> Tuple[str, str, str, Optional[bytes], 
                 artist = _decode_id3_text(body)
             elif frame_id == "TALB" and not album:
                 album = _decode_id3_text(body)
+            elif frame_id == "USLT" and not lrc_text and len(body) > 4:
+                # USLT: 1 byte encoding + 3 bytes language + descriptor (null-terminated) + lyrics text
+                enc = body[0]
+                rest = body[4:]
+                if enc in (1, 2):
+                    sep = rest.find(b"\x00\x00")
+                    lyric_bytes = rest[sep + 2 :] if sep != -1 else rest
+                else:
+                    sep = rest.find(b"\x00")
+                    lyric_bytes = rest[sep + 1 :] if sep != -1 else rest
+                lrc_text = _decode_id3_text(bytes([enc]) + lyric_bytes)
             elif frame_id == "APIC" and cover_bytes is None and len(body) > 32:
                 # 查找 JPEG 或 PNG 魔数起点
                 jpg_idx = body.find(b"\xff\xd8\xff")
@@ -143,14 +149,17 @@ def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[byte
                                         lrc_text = v.strip()
                     elif block_type == 6 and cover_bytes is None and len(data) > 32:  # PICTURE
                         p = 4
-                        mime_len = struct.unpack(">I", data[p : p + 4])[0]
-                        p += 4 + mime_len
-                        desc_len = struct.unpack(">I", data[p : p + 4])[0]
-                        p += 4 + desc_len + 16
-                        pic_len = struct.unpack(">I", data[p : p + 4])[0]
-                        p += 4
-                        if 0 < pic_len <= len(data) - p:
-                            cover_bytes = data[p : p + pic_len]
+                        if p + 4 <= len(data):
+                            mime_len = struct.unpack(">I", data[p : p + 4])[0]
+                            p += 4 + mime_len
+                        if p + 4 <= len(data):
+                            desc_len = struct.unpack(">I", data[p : p + 4])[0]
+                            p += 4 + desc_len + 16
+                        if p + 4 <= len(data):
+                            pic_len = struct.unpack(">I", data[p : p + 4])[0]
+                            p += 4
+                            if 0 < pic_len <= len(data) - p:
+                                cover_bytes = data[p : p + pic_len]
                 if is_last:
                     break
     except Exception:
@@ -226,13 +235,15 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
         )
 
     palette = dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)])
+    resolved_str = str(path_obj.resolve())
+    stable_digest = hashlib.md5(resolved_str.encode("utf-8", errors="ignore")).hexdigest()[:12]
     return NordicTrack(
-        track_id=f"local-{abs(hash(file_path))}",
+        track_id=f"local-{stable_digest}",
         title=final_title,
         artist=final_artist,
         album=final_album,
         duration=max(30.0, (lyrics[-1].end_time + 4.0) if lyrics else 180.0),
-        file_path=str(path_obj.resolve()),
+        file_path=resolved_str,
         cover_path=local_cover_path,
         cover_bytes=cover_bytes,
         palette=palette,

@@ -1,9 +1,3 @@
-"""
-Nordic WinUI 3 自定义矢量图标与现代 Fluent 交互组件库 (Qt6)
-彻底替代传统 Qt 原生老旧控件 (QComboBox / QCheckBox / QDialog 原生边框 / 字符图标 ☰ ♥ ♡ ✕)，
-所有组件均具备 60fps 平滑过渡动效、1px 漫反射微描边与矢量几何图标。
-"""
-
 import math
 from typing import List, Optional, Tuple, Callable
 from PyQt6.QtCore import (
@@ -47,7 +41,6 @@ def draw_nordic_icon(
     color: QColor,
     stroke_w: float = 1.4,
 ) -> None:
-    """使用 QPainterPath 绘制高精度抗锯齿北欧极简矢量图标"""
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     cx, cy = rect.center().x(), rect.center().y()
@@ -184,6 +177,23 @@ def draw_nordic_icon(
         path.lineTo(cx + 3.8, cy - 1.5)
         painter.drawPath(path)
 
+    elif kind == "edit":
+        path = QPainterPath()
+        path.moveTo(cx - 4.8, cy + 4.8)
+        path.lineTo(cx - 4.0, cy + 1.6)
+        path.lineTo(cx + 2.4, cy - 4.8)
+        path.lineTo(cx + 4.8, cy - 2.4)
+        path.lineTo(cx - 1.6, cy + 4.0)
+        path.closeSubpath()
+        painter.drawPath(path)
+
+    elif kind == "mini_player":
+        outer = QRectF(cx - 6.5, cy - 4.8, 13.0, 9.6)
+        painter.drawRoundedRect(outer, 2.0, 2.0)
+        inner = QRectF(cx + 0.2, cy - 0.2, 5.2, 4.0)
+        painter.setBrush(color)
+        painter.drawRoundedRect(inner, 1.0, 1.0)
+
     painter.restore()
 
 
@@ -223,13 +233,19 @@ class WinUISegmentedControl(QWidget):
             self.items[index] = text
             self.update()
 
+    def clear_selection(self) -> None:
+        self._anim.stop()
+        self.current_index = -1
+        self.update()
+
     def set_current_index(self, index: int, animate: bool = True) -> None:
         if not (0 <= index < len(self.items)):
             return
+        was_unselected = self.current_index < 0
         changed = index != self.current_index
         self.current_index = index
         self._anim.stop()
-        if animate:
+        if animate and not was_unselected:
             self._anim.setStartValue(self.pill_pos)
             self._anim.setEndValue(float(index))
             self._anim.start()
@@ -280,20 +296,21 @@ class WinUISegmentedControl(QWidget):
         seg_w = usable_w / n
 
         # 滑动胶囊选中背景
-        pill_x = pad + self.pill_pos * seg_w
-        pill_rect = QRectF(pill_x, pad, seg_w, self.height() - pad * 2.0)
-        pill_path = QPainterPath()
-        pill_path.addRoundedRect(pill_rect, 5.0, 5.0)
-        painter.fillPath(pill_path, self.theme.card_elevated)
-        painter.setPen(QPen(self.theme.sage_border, 1.0))
-        painter.drawPath(pill_path)
+        if self.current_index >= 0:
+            pill_x = pad + self.pill_pos * seg_w
+            pill_rect = QRectF(pill_x, pad, seg_w, self.height() - pad * 2.0)
+            pill_path = QPainterPath()
+            pill_path.addRoundedRect(pill_rect, 5.0, 5.0)
+            painter.fillPath(pill_path, self.theme.card_elevated)
+            painter.setPen(QPen(self.theme.sage_border, 1.0))
+            painter.drawPath(pill_path)
 
-        # 绘制底部鼠尾草绿短横线指示条
-        bar_w = min(20.0, seg_w * 0.32)
-        bar_rect = QRectF(pill_rect.center().x() - bar_w / 2.0, pill_rect.bottom() - 2.5, bar_w, 2.0)
-        bar_path = QPainterPath()
-        bar_path.addRoundedRect(bar_rect, 1.0, 1.0)
-        painter.fillPath(bar_path, self.theme.sage_accent)
+            # 绘制底部鼠尾草绿短横线指示条
+            bar_w = min(20.0, seg_w * 0.32)
+            bar_rect = QRectF(pill_rect.center().x() - bar_w / 2.0, pill_rect.bottom() - 2.5, bar_w, 2.0)
+            bar_path = QPainterPath()
+            bar_path.addRoundedRect(bar_rect, 1.0, 1.0)
+            painter.fillPath(bar_path, self.theme.sage_accent)
 
         # 绘制各分段文本
         for i, label in enumerate(self.items):

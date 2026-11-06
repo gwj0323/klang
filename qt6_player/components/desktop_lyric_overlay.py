@@ -1,12 +1,7 @@
-"""
-桌面歌词悬浮窗组件 (Desktop Floating Lyrics OSD)
-支持置顶显示、拖拽移动、双行双语歌词渲染、悬浮快捷控制栏 (上一曲/播放暂停/下一曲/字号调节/关闭)。
-"""
-
 from typing import Optional
 from PyQt6.QtCore import Qt, QPoint, QRectF, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath, QMouseEvent
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton
 
 from qt6_player.data.tracks import LyricLine
 from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, get_nordic_font
@@ -44,7 +39,6 @@ class DesktopLyricOverlay(QWidget):
         root_vbox.setContentsMargins(16, 8, 16, 10)
         root_vbox.setSpacing(2)
 
-        # 顶部悬浮控制条（仅鼠标移入时显现）
         self.toolbar_widget = QWidget(self)
         self.toolbar_widget.setFixedHeight(24)
         tb_hbox = QHBoxLayout(self.toolbar_widget)
@@ -142,7 +136,6 @@ class DesktopLyricOverlay(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, 12.0, 12.0)
 
-        # 悬浮时显示温润半透磨砂底衬，平时保持极轻薄半透背景以确保桌面上清晰可读
         bg = QColor(30, 34, 39, 185 if self.underMouse() else 125)
         painter.fillPath(path, bg)
         if self.underMouse():
