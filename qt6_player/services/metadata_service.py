@@ -175,11 +175,18 @@ def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[byte
 
 
 def _parse_filename_artist_title(stem: str) -> Tuple[str, str]:
-    """从文件名智能拆分 '歌手 - 歌名'，并去除前导曲目编号"""
+    """从文件名智能拆分 '歌手 - 歌名'、'歌手[歌名]' 或 '歌手_歌名'，并去除前导曲目编号"""
     cleaned = re.sub(r"^\s*\d{1,3}[\s._-]+", "", stem).strip()
     if " - " in cleaned:
         parts = cleaned.split(" - ", 1)
         return parts[0].strip(), parts[1].strip()
+    bracket_m = re.match(r"^(.+?)\s*[\[【](.+?)[\]】]\s*$", cleaned)
+    if bracket_m:
+        return bracket_m.group(1).strip(), bracket_m.group(2).strip()
+    if "_" in cleaned:
+        parts = cleaned.split("_", 1)
+        if len(parts[0].strip()) >= 2 and len(parts[1].strip()) >= 1:
+            return parts[0].strip(), parts[1].strip()
     if "-" in cleaned:
         parts = cleaned.split("-", 1)
         if len(parts[0].strip()) >= 2 and len(parts[1].strip()) >= 1:

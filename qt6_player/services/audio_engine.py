@@ -28,12 +28,18 @@ EQ_BAND_FREQS: List[float] = [60.0, 230.0, 910.0, 3600.0, 12000.0]
 EQ_BAND_LABELS: List[str] = ["60Hz", "230Hz", "910Hz", "3.6kHz", "12kHz"]
 
 SOUND_PROFILES: Dict[str, Tuple[List[float], float]] = {
-    "原声自然": ([0.0, 0.0, 0.0, 0.0, 0.0], 0.03),
-    "北欧厅堂": ([3.0, 1.5, -1.0, 2.5, 4.5], 0.42),
-    "温暖人声": ([-2.0, 2.5, 5.5, 3.0, 1.0], 0.14),
-    "深沉低音": ([7.5, 4.5, -1.5, 1.0, 2.0], 0.10),
-    "清澈器乐": ([-2.0, -1.0, 1.5, 5.0, 7.0], 0.24),
+    "默认原声": ([0.0, 0.0, 0.0, 0.0, 0.0], 0.03),
+    "流行人声": ([-2.0, 2.5, 5.5, 3.0, 1.0], 0.14),
+    "低音增强": ([7.5, 4.5, -1.5, 1.0, 2.0], 0.10),
+    "清澈高音": ([-2.0, -1.0, 1.5, 5.0, 7.0], 0.24),
+    "现场空间": ([3.0, 1.5, -1.0, 2.5, 4.5], 0.42),
 }
+# 兼容旧预设名称
+SOUND_PROFILES["原声自然"] = SOUND_PROFILES["默认原声"]
+SOUND_PROFILES["北欧厅堂"] = SOUND_PROFILES["现场空间"]
+SOUND_PROFILES["温暖人声"] = SOUND_PROFILES["流行人声"]
+SOUND_PROFILES["深沉低音"] = SOUND_PROFILES["低音增强"]
+SOUND_PROFILES["清澈器乐"] = SOUND_PROFILES["清澈高音"]
 
 
 class DolbyAtmosSpatializer:
@@ -703,7 +709,7 @@ class NordicAudioEngine(QObject):
         self.volume: float = 0.72
         self.playback_rate: float = 1.0
 
-        self.sound_profile: str = "原声自然"
+        self.sound_profile: str = "默认原声"
         self.eq_gains_db: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
         self.reverb_mix: float = 0.03
         self.current_spectrum_bands: List[float] = [0.0] * 24

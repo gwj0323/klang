@@ -5,6 +5,7 @@ from PyQt6.QtCore import (
     QRectF,
     QPointF,
     QPoint,
+    QSize,
     QVariantAnimation,
     QEasingCurve,
     pyqtSignal,
@@ -15,6 +16,7 @@ from PyQt6.QtGui import (
     QPen,
     QColor,
     QFont,
+    QFontDatabase,
     QPainterPath,
     QMouseEvent,
     QKeyEvent,
@@ -33,6 +35,25 @@ from PyQt6.QtWidgets import (
 
 from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, get_nordic_font
 
+
+
+_FLUENT_ICON_FONT: Optional[str] = None
+
+
+def get_fluent_icon_font_family() -> Optional[str]:
+    global _FLUENT_ICON_FONT
+    if _FLUENT_ICON_FONT is None:
+        try:
+            fams = QFontDatabase.families()
+            if "Segoe Fluent Icons" in fams:
+                _FLUENT_ICON_FONT = "Segoe Fluent Icons"
+            elif "Segoe MDL2 Assets" in fams:
+                _FLUENT_ICON_FONT = "Segoe MDL2 Assets"
+            else:
+                _FLUENT_ICON_FONT = ""
+        except Exception:
+            _FLUENT_ICON_FONT = ""
+    return _FLUENT_ICON_FONT or None
 
 def draw_nordic_icon(
     painter: QPainter,
@@ -122,6 +143,19 @@ def draw_nordic_icon(
         path.closeSubpath()
         painter.drawPath(path)
 
+    elif kind in ("speaker", "volume", "sound"):
+        path = QPainterPath()
+        path.moveTo(cx - 5.0, cy - 2.5)
+        path.lineTo(cx - 2.5, cy - 2.5)
+        path.lineTo(cx + 1.2, cy - 5.2)
+        path.lineTo(cx + 1.2, cy + 5.2)
+        path.lineTo(cx - 2.5, cy + 2.5)
+        path.lineTo(cx - 5.0, cy + 2.5)
+        path.closeSubpath()
+        painter.fillPath(path, color)
+        painter.setPen(QPen(color, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(QRectF(cx + 2.5, cy - 3.8, 3.8, 7.6), -45 * 16, 90 * 16)
+
     elif kind == "close":
         painter.drawLine(QPointF(cx - 4.2, cy - 4.2), QPointF(cx + 4.2, cy + 4.2))
         painter.drawLine(QPointF(cx + 4.2, cy - 4.2), QPointF(cx - 4.2, cy + 4.2))
@@ -132,6 +166,39 @@ def draw_nordic_icon(
         path.lineTo(cx - 1.2, cy + 3.2)
         path.lineTo(cx + 4.5, cy - 2.8)
         painter.drawPath(path)
+
+    elif kind in ("settings", "gear"):
+        fluent_fam = get_fluent_icon_font_family()
+        if fluent_fam:
+            painter.setFont(QFont(fluent_fam, 10))
+            painter.setPen(color)
+            painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "\uE713")
+        else:
+            path = QPainterPath()
+            n = 6
+            r_out = 5.8
+            r_in = 4.2
+            half_tooth = math.radians(12.0)
+            for i in range(n):
+                ang = i * (2 * math.pi / n) - math.pi / 2
+                t_start = ang - half_tooth
+                t_end = ang + half_tooth
+                g_start = ang + half_tooth + math.radians(4.0)
+                g_end = ang + (2 * math.pi / n) - half_tooth - math.radians(4.0)
+                p_t1 = QPointF(cx + r_out * math.cos(t_start), cy + r_out * math.sin(t_start))
+                p_t2 = QPointF(cx + r_out * math.cos(t_end), cy + r_out * math.sin(t_end))
+                p_g1 = QPointF(cx + r_in * math.cos(g_start), cy + r_in * math.sin(g_start))
+                p_g2 = QPointF(cx + r_in * math.cos(g_end), cy + r_in * math.sin(g_end))
+                if i == 0:
+                    path.moveTo(p_t1)
+                else:
+                    path.lineTo(p_t1)
+                path.lineTo(p_t2)
+                path.lineTo(p_g1)
+                path.lineTo(p_g2)
+            path.closeSubpath()
+            painter.drawPath(path)
+            painter.drawEllipse(QPointF(cx, cy), 1.9, 1.9)
 
     elif kind == "eq_sliders":
         # 三推子均衡器图标
@@ -299,6 +366,16 @@ class WinUISegmentedControl(QWidget):
             self.set_current_index(idx, animate=True)
         super().mousePressEvent(event)
 
+    def sizeHint(self) -> QSize:
+        if not self.items:
+            return QSize(80, 32)
+        fm = self.fontMetrics()
+        w = sum(fm.horizontalAdvance(item) + 24 for item in self.items) + 12
+        return QSize(max(80, w), 32)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
     def paintEvent(self, event) -> None:
         if not self.items:
             return
@@ -348,6 +425,142 @@ class WinUISegmentedControl(QWidget):
             else:
                 painter.setPen(self.theme.slate_muted)
             painter.drawText(item_rect, int(Qt.AlignmentFlag.AlignCenter), label)
+
+
+class WinUIToggleSwitch(QWidget):
+    """WinUI 3 风格平滑滑动开关"""
+    toggled = pyqtSignal(bool)
+
+    def __init__(
+        self,
+        checked: bool = False,
+        text_on: str = "已开启",
+        text_off: str = "已关闭",
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self._checked: bool = bool(checked)
+        self.text_on = text_on
+        self.text_off = text_off
+        self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self._thumb_pos: float = 1.0 if self._checked else 0.0
+        self._is_hovered: bool = False
+
+        self.setFixedHeight(24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._anim.valueChanged.connect(self._on_anim_val)
+
+    def _on_anim_val(self, val: float) -> None:
+        self._thumb_pos = float(val)
+        self.update()
+
+    def set_theme(self, theme: NordicThemeColors) -> None:
+        self.theme = theme
+        self.update()
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool, animate: bool = True) -> None:
+        checked = bool(checked)
+        if self._checked == checked and not self._anim.state():
+            return
+        self._checked = checked
+        self._anim.stop()
+        if animate:
+            self._anim.setStartValue(self._thumb_pos)
+            self._anim.setEndValue(1.0 if self._checked else 0.0)
+            self._anim.start()
+        else:
+            self._thumb_pos = 1.0 if self._checked else 0.0
+            self.update()
+        self.toggled.emit(self._checked)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self.setChecked(not self._checked, animate=True)
+        super().mousePressEvent(event)
+
+    def enterEvent(self, event) -> None:
+        self._is_hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._is_hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def sizeHint(self) -> QSize:
+        label = self.text_on if self._checked else self.text_off
+        fm = self.fontMetrics()
+        w = 44 + (fm.horizontalAdvance(label) + 8 if label else 0)
+        return QSize(w, 24)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        track_w = 38.0
+        track_h = 20.0
+        track_y = (self.height() - track_h) / 2.0
+        track_rect = QRectF(1.0, track_y, track_w, track_h)
+
+        track_path = QPainterPath()
+        track_path.addRoundedRect(track_rect, 10.0, 10.0)
+
+        t = self._thumb_pos
+        if self.isEnabled():
+            if t > 0.01:
+                accent = QColor(self.theme.sage_accent)
+                fill_col = QColor(accent)
+                fill_col.setAlpha(int(220 * t + 35 * (1.0 - t)))
+                painter.fillPath(track_path, fill_col)
+                border_col = QColor(accent)
+                border_col.setAlpha(int(255 * t + 70 * (1.0 - t)))
+                painter.setPen(QPen(border_col, 1.2))
+            else:
+                painter.fillPath(track_path, self.theme.oat_surface)
+                painter.setPen(QPen(self.theme.stroke_outer if not self._is_hovered else self.theme.slate_muted, 1.2))
+        else:
+            painter.fillPath(track_path, self.theme.oat_surface)
+            painter.setPen(QPen(self.theme.stroke_inner, 1.0))
+
+        painter.drawPath(track_path)
+
+        thumb_d = 14.0
+        thumb_r = thumb_d / 2.0
+        min_cx = 1.0 + 3.0 + thumb_r
+        max_cx = 1.0 + track_w - 3.0 - thumb_r
+        cx = min_cx + t * (max_cx - min_cx)
+        cy = track_y + track_h / 2.0
+
+        thumb_rect = QRectF(cx - thumb_r, cy - thumb_r, thumb_d, thumb_d)
+        thumb_path = QPainterPath()
+        thumb_path.addEllipse(thumb_rect)
+
+        if self.isEnabled():
+            if t > 0.5:
+                painter.fillPath(thumb_path, self.theme.mist_white)
+            else:
+                painter.fillPath(thumb_path, self.theme.charcoal if self._is_hovered else self.theme.slate_dark)
+        else:
+            painter.fillPath(thumb_path, self.theme.slate_faint)
+
+        label = self.text_on if self._checked else self.text_off
+        if label:
+            painter.setFont(get_nordic_font(11, QFont.Weight.Medium))
+            painter.setPen(self.theme.charcoal if self._checked else self.theme.slate_muted)
+            text_rect = QRectF(track_w + 8.0, 0.0, self.width() - track_w - 8.0, self.height())
+            painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), label)
 
 
 class WinUISearchBox(QWidget):

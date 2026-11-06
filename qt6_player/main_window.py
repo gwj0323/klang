@@ -49,10 +49,12 @@ from qt6_player.components.lyrics_stage import LyricsStage
 from qt6_player.components.transport_bar import TransportBar
 from qt6_player.components.desktop_lyric_overlay import DesktopLyricOverlay
 from qt6_player.components.equalizer_dialog import AudioSettingsDialog
+from qt6_player.components.lyric_poster_dialog import LyricPosterDialog
 from qt6_player.components.mini_player_window import MiniPlayerWindow
 from qt6_player.components.immersive_window import ImmersiveFullscreenWindow
 from qt6_player.components.fluent_widgets import WinUIFlyoutMenu
 from qt6_player.services.window_effects import apply_window_system_theme_and_corners
+from qt6_player.services.media_control_service import WindowsMediaControlService
 
 
 def _lerp_color(c_from: QColor, c_to: QColor, t: float) -> QColor:
@@ -156,6 +158,7 @@ class NordicWinUI3Window(QMainWindow):
         self.dolby_atmos_mode: str = str(self._saved_state.get("dolby_atmos_mode", "dolby_atmos"))
         self.spatial_width: float = float(self._saved_state.get("spatial_width", 1.35))
         self.spatial_height: float = float(self._saved_state.get("spatial_height", 0.65))
+        self.backdrop_material: str = str(self._saved_state.get("backdrop_material", "mica"))
 
         self.audio = NordicAudioEngine(self)
         self.audio.set_dolby_atmos_mode(self.dolby_atmos_mode)
@@ -388,7 +391,7 @@ class NordicWinUI3Window(QMainWindow):
             hwnd = int(self.winId()) if self.winId() else 0
             if hwnd:
                 apply_window_system_theme_and_corners(
-                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=self.isMaximized()
+                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=self.isMaximized(), backdrop_material=self.backdrop_material
                 )
         except Exception:
             pass
@@ -435,7 +438,7 @@ class NordicWinUI3Window(QMainWindow):
             hwnd = int(self.winId()) if self.winId() else 0
             if hwnd:
                 apply_window_system_theme_and_corners(
-                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=is_max
+                    hwnd, is_dark=(self.theme.name == "dusk"), is_maximized=is_max, backdrop_material=self.backdrop_material
                 )
         except Exception:
             pass
@@ -453,7 +456,9 @@ class NordicWinUI3Window(QMainWindow):
         syl_mode = bool(st.get("syllable_mode", True))
         align_center = bool(st.get("lyric_align_center", False))
         sidebar_collapsed = bool(st.get("sidebar_collapsed", False))
-        sound_profile = str(st.get("sound_profile", "原声自然"))
+        sound_profile = str(st.get("sound_profile", "默认原声"))
+        if sound_profile == "原声自然":
+            sound_profile = "默认原声"
         saved_gains = st.get("eq_gains_db")
         saved_reverb = st.get("reverb_mix")
         saved_out_mode = st.get("audio_output_mode", "binaural")
@@ -556,6 +561,8 @@ class NordicWinUI3Window(QMainWindow):
             "desktop_lyric_open": bool(hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible()),
             "desktop_lyric_pos": dt_pos,
             "desktop_lyric_font_size": int(self.desktop_lyric.font_size) if hasattr(self, "desktop_lyric") else 22,
+            "immersive_fps": int(getattr(self.immersive_window, "target_fps", 60)),
+            "backdrop_material": str(getattr(self, "backdrop_material", "mica")),
             "window_geometry": geom,
             "is_maximized": bool(self.isMaximized()),
             "last_track_index": int(self.current_track_index),
@@ -577,6 +584,8 @@ class NordicWinUI3Window(QMainWindow):
             self.immersive_window.close()
         if hasattr(self, "tray_icon"):
             self.tray_icon.hide()
+        if hasattr(self, "media_control") and self.media_control:
+            self.media_control.cleanup()
         self.desktop_lyric.close()
         self._save_current_state()
         super().closeEvent(event)
@@ -597,8 +606,12 @@ class NordicWinUI3Window(QMainWindow):
         self.title_bar.miniPlayerClicked.connect(self._toggle_mini_player_mode)
         self.title_bar.immersiveClicked.connect(self._toggle_immersive_mode)
         self.title_bar.themeToggled.connect(self._on_theme_toggled)
+        self.title_bar.settingsClicked.connect(lambda: self._open_audio_settings_dialog(default_tab=1))
+        self.immersive_window.settingsRequested.connect(lambda: self._open_audio_settings_dialog(default_tab=1))
 
         # 沉浸视界信号
+        self.immersive_window.set_target_fps(int(self._saved_state.get("immersive_fps", 60)))
+        self.immersive_window.fpsChanged.connect(lambda fps: (self._saved_state.update({"immersive_fps": fps}), self.schedule_save()))
         self.immersive_window.playToggled.connect(self.audio.toggle_play)
         self.immersive_window.prevRequested.connect(self._on_prev_track)
         self.immersive_window.nextRequested.connect(self._on_next_track)
@@ -649,6 +662,8 @@ class NordicWinUI3Window(QMainWindow):
         self.lyrics_stage.fontSizeChanged.connect(self.title_bar.update_font_size_display)
         self.lyrics_stage.fontSizeChanged.connect(lambda _sz: self.schedule_save())
         self.lyrics_stage.lyricOffsetChanged.connect(self._on_lyric_offset_changed)
+        self.lyrics_stage.posterRequested.connect(self._open_lyric_poster_dialog)
+        self.immersive_window.posterRequested.connect(self._open_lyric_poster_dialog)
 
         # 底部控制栏信号
         self.transport_bar.playToggled.connect(self.audio.toggle_play)
@@ -688,6 +703,15 @@ class NordicWinUI3Window(QMainWindow):
         )
         self.audio.spectrumUpdated.connect(self._on_spectrum_updated)
         self.audio.trackEnded.connect(self._on_track_naturally_ended)
+
+        # Windows 系统级媒体控制 (SMTC) 与全局多媒体按键集成
+        self.media_control = WindowsMediaControlService(self, parent=self)
+        self.media_control.playRequested.connect(self.audio.play)
+        self.media_control.pauseRequested.connect(self.audio.pause)
+        self.media_control.playPauseToggled.connect(self.audio.toggle_play)
+        self.media_control.nextRequested.connect(self._on_next_track)
+        self.media_control.previousRequested.connect(self._on_prev_track)
+        self.media_control.stopRequested.connect(self.audio.pause)
 
     def _on_sidebar_anim_val(self, val: float) -> None:
         w = int(round(float(val)))
@@ -834,7 +858,38 @@ class NordicWinUI3Window(QMainWindow):
                 self.lyrics_stage._show_toast("已从播放列表移除")
             self.schedule_save()
 
-    def _open_audio_settings_dialog(self) -> None:
+    def set_backdrop_material(self, mode: str) -> None:
+        self.backdrop_material = mode
+        try:
+            hwnd = int(self.winId()) if self.winId() else 0
+            if hwnd:
+                apply_window_system_theme_and_corners(
+                    hwnd,
+                    is_dark=(self.theme.name == "dusk"),
+                    is_maximized=self.isMaximized(),
+                    backdrop_material=self.backdrop_material,
+                )
+        except Exception:
+            pass
+        self._bg_dirty = True
+        self.update()
+        self.schedule_save()
+
+    def _open_lyric_poster_dialog(self, line_index: int = -1) -> None:
+        cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+        if not cur_track:
+            return
+        idx = line_index if line_index >= 0 else getattr(self.lyrics_stage, "active_index", 0)
+        dlg = LyricPosterDialog(
+            track=cur_track,
+            lyrics=cur_track.lyrics or [],
+            current_index=idx,
+            theme=self.theme,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _open_audio_settings_dialog(self, default_tab: int = 0) -> None:
         cur_offset = (
             self.tracks[self.current_track_index].lyric_offset
             if (0 <= self.current_track_index < len(self.tracks))
@@ -853,6 +908,14 @@ class NordicWinUI3Window(QMainWindow):
             audio_output_mode=getattr(self.audio, "output_channel_mode", "binaural"),
             actual_channels=getattr(self.audio, "output_channels_actual", 2),
             output_device_name=getattr(self.audio, "output_device_name", ""),
+            default_tab=default_tab,
+            current_theme=self.theme.name,
+            current_font_size=getattr(self.lyrics_stage, "lyric_font_size", 20),
+            show_translation=getattr(self.lyrics_stage, "show_translation", True),
+            syllable_mode=getattr(self.lyrics_stage, "syllable_mode", True),
+            immersive_fps=getattr(self.immersive_window, "target_fps", 60),
+            vinyl_mode=getattr(self.immersive_window.artwork_view, "show_vinyl", False),
+            backdrop_material=getattr(self, "backdrop_material", "mica"),
             theme=self.theme,
             parent=self,
         )
@@ -862,7 +925,7 @@ class NordicWinUI3Window(QMainWindow):
         dlg.soundProfileChanged.connect(
             lambda prof: (
                 self.audio.set_sound_profile(prof, trigger_preview=True),
-                self.lyrics_stage._show_toast(f"声学预设: {prof}"),
+                self.lyrics_stage._show_toast(f"音效预设: {prof}"),
                 self.schedule_save(),
             )
         )
@@ -875,6 +938,22 @@ class NordicWinUI3Window(QMainWindow):
         dlg.playbackRateChanged.connect(lambda r: (self.audio.set_playback_rate(r), self.schedule_save()))
         dlg.lyricOffsetDeltaRequested.connect(self.lyrics_stage.adjust_lyric_offset)
         dlg.sleepTimerRequested.connect(self.audio.set_sleep_timer)
+
+        # 偏好与视效信号连接
+        dlg.themeChanged.connect(self._on_theme_toggled)
+        dlg.fontSizeDeltaRequested.connect(self.lyrics_stage.adjust_lyric_font_size)
+        dlg.translationToggled.connect(self.lyrics_stage.set_show_translation)
+        dlg.translationToggled.connect(self.immersive_window.set_show_translation)
+        dlg.translationToggled.connect(self._on_translation_toggled_by_user)
+        dlg.translationToggled.connect(lambda _b: self.schedule_save())
+        dlg.syllableModeToggled.connect(self.lyrics_stage.set_syllable_mode)
+        dlg.syllableModeToggled.connect(self.immersive_window.set_syllable_mode)
+        dlg.syllableModeToggled.connect(lambda _b: self.schedule_save())
+        dlg.immersiveFpsChanged.connect(self.immersive_window.set_target_fps)
+        dlg.immersiveFpsChanged.connect(lambda fps: (self._saved_state.update({"immersive_fps": fps}), self.schedule_save()))
+        dlg.vinylModeToggled.connect(self.immersive_window.artwork_view.set_vinyl_mode)
+        dlg.backdropMaterialChanged.connect(self.set_backdrop_material)
+        dlg.scrapeRequested.connect(self._open_online_scraper_dialog)
         self._active_eq_dialog = dlg
         dlg.exec()
         self._active_eq_dialog = None
@@ -1150,6 +1229,8 @@ class NordicWinUI3Window(QMainWindow):
             self.immersive_window.update_track(track)
         if hasattr(self, "tray_icon"):
             self.tray_icon.setToolTip(f"Klang — {track.title} · {track.artist}")
+        if hasattr(self, "media_control") and self.media_control:
+            self.media_control.update_track(track)
         if track.lyrics:
             self.desktop_lyric.update_lyric(track.lyrics[0])
             self.mini_player.update_lyric(track.lyrics[0])
@@ -1166,6 +1247,8 @@ class NordicWinUI3Window(QMainWindow):
         self.mini_player.set_playing(is_playing)
         if hasattr(self, "immersive_window"):
             self.immersive_window.update_play_state(is_playing)
+        if hasattr(self, "media_control") and self.media_control:
+            self.media_control.set_playback_status(is_playing)
 
     def _on_time_updated(self, current_time: float, duration: float, source: str) -> None:
         if self.isVisible():
@@ -1204,7 +1287,7 @@ class NordicWinUI3Window(QMainWindow):
             hwnd = int(self.winId()) if self.winId() else 0
             if hwnd:
                 apply_window_system_theme_and_corners(
-                    hwnd, is_dark=(theme_name == "dusk"), is_maximized=self.isMaximized()
+                    hwnd, is_dark=(theme_name == "dusk"), is_maximized=self.isMaximized(), backdrop_material=self.backdrop_material
                 )
         except Exception:
             pass
@@ -1355,7 +1438,15 @@ class NordicWinUI3Window(QMainWindow):
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
 
-        bp.fillPath(path, self._bg_col_cur)
+        fill_col = QColor(self._bg_col_cur)
+        mat = getattr(self, "backdrop_material", "mica")
+        if mat == "mica":
+            fill_col.setAlpha(208)
+        elif mat == "acrylic":
+            fill_col.setAlpha(175)
+        else:
+            fill_col.setAlpha(255)
+        bp.fillPath(path, fill_col)
 
         # 封面自适应双核流光背景 (Ambient Mesh Glow，缓存在位图中避免每帧全屏径向渐变计算)
         base_alpha = 28 if self.theme.name == "daylight" else 36
@@ -1473,7 +1564,7 @@ class NordicWinUI3Window(QMainWindow):
     def _on_dolby_mode_changed(self, mode: str) -> None:
         self.audio.set_dolby_atmos_mode(mode)
         self._update_dolby_badges()
-        mode_names = {"off": "传统立体声", "spatial_stereo": "空间立体声", "dolby_atmos": "杜比全景声 7.1.4"}
+        mode_names = {"off": "已关闭", "spatial_stereo": "空间立体声", "dolby_atmos": "杜比全景声"}
         if hasattr(self.lyrics_stage, "_show_toast"):
             self.lyrics_stage._show_toast(f"空间声场: {mode_names.get(mode, mode)}")
         self.schedule_save()
@@ -1488,15 +1579,15 @@ class NordicWinUI3Window(QMainWindow):
                 self.audio.output_device_name,
             )
         mode_names = {
-            "binaural": "耳机/双耳空间全景声 (2.0)",
-            "surround_51": "杜比 5.1 环绕多声道",
-            "surround_71": "杜比 7.1 全景声扩展",
+            "binaural": "双耳渲染 (耳机)",
+            "surround_51": "5.1 环绕声",
+            "surround_71": "7.1 环绕声",
         }
         msg = mode_names.get(mode, mode)
         if self.audio.output_channels_actual > 2:
-            msg += f" · 物理 {self.audio.output_channels_actual} 声道输出中"
+            msg += f" (物理 {self.audio.output_channels_actual} 声道)"
         elif mode != "binaural":
-            msg += " · 已自动适配为双耳全景声"
+            msg += " (已适配双耳渲染)"
         if hasattr(self.lyrics_stage, "_show_toast"):
             self.lyrics_stage._show_toast(msg)
         self.schedule_save()

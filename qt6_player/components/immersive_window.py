@@ -145,6 +145,12 @@ class ImmersiveArtworkView(QWidget):
         self._cached_disc_key: Optional[str] = None
         self._cached_disc_pixmap: Optional[QPixmap] = None
 
+        # 唱臂落针起伏物理系统 (Tonearm Drop & Lift Physics)
+        self.tonearm_angle: float = -32.0        # 当前唱臂旋转角 (deg): -32° 为停靠原点, -12°~+3° 为唱片音轨
+        self.tonearm_target_angle: float = -32.0  # 目标旋转角
+        self.tonearm_lift: float = 1.0           # 当前高度抬升比例: 1.0 为抬起悬空, 0.0 为落针搭在唱片上
+        self.tonearm_target_lift: float = 1.0    # 目标抬升比例
+
         # 播放状态与交互
         self.current_time: float = 0.0
         self.duration: float = 1.0
@@ -207,16 +213,185 @@ class ImmersiveArtworkView(QWidget):
 
     def step_physics(self, dt: float) -> None:
         dt = max(0.001, min(0.05, dt))
-        # 旋转角速度平滑推进
+        # 1. 黑胶盘旋转角速度平滑推进与惯性衰减
         target_vel = 36.0 if (self.is_playing and self.show_vinyl) else 0.0
         self.angular_vel += (target_vel - self.angular_vel) * min(1.0, dt * 3.6)
         if abs(self.angular_vel) > 0.05:
             self.vinyl_angle = (self.vinyl_angle + self.angular_vel * dt) % 360.0
 
-        # 非线性滑出阻尼 (开启黑胶时轻微滑出露出约 14%)
-        target_slide = 1.0 if (self.is_playing and self.show_vinyl) else 0.0
+        # 2. 伴生黑胶滑出露出阻尼 (开启黑胶模式时露出，关闭时收回)
+        target_slide = 1.0 if self.show_vinyl else 0.0
         slide_rate = min(1.0, 1.0 - math.exp(-6.5 * dt))
         self.slide_prog += (target_slide - self.slide_prog) * slide_rate
+
+        # 3. 唱臂落针与抬针起伏物理动力学 (Tonearm drop & lift)
+        if self.show_vinyl and self.slide_prog > 0.20:
+            if self.is_playing:
+                # 播放时：唱针根据歌曲进度沿着唱片微刻音轨从外圈慢慢滑向内圈
+                progress = max(0.0, min(1.0, self.current_time / max(1.0, self.duration)))
+                self.tonearm_target_angle = -12.0 + progress * 15.0
+
+                # 当唱臂横向摆入唱片范围后，唱针缓缓降落 (温柔轻放)
+                if abs(self.tonearm_angle - self.tonearm_target_angle) < 7.0:
+                    self.tonearm_target_lift = 0.0
+                else:
+                    self.tonearm_target_lift = 1.0
+            else:
+                # 暂停时：唱针轻柔抬起，缓缓归位到右侧停泊唱臂托架 (-32.0°)
+                self.tonearm_target_lift = 1.0
+                self.tonearm_target_angle = -32.0
+        else:
+            self.tonearm_target_lift = 1.0
+            self.tonearm_target_angle = -32.0
+
+        # 唱臂横向摆动平滑阻尼
+        arm_rate = min(1.0, dt * 3.8)
+        self.tonearm_angle += (self.tonearm_target_angle - self.tonearm_angle) * arm_rate
+
+        # 唱臂垂直起伏阻尼：落针缓缓下落(温柔软触感)，抬起果断轻盈
+        lift_speed = 3.2 if self.tonearm_target_lift == 0.0 else 5.8
+        lift_rate = min(1.0, dt * lift_speed)
+        self.tonearm_lift += (self.tonearm_target_lift - self.tonearm_lift) * lift_rate
+
+    def _draw_tonearm(self, painter: QPainter, pivot_x: float, pivot_y: float, r_disc: float) -> None:
+        """
+        绘制高保真北欧极简黑胶唱臂与落针动效 (Tonearm, Counterweight, Cartridge, Stylus)。
+        """
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        arm_len = r_disc * 0.95
+        cur_angle = self.tonearm_angle
+        lift_prog = self.tonearm_lift
+
+        # 1. 停靠托架 (Parked Arm Rest)
+        rest_x = pivot_x + 12.0
+        rest_y = pivot_y + 24.0
+        painter.setPen(QPen(QColor(80, 85, 90, 180), 2.0))
+        painter.drawLine(QPointF(rest_x, rest_y), QPointF(rest_x + 3.0, rest_y + 12.0))
+        rest_clip = QPainterPath()
+        rest_clip.moveTo(rest_x - 4.0, rest_y - 2.0)
+        rest_clip.lineTo(rest_x, rest_y + 2.0)
+        rest_clip.lineTo(rest_x + 5.0, rest_y - 1.0)
+        painter.setPen(QPen(QColor(180, 186, 192, 220), 1.8))
+        painter.drawPath(rest_clip)
+
+        # 2. 动态落针投射阴影 (随抬起高度变远并淡化，落针贴合时汇聚在唱针着地点)
+        sh_offset_x = 4.0 + 10.0 * lift_prog
+        sh_offset_y = 6.0 + 12.0 * lift_prog
+        sh_alpha = int(round(55 * (1.0 - 0.42 * lift_prog)))
+
+        p1_x, p1_y = -arm_len * 0.58, arm_len * 0.52
+        p2_x, p2_y = -arm_len * 0.82, arm_len * 0.72
+        head_x, head_y = -arm_len * 0.94, arm_len * 0.88
+
+        painter.save()
+        painter.translate(pivot_x + sh_offset_x, pivot_y + sh_offset_y)
+        painter.rotate(cur_angle)
+
+        shadow_path = QPainterPath()
+        shadow_path.moveTo(0, 0)
+        shadow_path.cubicTo(p1_x * 0.5, p1_y * 0.4, p1_x, p1_y, p2_x, p2_y)
+        shadow_path.lineTo(head_x, head_y)
+        painter.setPen(QPen(QColor(0, 0, 0, sh_alpha), 3.6))
+        painter.drawPath(shadow_path)
+        painter.restore()
+
+        # 3. 唱臂主体旋转系统 (围绕 pivot 旋转)
+        painter.save()
+        painter.translate(pivot_x, pivot_y)
+        painter.rotate(cur_angle)
+
+        # A. 后平衡配重杆与配重砣 (Counterweight)
+        rear_len = 30.0
+        painter.setPen(QPen(QColor(140, 145, 150), 3.0))
+        painter.drawLine(QPointF(0, 0), QPointF(rear_len * 0.7, -rear_len * 0.7))
+
+        cw_cx = rear_len * 0.55
+        cw_cy = -rear_len * 0.55
+        cw_w, cw_h = 16.0, 14.0
+        cw_rect = QRectF(cw_cx - cw_w / 2.0, cw_cy - cw_h / 2.0, cw_w, cw_h)
+        cw_grad = QLinearGradient(cw_rect.topLeft(), cw_rect.bottomRight())
+        cw_grad.setColorAt(0.0, QColor(220, 224, 228))
+        cw_grad.setColorAt(0.4, QColor(160, 166, 172))
+        cw_grad.setColorAt(0.7, QColor(110, 115, 120))
+        cw_grad.setColorAt(1.0, QColor(180, 185, 190))
+        cw_path = QPainterPath()
+        cw_path.addRoundedRect(cw_rect, 3.0, 3.0)
+        painter.fillPath(cw_path, cw_grad)
+        painter.setPen(QPen(QColor(40, 44, 48, 120), 1.0))
+        painter.drawPath(cw_path)
+        painter.setPen(QPen(QColor(240, 244, 248, 180), 0.8))
+        painter.drawLine(QPointF(cw_cx - 2.0, cw_cy - cw_h / 2.0 + 2.0), QPointF(cw_cx - 2.0, cw_cy + cw_h / 2.0 - 2.0))
+        painter.drawLine(QPointF(cw_cx + 2.0, cw_cy - cw_h / 2.0 + 2.0), QPointF(cw_cx + 2.0, cw_cy + cw_h / 2.0 - 2.0))
+
+        # B. 唱臂金属曲管 (S/J-bend Wand)
+        arm_path = QPainterPath()
+        arm_path.moveTo(0, 0)
+        arm_path.cubicTo(p1_x * 0.5, p1_y * 0.4, p1_x, p1_y, p2_x, p2_y)
+        arm_path.lineTo(head_x, head_y)
+
+        painter.setPen(QPen(QColor(45, 50, 55, 200), 3.2))
+        painter.drawPath(arm_path)
+
+        arm_metal_pen = QPen(QColor(230, 235, 240, 240), 1.8)
+        arm_metal_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(arm_metal_pen)
+        painter.drawPath(arm_path)
+
+        # C. 唱头与唱头盖 (Cartridge & Headshell)
+        painter.save()
+        painter.translate(head_x, head_y)
+        painter.rotate(18.0)
+
+        hs_rect = QRectF(-5.0, -4.0, 10.0, 20.0)
+        hs_path = QPainterPath()
+        hs_path.addRoundedRect(hs_rect, 2.0, 2.0)
+        painter.fillPath(hs_path, QColor(24, 26, 28))
+        painter.setPen(QPen(QColor(70, 75, 80), 0.8))
+        painter.drawPath(hs_path)
+
+        cart_rect = QRectF(-4.0, 6.0, 8.0, 12.0)
+        painter.fillRect(cart_rect, QColor(14, 16, 18))
+        accent_band = QRectF(-4.0, 10.0, 8.0, 2.5)
+        painter.fillRect(accent_band, self.accent_color)
+
+        stylus_tip = QPointF(0.0, 20.0)
+        painter.setPen(QPen(QColor(220, 225, 230), 1.2))
+        painter.drawLine(QPointF(0.0, 17.0), stylus_tip)
+
+        if lift_prog < 0.12 and self.is_playing:
+            contact_glow = QRadialGradient(stylus_tip, 4.0)
+            contact_glow.setColorAt(0.0, QColor(255, 255, 255, 220))
+            contact_glow.setColorAt(0.4, QColor(self.accent_color.red(), self.accent_color.green(), self.accent_color.blue(), 160))
+            contact_glow.setColorAt(1.0, Qt.GlobalColor.transparent)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(contact_glow)
+            painter.drawEllipse(stylus_tip, 4.0, 4.0)
+
+        painter.restore()
+        painter.restore()
+
+        # 4. 唱臂底座云台轴承 (Gimbal Pivot Base)
+        base_r_outer = 14.0
+        base_grad = QRadialGradient(QPointF(pivot_x - 3.0, pivot_y - 3.0), base_r_outer * 1.2)
+        base_grad.setColorAt(0.0, QColor(245, 248, 250))
+        base_grad.setColorAt(0.45, QColor(180, 186, 192))
+        base_grad.setColorAt(0.85, QColor(100, 105, 112))
+        base_grad.setColorAt(1.0, QColor(50, 54, 58))
+
+        painter.setPen(QPen(QColor(30, 32, 36, 180), 1.0))
+        painter.setBrush(base_grad)
+        painter.drawEllipse(QPointF(pivot_x, pivot_y), base_r_outer, base_r_outer)
+
+        painter.setBrush(QColor(38, 42, 46))
+        painter.drawEllipse(QPointF(pivot_x, pivot_y), 7.5, 7.5)
+
+        painter.setBrush(QColor(220, 225, 230))
+        painter.drawEllipse(QPointF(pivot_x, pivot_y), 3.2, 3.2)
+
+        painter.restore()
 
     def _render_vinyl_disc(self, diameter: int) -> QPixmap:
         dpr = max(1.0, self.devicePixelRatioF())
@@ -279,6 +454,24 @@ class ImmersiveArtworkView(QWidget):
         return pix
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.RightButton:
+            from PyQt6.QtWidgets import QMenu
+            menu = QMenu(self)
+            menu.setStyleSheet(
+                "QMenu { background: rgba(28, 32, 36, 0.96); border: 1px solid rgba(255, 255, 255, 0.22); "
+                "border-radius: 8px; padding: 4px; color: #FFFFFF; font-size: 13px; }"
+                "QMenu::item { padding: 6px 16px; border-radius: 4px; }"
+                "QMenu::item:selected { background: rgba(255, 255, 255, 0.18); }"
+            )
+            act_poster = menu.addAction("生成歌词海报卡片...")
+            selected = menu.exec(event.globalPosition().toPoint())
+            if selected == act_poster:
+                p_win = self.window()
+                if hasattr(p_win, "posterRequested"):
+                    p_win.posterRequested.emit()
+            event.accept()
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
             # 1. 进度条点击与拖拽
@@ -422,8 +615,8 @@ class ImmersiveArtworkView(QWidget):
         disc_sz = int(sleeve_sz * 0.94)
 
         if self.show_vinyl:
-            center_x = w * 0.45
-            slide_offset = sleeve_sz * (0.04 + 0.12 * self.slide_prog)
+            center_x = w * 0.40
+            slide_offset = sleeve_sz * (0.08 + 0.38 * self.slide_prog)
         else:
             center_x = w * 0.48
             slide_offset = 0.0
@@ -513,6 +706,12 @@ class ImmersiveArtworkView(QWidget):
         p.setPen(QPen(QColor(255, 255, 255, 38), 1.0))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(jacket_path)
+
+        # 若开启黑胶模式，在唱片上方绘制高保真落针唱臂系统
+        if self.show_vinyl and (self.slide_prog > 0.05 or self.is_playing):
+            pivot_x = disc_cx + (disc_sz / 2.0) * 0.72
+            pivot_y = disc_cy - (disc_sz / 2.0) * 0.74
+            self._draw_tonearm(p, pivot_x, pivot_y, disc_sz / 2.0)
 
         # =========================================================================
         # D. 封面正下方 Apple Music 风格一体化控制栏 (联动 controls_opacity 渐隐)
@@ -1322,6 +1521,9 @@ class ImmersiveFullscreenWindow(QWidget):
     translationToggled = pyqtSignal(bool)
     syllableToggled = pyqtSignal(bool)
     translationFetchRequested = pyqtSignal(object)
+    fpsChanged = pyqtSignal(int)
+    settingsRequested = pyqtSignal()
+    posterRequested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(None)
@@ -1378,8 +1580,13 @@ class ImmersiveFullscreenWindow(QWidget):
         self._idle_timer.setInterval(3000)
         self._idle_timer.timeout.connect(self._on_idle_timeout)
 
-        # 屏幕刷新率驱动动画定时器 (60fps)
+        # 动画与歌词刷新率控制 (60fps / 120fps)
+        self.target_fps: int = 60
+        self._frame_clock = QElapsedTimer()
+        self._frame_clock.start()
+
         self._render_timer = QTimer(self)
+        self._render_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._render_timer.setInterval(16)
         self._render_timer.timeout.connect(self._on_animation_frame)
 
@@ -1397,9 +1604,9 @@ class ImmersiveFullscreenWindow(QWidget):
         top_hbox.setContentsMargins(0, 0, 0, 0)
         top_hbox.setSpacing(12)
 
-        self.lbl_title_badge = QLabel("✦  KLANG  ·  AURORA IMMERSION", self.top_bar_widget)
-        self.lbl_title_badge.setFont(get_nordic_font(12, QFont.Weight.DemiBold, mono=True))
-        self.lbl_title_badge.setStyleSheet("color: rgba(255, 255, 255, 0.76); padding-left: 6px; letter-spacing: 1px;")
+        self.lbl_title_badge = QLabel("KLANG 沉浸视界", self.top_bar_widget)
+        self.lbl_title_badge.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.lbl_title_badge.setStyleSheet("color: rgba(255, 255, 255, 0.76); padding-left: 6px; letter-spacing: 0.5px;")
         top_hbox.addWidget(self.lbl_title_badge)
 
         top_hbox.addStretch(1)
@@ -1418,40 +1625,47 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_trans.clicked.connect(self._on_toggle_translation)
         top_hbox.addWidget(self.btn_trans)
 
-        # 逐字开关
-        self.btn_syllable = QPushButton("逐字", self.top_bar_widget)
-        self.btn_syllable.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
-        self.btn_syllable.setFixedSize(50, 30)
-        self.btn_syllable.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_syllable.setToolTip("开启 / 关闭逐字卡拉OK光效")
-        self.btn_syllable.setStyleSheet(
+        # 设置入口按钮 (统一配置帧率、封面、动效与音频)
+        self.btn_settings = QPushButton("设置", self.top_bar_widget)
+        self.btn_settings.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.btn_settings.setFixedHeight(30)
+        self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_settings.setToolTip("设置 (音效、歌词、刷新率等)")
+        self.btn_settings.setStyleSheet(
             "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
+            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 12px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
             "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
         )
-        self.btn_syllable.clicked.connect(self._on_toggle_syllable)
-        top_hbox.addWidget(self.btn_syllable)
+        self.btn_settings.clicked.connect(self.settingsRequested.emit)
+        top_hbox.addWidget(self.btn_settings)
 
-        # 封面样式切换 (纯净封面 / 伴生黑胶)
-        self.btn_vinyl_mode = QPushButton("纯净封面", self.top_bar_widget)
-        self.btn_vinyl_mode.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
-        self.btn_vinyl_mode.setFixedHeight(30)
-        self.btn_vinyl_mode.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_vinyl_mode.setToolTip("切换封面模式：现代纯净大封面 / 伴生黑胶微显")
-        self.btn_vinyl_mode.setStyleSheet(
+        # 保留历史内部组件句柄以防外部方法调用报错
+        self.btn_syllable = QPushButton("逐字")
+        self.btn_vinyl_mode = QPushButton("纯净封面")
+        self.btn_fps = QPushButton(f"{self.target_fps} FPS")
+        for _w in (self.btn_syllable, self.btn_vinyl_mode, self.btn_fps):
+            _w.hide()
+
+        # 歌词海报卡片按钮
+        self.btn_poster = QPushButton("歌词卡片", self.top_bar_widget)
+        self.btn_poster.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.btn_poster.setFixedHeight(30)
+        self.btn_poster.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_poster.setToolTip("生成精致歌词海报卡片 (一键复制 / 保存分享)")
+        self.btn_poster.setStyleSheet(
             "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 10px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
+            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 12px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
             "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
         )
-        self.btn_vinyl_mode.clicked.connect(self._on_toggle_cover_mode)
-        top_hbox.addWidget(self.btn_vinyl_mode)
+        self.btn_poster.clicked.connect(self.posterRequested.emit)
+        top_hbox.addWidget(self.btn_poster)
 
         # 退出全屏按钮
         self.btn_exit = QPushButton("退出全屏 (Esc)", self.top_bar_widget)
         self.btn_exit.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         self.btn_exit.setFixedHeight(30)
         self.btn_exit.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_exit.setToolTip("退出全屏沉浸视界 (Esc / F11)")
+        self.btn_exit.setToolTip("退出全屏 (Esc)")
         self.btn_exit.setStyleSheet(
             "QPushButton { background: rgba(255, 255, 255, 0.16); border: 1px solid rgba(255, 255, 255, 0.28); "
             "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 14px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
@@ -1537,6 +1751,36 @@ class ImmersiveFullscreenWindow(QWidget):
             "QPushButton:hover {{ background: rgba(255, 255, 255, 0.36); }}"
         )
 
+    def _on_toggle_fps(self) -> None:
+        new_fps = 120 if self.target_fps == 60 else 60
+        self.set_target_fps(new_fps)
+        self.fpsChanged.emit(new_fps)
+
+    def set_target_fps(self, fps: int) -> None:
+        self.target_fps = 120 if fps >= 100 else 60
+        interval = 8 if self.target_fps == 120 else 16
+        self._render_timer.setInterval(interval)
+        self._update_fps_btn_style()
+
+    def _update_fps_btn_style(self) -> None:
+        if not hasattr(self, "btn_fps"):
+            return
+        self.btn_fps.setText(f"{self.target_fps} FPS")
+        if self.target_fps == 120:
+            self.btn_fps.setToolTip("当前刷新率：120 FPS（极速流畅，点击切换至 60 FPS 标准模式）")
+            self.btn_fps.setStyleSheet(
+                "QPushButton { background: rgba(91, 158, 131, 0.35); border: 1px solid rgba(126, 224, 182, 0.65); "
+                "border-radius: 7px; color: #7EE0B6; font-weight: 700; font-size: 13px; padding: 0 10px; font-family: 'SF Mono', 'Consolas', monospace; }"
+                "QPushButton:hover { background: rgba(91, 158, 131, 0.50); }"
+            )
+        else:
+            self.btn_fps.setToolTip("当前刷新率：60 FPS（标准节能，点击切换至 120 FPS 极速流畅模式）")
+            self.btn_fps.setStyleSheet(
+                "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
+                "border-radius: 7px; color: rgba(255, 255, 255, 0.88); font-weight: 600; font-size: 13px; padding: 0 10px; font-family: 'SF Mono', 'Consolas', monospace; }"
+                "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
+            )
+
     def enter_immersive(
         self,
         current_track: Optional[NordicTrack],
@@ -1576,6 +1820,8 @@ class ImmersiveFullscreenWindow(QWidget):
         self.unsetCursor()
         self._idle_timer.start(3000)
 
+        if hasattr(self, "_frame_clock"):
+            self._frame_clock.restart()
         if not self._render_timer.isActive():
             self._render_timer.start()
 
@@ -1678,28 +1924,35 @@ class ImmersiveFullscreenWindow(QWidget):
         return QColor(r, g, b)
 
     def _on_animation_frame(self) -> None:
-        dt = 0.016
-        # 色彩渐变插值平滑推进
-        self._col1_cur = self._interp_color(self._col1_cur, self._col1_target, 0.05)
-        self._col2_cur = self._interp_color(self._col2_cur, self._col2_target, 0.05)
-        self._col3_cur = self._interp_color(self._col3_cur, self._col3_target, 0.05)
-        self._col4_cur = self._interp_color(self._col4_cur, self._col4_target, 0.05)
-        self._col_base_cur = self._interp_color(self._col_base_cur, self._col_base_target, 0.05)
+        if hasattr(self, "_frame_clock"):
+            elapsed_ms = self._frame_clock.restart()
+            dt = max(0.001, min(0.05, elapsed_ms / 1000.0))
+        else:
+            dt = 0.008 if self.target_fps == 120 else 0.016
+
+        # 色彩渐变插值平滑推进 (无级指数阻尼，与帧率解耦)
+        col_rate = min(1.0, 1.0 - math.exp(-3.5 * dt))
+        self._col1_cur = self._interp_color(self._col1_cur, self._col1_target, col_rate)
+        self._col2_cur = self._interp_color(self._col2_cur, self._col2_target, col_rate)
+        self._col3_cur = self._interp_color(self._col3_cur, self._col3_target, col_rate)
+        self._col4_cur = self._interp_color(self._col4_cur, self._col4_target, col_rate)
+        self._col_base_cur = self._interp_color(self._col_base_cur, self._col_base_target, col_rate)
 
         # 漂浮星芒柔光微粒物理移动
         for m in self._motes:
             m.x = (m.x + m.speed_x * dt) % 1.0
             m.y = (m.y + m.speed_y * dt) % 1.0
 
-        # 唱片与歌词阻尼物理推进 (60 FPS 顺滑刷新)
+        # 唱片与歌词物理弹簧动力学推进 (高刷新率无抖动平滑推进)
         self.artwork_view.step_physics(dt)
         self.lyrics_view.step_physics(dt)
         self.artwork_view.update()
         self.lyrics_view.update()
 
         # 悬浮 HUD 与封面下置控制栏透明度平滑过渡
-        if abs(self._hud_target_opacity - self._hud_opacity) > 0.01:
-            self._hud_opacity += (self._hud_target_opacity - self._hud_opacity) * 0.14
+        if abs(self._hud_target_opacity - self._hud_opacity) > 0.005:
+            hud_rate = min(1.0, 1.0 - math.exp(-9.0 * dt))
+            self._hud_opacity += (self._hud_target_opacity - self._hud_opacity) * hud_rate
             self._top_opacity_eff.setOpacity(self._hud_opacity)
         self.artwork_view.controls_opacity = self._hud_opacity
 

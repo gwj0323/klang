@@ -52,6 +52,7 @@ class LyricsStage(QWidget):
     activeLineChanged = pyqtSignal(object)
     fontSizeChanged = pyqtSignal(int)
     lyricOffsetChanged = pyqtSignal(float)
+    posterRequested = pyqtSignal(int)
 
     MIN_FONT_SIZE = 14
     MAX_FONT_SIZE = 32
@@ -690,6 +691,7 @@ class LyricsStage(QWidget):
                 ("-0.5s", "offset_dec"),
                 ("+0.5s", "offset_inc"),
                 ("居中" if not self.align_center else "居左", "toggle_align"),
+                ("歌词卡片", "open_poster"),
             ]
             bx = 12.0
             by = h - 34.0
@@ -785,7 +787,35 @@ class LyricsStage(QWidget):
         self.update()
         super().leaveEvent(event)
 
+    def _show_context_menu(self, global_pos, line_idx: int) -> None:
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {self.theme.card_elevated.name()}; border: 1px solid {self.theme.stroke_outer.name()}; border-radius: 8px; padding: 4px; color: {self.theme.charcoal.name()}; font-size: 12px; }}"
+            f"QMenu::item {{ padding: 6px 16px; border-radius: 4px; }}"
+            f"QMenu::item:selected {{ background: {self.theme.oat_surface.name()}; }}"
+        )
+        act_poster = menu.addAction("生成歌词海报卡片...")
+        menu.addSeparator()
+        act_align = menu.addAction("切换对齐方式 (居中 / 居左)")
+        act_trans = menu.addAction("切换双语翻译显示")
+        selected = menu.exec(global_pos)
+        if selected == act_poster:
+            self.posterRequested.emit(line_idx)
+        elif selected == act_align:
+            self.set_align_center(not self.align_center)
+            self._show_toast("居中对齐" if self.align_center else "左对齐")
+        elif selected == act_trans:
+            self.set_show_translation(not self.show_translation)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.RightButton:
+            hit = self._hit_test_line(event.position())
+            line_idx = hit if hit >= 0 else self.active_index
+            self._show_context_menu(event.globalPosition().toPoint(), line_idx)
+            event.accept()
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
             for r, act in self._hud_buttons:
@@ -797,6 +827,8 @@ class LyricsStage(QWidget):
                     elif act == "toggle_align":
                         self.set_align_center(not self.align_center)
                         self._show_toast("居中对齐" if self.align_center else "左对齐")
+                    elif act == "open_poster":
+                        self.posterRequested.emit(self.active_index)
                     return
 
             if self.user_scrolling and self._manual_pill_rect.contains(pos):

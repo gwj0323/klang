@@ -613,8 +613,8 @@ class TransportBar(QWidget):
         self.btn_rate.update()
 
     def set_sound_profile_badge(self, profile: str) -> None:
-        self.btn_eq.is_eq_active = profile != "原声自然"
-        self.btn_eq.setToolTip(f"当前音效：{profile}（点击打开均衡器与定时设置）")
+        self.btn_eq.is_eq_active = profile not in ("默认原声", "原声自然")
+        self.btn_eq.setToolTip(f"当前音效：{profile}（点击打开音效与均衡器设置）")
         self.btn_eq.update()
 
     def set_track_info(self, track: NordicTrack) -> None:

@@ -212,6 +212,7 @@ class WinUITitleBar(QWidget):
     miniPlayerClicked = pyqtSignal()
     immersiveClicked = pyqtSignal()
     themeToggled = pyqtSignal(str)
+    settingsClicked = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -228,7 +229,7 @@ class WinUITitleBar(QWidget):
 
         # 左侧：收起/展开播放列表矢量图标按钮 + 品牌名
         self.btn_sidebar = WinUIChipButton("", active=True, icon_kind="sidebar", fixed_w=32, parent=self)
-        self.btn_sidebar.setToolTip("收起 / 展开左侧音乐库 (纯享歌词视图)")
+        self.btn_sidebar.setToolTip("展开 / 收起音乐库")
         self.btn_sidebar.clicked.connect(self.sidebarToggleClicked.emit)
         layout.addWidget(self.btn_sidebar)
 
@@ -252,63 +253,38 @@ class WinUITitleBar(QWidget):
 
         layout.addStretch(1)
 
-        # 工具按钮组（已移除重复的「导入音乐」，保留在线词图匹配）
-        self.btn_scrape = WinUIChipButton("在线词图", icon_kind="sparkle", parent=self)
-        self.btn_scrape.setToolTip("在线搜索并刮削当前歌曲的双语滚动歌词与高清专辑封面")
-        self.btn_scrape.clicked.connect(self.scrapeClicked.emit)
-        layout.addWidget(self.btn_scrape)
-
-        layout.addSpacing(2)
-
-        # 歌词字号调节
-        self.btn_font_dec = WinUIChipButton("A-", fixed_w=30, parent=self)
-        self.btn_font_dec.setToolTip("减小歌词字号 (Ctrl + 滚轮)")
-        self.btn_font_dec.clicked.connect(lambda: self.fontSizeDeltaRequested.emit(-2))
-        layout.addWidget(self.btn_font_dec)
-
-        self.lbl_font_size = QLabel("20px", self)
-        self.lbl_font_size.setFixedWidth(34)
-        self.lbl_font_size.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_font_size.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
-        layout.addWidget(self.lbl_font_size)
-
-        self.btn_font_inc = WinUIChipButton("A+", fixed_w=30, parent=self)
-        self.btn_font_inc.setToolTip("增大歌词字号 (Ctrl + 滚轮)")
-        self.btn_font_inc.clicked.connect(lambda: self.fontSizeDeltaRequested.emit(2))
-        layout.addWidget(self.btn_font_inc)
-
-        layout.addSpacing(2)
-
-        # 译文开关、逐字开关、桌面歌词开关
-        self.btn_trans = WinUIChipButton("译", active=True, fixed_w=30, parent=self)
-        self.btn_trans.setToolTip("显示 / 隐藏双语翻译歌词")
-        self.btn_trans.clicked.connect(self._on_toggle_translation)
-        layout.addWidget(self.btn_trans)
-
-        self.btn_syllable = WinUIChipButton("逐字", active=True, show_dot=True, parent=self)
-        self.btn_syllable.setToolTip("开启 / 关闭逐字柔光推进动效")
-        self.btn_syllable.clicked.connect(self._on_toggle_syllable)
-        layout.addWidget(self.btn_syllable)
-
+        # 右侧精炼工具组：桌面词、迷你窗、全屏沉浸、偏好设置
         self.btn_desktop_lyric = WinUIChipButton("桌面词", active=False, icon_kind="desktop_lyric", parent=self)
-        self.btn_desktop_lyric.setToolTip("打开 / 关闭置顶桌面悬浮歌词窗 (Ctrl+D)")
+        self.btn_desktop_lyric.setToolTip("桌面歌词 (Ctrl+D)")
         self.btn_desktop_lyric.clicked.connect(self._on_toggle_desktop_lyric)
         layout.addWidget(self.btn_desktop_lyric)
 
         self.btn_mini = WinUIChipButton("迷你窗", active=False, icon_kind="mini_player", parent=self)
-        self.btn_mini.setToolTip("切换为置顶迷你黑胶悬浮播放器 (Ctrl+M)")
+        self.btn_mini.setToolTip("迷你窗口 (Ctrl+M)")
         self.btn_mini.clicked.connect(self.miniPlayerClicked.emit)
         layout.addWidget(self.btn_mini)
 
         self.btn_immersive = WinUIChipButton("沉浸", active=False, icon_kind="fullscreen", parent=self)
-        self.btn_immersive.setToolTip("全屏沉浸流光模式 (F11)")
+        self.btn_immersive.setToolTip("全屏沉浸 (F11)")
         self.btn_immersive.clicked.connect(self.immersiveClicked.emit)
         layout.addWidget(self.btn_immersive)
 
-        self.btn_theme = WinUIChipButton("浅色", active=False, icon_kind="sun", parent=self)
-        self.btn_theme.setToolTip("切换北欧晨雾浅色 / 峡湾极夜深色主题")
-        self.btn_theme.clicked.connect(self._on_toggle_theme)
-        layout.addWidget(self.btn_theme)
+        self.btn_settings = WinUIChipButton("设置", active=False, icon_kind="settings", parent=self)
+        self.btn_settings.setToolTip("设置")
+        self.btn_settings.clicked.connect(self.settingsClicked.emit)
+        layout.addWidget(self.btn_settings)
+
+        # 保留历史组件引用以保持接口兼容（不在顶栏堆叠显示）
+        self.btn_scrape = WinUIChipButton("词图")
+        self.btn_scrape.clicked.connect(self.scrapeClicked.emit)
+        self.btn_font_dec = WinUIChipButton("A-")
+        self.lbl_font_size = QLabel("20px")
+        self.btn_font_inc = WinUIChipButton("A+")
+        self.btn_trans = WinUIChipButton("译")
+        self.btn_syllable = WinUIChipButton("逐字")
+        self.btn_theme = WinUIChipButton("浅色")
+        for _w in (self.btn_scrape, self.btn_font_dec, self.lbl_font_size, self.btn_font_inc, self.btn_trans, self.btn_syllable, self.btn_theme):
+            _w.hide()
 
         layout.addSpacing(2)
 
@@ -384,21 +360,12 @@ class WinUITitleBar(QWidget):
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
         self.brand_label.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
-        self.lbl_font_size.setStyleSheet(f"color: {theme.slate_muted.name()}; background: transparent;")
-        self.btn_theme.set_chip_active(theme.name == "dusk")
-        self.btn_theme.icon_kind = "sun" if theme.name == "daylight" else "moon"
-        self.btn_theme.setText("浅色" if theme.name == "daylight" else "深色")
         for btn in (
             self.btn_sidebar,
-            self.btn_scrape,
-            self.btn_font_dec,
-            self.btn_font_inc,
-            self.btn_trans,
-            self.btn_syllable,
             self.btn_desktop_lyric,
             self.btn_mini,
             self.btn_immersive,
-            self.btn_theme,
+            self.btn_settings,
         ):
             btn.set_theme(theme)
         self.btn_min.set_theme(theme)
