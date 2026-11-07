@@ -53,8 +53,12 @@ from qt6_player.components.lyric_poster_dialog import LyricPosterDialog
 from qt6_player.components.mini_player_window import MiniPlayerWindow
 from qt6_player.components.immersive_window import ImmersiveFullscreenWindow
 from qt6_player.components.fluent_widgets import WinUIFlyoutMenu
-from qframelesswindow import FramelessMainWindow
-from qt6_player.services.window_effects import apply_window_system_theme_and_corners, apply_window_backdrop
+from qframelesswindow import AcrylicWindow
+from qt6_player.services.window_effects import (
+    apply_window_system_theme_and_corners,
+    apply_window_backdrop,
+    suppress_native_caption_buttons,
+)
 from qt6_player.services.media_control_service import WindowsMediaControlService
 
 
@@ -74,33 +78,14 @@ class WindowFrameOverlay(QWidget):
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.hide()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
-        self.update()
 
     def paintEvent(self, event) -> None:
-        if self.rect().adjusted(14, 14, -14, -14).contains(event.rect()):
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        is_max = self.window().isMaximized()
-        radius = 0.0 if is_max else 12.0
-
-        outer_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        outer_path = QPainterPath()
-        outer_path.addRoundedRect(outer_rect, radius, radius)
-        painter.setPen(QPen(self.theme.stroke_outer, 1.0))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(outer_path)
-
-        if radius > 0:
-            inner_rect = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
-            inner_path = QPainterPath()
-            inner_path.addRoundedRect(inner_rect, radius - 1.0, radius - 1.0)
-            painter.setPen(QPen(self.theme.stroke_inner, 1.0))
-            painter.drawPath(inner_path)
+        # 已由 Windows 11 DWM 原生硬件圆角边框接管，不再叠加软件伪边框避免双圆角重影
+        return
 
 
 class AutoTranslationWorker(QThread):
@@ -121,11 +106,17 @@ class AutoTranslationWorker(QThread):
             self.translationReady.emit(self.track_id, "")
 
 
-class NordicWinUI3Window(FramelessMainWindow):
+class NordicWinUI3Window(AcrylicWindow):
     def __init__(self):
         super().__init__()
+        self._central_widget: Optional[QWidget] = None
+        self._central_layout = QVBoxLayout(self)
+        self._central_layout.setContentsMargins(0, 0, 0, 0)
+        self._central_layout.setSpacing(0)
         if hasattr(self, "titleBar"):
             self.titleBar.hide()
+            self.titleBar.setFixedSize(0, 0)
+        suppress_native_caption_buttons(self.winId())
         self.setStyleSheet("NordicWinUI3Window { background: transparent; }")
 
         self.setWindowTitle("Klang")
@@ -342,13 +333,31 @@ class NordicWinUI3Window(FramelessMainWindow):
         if hasattr(self, "_autosave_timer"):
             self._autosave_timer.start()
 
+    def updateFrameless(self) -> None:
+        super().updateFrameless()
+        if hasattr(self, "titleBar"):
+            self.titleBar.hide()
+            self.titleBar.setFixedSize(0, 0)
+        suppress_native_caption_buttons(self.winId())
+
+    def setCentralWidget(self, widget: QWidget) -> None:
+        while self._central_layout.count():
+            item = self._central_layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().setParent(None)
+        self._central_widget = widget
+        self._central_layout.addWidget(widget)
+
+    def centralWidget(self) -> Optional[QWidget]:
+        return self._central_widget
+
     def _setup_ui(self) -> None:
         central = QWidget(self)
         central.setMouseTracking(True)
         self.setCentralWidget(central)
 
         root_vbox = QVBoxLayout(central)
-        root_vbox.setContentsMargins(1, 1, 1, 1)
+        root_vbox.setContentsMargins(0, 0, 0, 0)
         root_vbox.setSpacing(0)
 
         self.title_bar = WinUITitleBar(central)
@@ -385,7 +394,7 @@ class NordicWinUI3Window(FramelessMainWindow):
 
     def _apply_backdrop_to_window(self) -> None:
         try:
-            tint = self.theme.mist_white.name() if self.theme.name == "daylight" else self.theme.dusk_night.name()
+            tint = self.theme.mist_white.name()
             apply_window_backdrop(
                 self,
                 material=getattr(self, "backdrop_material", "mica"),
@@ -869,6 +878,13 @@ class NordicWinUI3Window(FramelessMainWindow):
         self._apply_backdrop_to_window()
         self._bg_dirty = True
         self.update()
+        mat_labels = {
+            "solid": "标准纯色",
+            "mica": "Win11 云母 (Mica)",
+            "acrylic": "亚克力 (Acrylic)",
+        }
+        if hasattr(self, "lyrics_stage") and hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast(f"窗口材质: {mat_labels.get(mode, mode)}")
         self.schedule_save()
 
     def _open_lyric_poster_dialog(self, line_index: int = -1) -> None:
@@ -1424,43 +1440,41 @@ class NordicWinUI3Window(FramelessMainWindow):
         bp = QPainter(pix)
         bp.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        rect = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
-        radius = 0.0 if self.isMaximized() else 12.0
-        path = QPainterPath()
-        path.addRoundedRect(rect, radius, radius)
+        rect = QRectF(0.0, 0.0, float(w), float(h))
 
         fill_col = QColor(self._bg_col_cur)
         mat = getattr(self, "backdrop_material", "mica")
         if mat == "mica":
-            # 云母材质：适度微光底色，透映系统桌面壁纸毛玻璃与云母微颗粒，保留北欧原色温润
-            fill_col.setAlpha(26 if self.theme.name == "daylight" else 36)
+            # 云母材质：遵循 PyQt-Fluent-Widgets (FluentWidget) 合成机制，以极低薄纱底色透出原生 DWM 云母壁纸采样
+            fill_col.setAlpha(14 if self.theme.name == "daylight" else 20)
+            bp.fillRect(rect, fill_col)
         elif mat == "acrylic":
-            # 亚克力材质：极低前景色，DWM 硬件亚克力滤镜自带柔和底色，透视模糊后方桌面/应用
-            fill_col.setAlpha(12 if self.theme.name == "daylight" else 18)
+            # 亚克力材质：setAcrylicEffect 已在 DWM 硬件模糊层混入北欧底色，此处保持透明避免双重叠加遮挡模糊
+            pass
         else:
-            # 标准纯色模式：完全不透明 (255)
+            # 标准纯色模式：完全不透明 (255)，完整还原北欧燕麦白/暮色黑原色
             fill_col.setAlpha(255)
-        bp.fillPath(path, fill_col)
+            bp.fillRect(rect, fill_col)
 
         # 封面自适应双核流光背景 (Ambient Mesh Glow，缓存在位图中避免每帧全屏径向渐变计算)
         base_alpha = 24 if self.theme.name == "daylight" else 32
         if mat == "acrylic":
-            base_alpha = int(base_alpha * 0.45)
+            base_alpha = 12 if self.theme.name == "daylight" else 16
         elif mat == "mica":
-            base_alpha = int(base_alpha * 0.65)
+            base_alpha = 14 if self.theme.name == "daylight" else 18
         c1 = QColor(self._amb1_cur)
         c1.setAlpha(base_alpha)
         orb1 = QRadialGradient(QPointF(w * 0.28, h * 0.40), 500.0)
         orb1.setColorAt(0.0, c1)
         orb1.setColorAt(1.0, Qt.GlobalColor.transparent)
-        bp.fillPath(path, orb1)
+        bp.fillRect(rect, orb1)
 
         c2 = QColor(self._amb2_cur)
         c2.setAlpha(int(round(base_alpha * 0.78)))
         orb2 = QRadialGradient(QPointF(w * 0.72, h * 0.62), 440.0)
         orb2.setColorAt(0.0, c2)
         orb2.setColorAt(1.0, Qt.GlobalColor.transparent)
-        bp.fillPath(path, orb2)
+        bp.fillRect(rect, orb2)
         bp.end()
 
         self._cached_bg_pixmap = pix
