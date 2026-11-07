@@ -233,6 +233,8 @@ class TransportIconButton(QPushButton):
         else:
             self.setFixedSize(32, 32)
         self.is_eq_active = False
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
 
         # 弹性按压回弹动画
         self._bounce_anim = QVariantAnimation(self)
@@ -286,6 +288,11 @@ class TransportIconButton(QPushButton):
             self.trigger_pulse(0.86)
         super().mouseReleaseEvent(event)
 
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
+
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
         self.update()
@@ -299,11 +306,13 @@ class TransportIconButton(QPushButton):
         painter.scale(self._scale_factor, self._scale_factor)
         painter.translate(-cx, -cy)
 
+        is_dusk = self.theme.name == "dusk"
         if self.is_primary:
             bg = QColor(self.theme.sage_accent)
             if self.underMouse():
                 bg = bg.lighter(108)
-            painter.setPen(QPen(self.theme.sage_border, 1.0))
+            border_pen = QColor(255, 255, 255, 80) if self.is_translucent_backdrop else self.theme.sage_border
+            painter.setPen(QPen(border_pen, 1.0))
             painter.setBrush(bg)
             painter.drawEllipse(QPointF(cx, cy), 19.0, 19.0)
             fg = QColor("#FAF9F6")
@@ -312,8 +321,15 @@ class TransportIconButton(QPushButton):
                 path = QPainterPath()
                 path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6.0, 6.0)
                 if self.kind == "eq" and self.is_eq_active:
-                    fill = self.theme.sage_soft
-                    border = self.theme.sage_border
+                    fill = QColor(140, 161, 150, 60) if is_dusk else QColor(110, 130, 119, 52)
+                    border = QColor(140, 161, 150, 130) if is_dusk else QColor(110, 130, 119, 120)
+                elif self.is_translucent_backdrop:
+                    if is_dusk:
+                        fill = QColor(255, 255, 255, 36 if self.underMouse() else 18)
+                        border = QColor(255, 255, 255, 55 if self.underMouse() else 32)
+                    else:
+                        fill = QColor(255, 255, 255, 195 if self.underMouse() else 125)
+                        border = QColor(255, 255, 255, 230 if self.underMouse() else 160)
                 else:
                     fill = self.theme.subtle_hover if self.underMouse() else self.theme.oat_surface
                     border = self.theme.stroke_outer
@@ -369,7 +385,8 @@ class TransportIconButton(QPushButton):
             tri.closeSubpath()
             painter.drawPath(tri)
         elif self.kind == "mode":
-            pen = QPen(fg, 1.35)
+            mode_col = self.theme.sage_accent if self.play_mode == "smart_flow" else fg
+            pen = QPen(mode_col, 1.35, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             if self.play_mode in ("loop_list", "loop_one"):
@@ -380,6 +397,17 @@ class TransportIconButton(QPushButton):
             elif self.play_mode == "shuffle":
                 painter.drawLine(int(cx - 6), int(cy - 4), int(cx + 6), int(cy + 4))
                 painter.drawLine(int(cx - 6), int(cy + 4), int(cx + 6), int(cy - 4))
+            elif self.play_mode == "smart_flow":
+                # 声学 DNA 情绪漫游：北欧流线声波曲线 + 漫游微光点
+                flow_path = QPainterPath()
+                flow_path.moveTo(cx - 7.0, cy + 1.0)
+                flow_path.cubicTo(cx - 3.5, cy - 6.0, cx - 0.5, cy + 6.0, cx + 3.0, cy - 1.5)
+                flow_path.quadTo(cx + 5.0, cy - 4.5, cx + 7.0, cy - 1.0)
+                painter.drawPath(flow_path)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(mode_col)
+                painter.drawEllipse(QPointF(cx + 5.8, cy - 4.8), 1.4, 1.4)
+                painter.drawEllipse(QPointF(cx - 5.2, cy - 4.2), 1.1, 1.1)
             else:  # sequential
                 painter.drawLine(int(cx - 6), int(cy - 3), int(cx + 6), int(cy - 3))
                 painter.drawLine(int(cx - 6), int(cy + 3), int(cx + 6), int(cy + 3))
@@ -446,11 +474,12 @@ class TransportBar(QWidget):
     volumeChanged = pyqtSignal(float)
     muteToggled = pyqtSignal()
 
-    _MODE_ORDER = ["loop_list", "loop_one", "shuffle", "sequential"]
+    _MODE_ORDER = ["loop_list", "loop_one", "shuffle", "smart_flow", "sequential"]
     _MODE_NAMES = {
         "loop_list": "列表循环",
         "loop_one": "单曲循环",
         "shuffle": "随机播放",
+        "smart_flow": "情绪漫游 (声学 DNA)",
         "sequential": "顺序播放",
     }
 
@@ -669,6 +698,23 @@ class TransportBar(QWidget):
         text = line.sub if line.is_interlude else line.text
         fm = self.snippet_label.fontMetrics()
         self.snippet_label.setText(fm.elidedText(text, Qt.TextElideMode.ElideRight, 195))
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        for b in (
+            getattr(self, "btn_fav", None),
+            getattr(self, "btn_mode", None),
+            getattr(self, "btn_prev", None),
+            getattr(self, "btn_play", None),
+            getattr(self, "btn_next", None),
+            getattr(self, "btn_rate", None),
+            getattr(self, "btn_eq", None),
+            getattr(self, "btn_mute", None),
+        ):
+            if b and hasattr(b, "set_backdrop_material"):
+                b.set_backdrop_material(material)
+        self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme

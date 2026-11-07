@@ -402,7 +402,7 @@ class LyricPosterDialog(WinUIModalDialog):
         theme: NordicThemeColors = DAYLIGHT_THEME,
         parent: Optional[QWidget] = None,
     ):
-        super().__init__("歌词海报卡片", 860, 620, theme=theme, parent=parent)
+        super().__init__("歌词卡片", 860, 620, theme=theme, parent=parent)
         self.track = track
         self.all_lyrics = list(lyrics) if lyrics else []
         self.selected_indices = set()
@@ -433,23 +433,23 @@ class LyricPosterDialog(WinUIModalDialog):
         left_vbox.setSpacing(10)
 
         # 1. 构图比例
-        lbl_ratio = QLabel("构图比例", left_widget)
+        lbl_ratio = QLabel("卡片尺寸", left_widget)
         lbl_ratio.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_ratio.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         left_vbox.addWidget(lbl_ratio)
 
-        self.ratio_tabs = WinUISegmentedControl(["经典方卡 (1:1)", "极简竖屏 (3:4)"], left_widget)
+        self.ratio_tabs = WinUISegmentedControl(["正方形 (1:1)", "竖版 (3:4)"], left_widget)
         self.ratio_tabs.set_theme(self.theme)
         self.ratio_tabs.currentIndexChanged.connect(self._on_ratio_changed)
         left_vbox.addWidget(self.ratio_tabs)
 
         # 2. 视觉风格
-        lbl_style = QLabel("视觉风格", left_widget)
+        lbl_style = QLabel("背景配色", left_widget)
         lbl_style.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_style.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         left_vbox.addWidget(lbl_style)
 
-        self.style_tabs = WinUISegmentedControl(["北欧晨曦", "极夜深黑", "唱片流光"], left_widget)
+        self.style_tabs = WinUISegmentedControl(["浅色", "深色", "封面渐变"], left_widget)
         self.style_tabs.set_theme(self.theme)
         if self.theme.name == "dusk":
             self.style_tabs.set_current_index(1, animate=False)
@@ -458,7 +458,7 @@ class LyricPosterDialog(WinUIModalDialog):
 
         # 3. 勾选选项 (双语翻译 & 专辑封面)
         opt_row = QHBoxLayout()
-        self.cb_trans = QCheckBox("包含双语翻译", left_widget)
+        self.cb_trans = QCheckBox("显示翻译", left_widget)
         self.cb_trans.setChecked(True)
         self.cb_trans.setStyleSheet(
             f"QCheckBox {{ color: {self.theme.slate_dark.name()}; font-size: 12px; font-weight: 500; }} "
@@ -468,7 +468,7 @@ class LyricPosterDialog(WinUIModalDialog):
         self.cb_trans.toggled.connect(self._on_option_changed)
         opt_row.addWidget(self.cb_trans)
 
-        self.cb_cover = QCheckBox("显示封面画作", left_widget)
+        self.cb_cover = QCheckBox("显示封面", left_widget)
         self.cb_cover.setChecked(True)
         self.cb_cover.setStyleSheet(self.cb_trans.styleSheet())
         self.cb_cover.toggled.connect(self._on_option_changed)
@@ -552,7 +552,7 @@ class LyricPosterDialog(WinUIModalDialog):
         lbl_pv.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         preview_header.addWidget(lbl_pv)
 
-        lbl_pv_tag = QLabel("1080P 超清渲染", right_widget)
+        lbl_pv_tag = QLabel("1080P", right_widget)
         lbl_pv_tag.setFont(get_nordic_font(9, QFont.Weight.Bold, mono=True))
         lbl_pv_tag.setStyleSheet(f"color: {self.theme.sage_accent.name()}; background: transparent;")
         preview_header.addWidget(lbl_pv_tag)

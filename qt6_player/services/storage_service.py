@@ -1,11 +1,13 @@
 import json
 import os
+import re
 import sys
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from qt6_player.data.tracks import NordicTrack, NORDIC_TRACKS, LyricLine
-from qt6_player.services.metadata_service import create_track_from_file
+from qt6_player.services.metadata_service import create_track_from_file, _GENERIC_FOLDER_NAMES
 
 
 def _get_config_path() -> Path:
@@ -62,13 +64,24 @@ def load_player_state() -> Dict[str, Any]:
         "spatial_width": 1.35,
         "spatial_height": 0.65,
         "audio_output_mode": "binaural",
+        "selected_device_id": "default",
+        "crossfade_sec": 0.0,
+        "replay_gain_enabled": False,
+        "vocal_balance": 0.0,
+        "turntable_physics": True,
+        "vinyl_warmth": 0.0,
+        "headphone_profile": "bypass",
         "desktop_lyric_open": False,
         "desktop_lyric_pos": None,
         "desktop_lyric_font_size": 22,
-        "immersive_fps": 60,
+        "immersive_fps": 120,
         "window_geometry": None,
         "is_maximized": False,
         "last_track_index": 0,
+        "custom_playlists": {},
+        "watched_folders": [],
+        "nav_sort_mode": "default",
+        "nav_group_mode": "artist",
         "playlist": None,
         "local_tracks": [],
         "builtin_overrides": {},
@@ -84,9 +97,35 @@ def load_player_state() -> Dict[str, Any]:
     return default_state
 
 
+_SAVE_LOCK = threading.Lock()
+
+
+def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
+    with _SAVE_LOCK:
+        try:
+            _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp_file = _CONFIG_PATH.with_suffix(".tmp")
+            tmp_file.write_text(
+                json.dumps(safe_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp_file.replace(_CONFIG_PATH)
+            return True
+        except Exception:
+            try:
+                _CONFIG_PATH.write_text(
+                    json.dumps(safe_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                return True
+            except Exception:
+                return False
+
+
 def save_player_state(
     tracks: List[NordicTrack],
     settings: Dict[str, Any],
+    sync: bool = False,
 ) -> bool:
     playlist_data = []
     local_tracks_data = []
@@ -120,6 +159,14 @@ def save_player_state(
             "channels": int(getattr(t, "channels", 2)),
             "bitrate_kbps": int(getattr(t, "bitrate_kbps", 0)),
             "audio_format": str(getattr(t, "audio_format", "")),
+            "replay_gain_db": getattr(t, "replay_gain_db", None),
+            "replay_peak": getattr(t, "replay_peak", None),
+            "start_time": float(getattr(t, "start_time", 0.0) or 0.0),
+            "end_time": float(getattr(t, "end_time", 0.0) or 0.0),
+            "cue_path": str(getattr(t, "cue_path", "") or ""),
+            "cue_track_num": int(getattr(t, "cue_track_num", 0) or 0),
+            "added_timestamp": float(getattr(t, "added_timestamp", 0.0) or 0.0),
+            "acoustic_dna": getattr(t, "acoustic_dna", None),
             "lyrics": lyrics_data,
         }
         playlist_data.append(entry)
@@ -140,24 +187,15 @@ def save_player_state(
 
     safe_payload = _make_json_safe(payload)
 
-    try:
-        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = _CONFIG_PATH.with_suffix(".tmp")
-        tmp_file.write_text(
-            json.dumps(safe_payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp_file.replace(_CONFIG_PATH)
-        return True
-    except Exception:
-        try:
-            _CONFIG_PATH.write_text(
-                json.dumps(safe_payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            return True
-        except Exception:
-            return False
+    if sync:
+        return _write_payload_to_disk(safe_payload)
+
+    threading.Thread(
+        target=_write_payload_to_disk,
+        args=(safe_payload,),
+        daemon=True,
+    ).start()
+    return True
 
 
 def _parse_saved_lyrics(lyrics_list: list) -> List[LyricLine]:
@@ -190,6 +228,25 @@ def _parse_saved_lyrics(lyrics_list: list) -> List[LyricLine]:
 _LEGACY_BUILTIN_IDS = {"bergen-mist", "oslo-atelier"}
 
 
+def _apply_saved_meta_if_valid(tr: NordicTrack, item: Dict[str, Any]) -> None:
+    saved_title = str(item.get("title") or "").strip()
+    saved_artist = str(item.get("artist") or "").strip()
+    saved_album = str(item.get("album") or "").strip()
+
+    # 若旧版缓存将 '歌名 - 歌手[专辑]' 反向解析为 title='歌手[专辑]'，则自动使用新解析出的正确歌名、歌手与专辑
+    is_legacy_inverted = bool(
+        re.search(r"[\[【].+?[\]】]\s*$", saved_title)
+        or (saved_album.lower() in _GENERIC_FOLDER_NAMES and tr.album)
+    )
+    if not is_legacy_inverted:
+        if saved_title:
+            tr.title = saved_title
+        if saved_artist:
+            tr.artist = saved_artist
+        if saved_album and saved_album.lower() not in _GENERIC_FOLDER_NAMES:
+            tr.album = saved_album
+
+
 def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
     tracks: List[NordicTrack] = []
 
@@ -206,14 +263,23 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
             valid_cov = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
 
             tr = create_track_from_file(fp, index_hint=idx)
-            if item.get("title"):
-                tr.title = str(item["title"])
-            if item.get("artist"):
-                tr.artist = str(item["artist"])
-            if item.get("album"):
-                tr.album = str(item["album"])
-            if item.get("duration") and float(item["duration"]) >= 15.0:
+            if tid.startswith("cue-"):
+                tr.track_id = tid
+            _apply_saved_meta_if_valid(tr, item)
+            if item.get("start_time"):
+                tr.start_time = float(item["start_time"])
+            if item.get("end_time"):
+                tr.end_time = float(item["end_time"])
+            if item.get("cue_path"):
+                tr.cue_path = str(item["cue_path"])
+            if item.get("cue_track_num"):
+                tr.cue_track_num = int(item["cue_track_num"])
+            if item.get("added_timestamp"):
+                tr.added_timestamp = float(item["added_timestamp"])
+            if item.get("duration") and float(item["duration"]) >= 5.0:
                 tr.duration = float(item["duration"])
+            elif tr.end_time > tr.start_time:
+                tr.duration = round(tr.end_time - tr.start_time, 2)
             if valid_cov and not tr.cover_path:
                 tr.cover_path = valid_cov
             tr.is_favorite = bool(item.get("is_favorite", False))
@@ -228,6 +294,12 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
                 tr.bitrate_kbps = int(item["bitrate_kbps"])
             if item.get("audio_format") and not tr.audio_format:
                 tr.audio_format = str(item["audio_format"])
+            if item.get("replay_gain_db") is not None and tr.replay_gain_db is None:
+                tr.replay_gain_db = float(item["replay_gain_db"])
+            if item.get("replay_peak") is not None and tr.replay_peak is None:
+                tr.replay_peak = float(item["replay_peak"])
+            if isinstance(item.get("acoustic_dna"), dict):
+                tr.acoustic_dna = dict(item["acoustic_dna"])
             saved_lyrics = _parse_saved_lyrics(item.get("lyrics", []))
             if saved_lyrics:
                 tr.lyrics = saved_lyrics
@@ -242,12 +314,7 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
         if not fp or not Path(fp).is_file():
             continue
         tr = create_track_from_file(fp, index_hint=len(tracks) + idx)
-        if item.get("title"):
-            tr.title = str(item["title"])
-        if item.get("artist"):
-            tr.artist = str(item["artist"])
-        if item.get("album"):
-            tr.album = str(item["album"])
+        _apply_saved_meta_if_valid(tr, item)
         if item.get("duration") and float(item["duration"]) >= 15.0:
             tr.duration = float(item["duration"])
         saved_cov = item.get("cover_path")

@@ -26,6 +26,8 @@ class WinUIChipButton(QPushButton):
         self.icon_kind: str = icon_kind
         self._fixed_w = fixed_w
         self._hover_alpha: float = 0.0
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(28)
@@ -37,6 +39,11 @@ class WinUIChipButton(QPushButton):
         self._hover_anim.valueChanged.connect(self._on_hover_val)
 
         self._update_width()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def _on_hover_val(self, val: float) -> None:
         self._hover_alpha = float(val)
@@ -81,6 +88,9 @@ class WinUIChipButton(QPushButton):
         self.is_chip_active = active
         self.update()
 
+    def set_active(self, active: bool) -> None:
+        self.set_chip_active(active)
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -89,21 +99,38 @@ class WinUIChipButton(QPushButton):
         path = QPainterPath()
         path.addRoundedRect(rect, 6.0, 6.0)
 
-        if self.is_chip_active:
-            bg = self.theme.sage_soft
-            border = self.theme.sage_border
-            text_color = self.theme.charcoal
+        is_dusk = self.theme.name == "dusk"
+        if self.is_translucent_backdrop:
+            if self.is_chip_active:
+                bg = QColor(140, 161, 150, 60) if is_dusk else QColor(110, 130, 119, 52)
+                border = QColor(140, 161, 150, 130) if is_dusk else QColor(110, 130, 119, 120)
+                text_color = self.theme.charcoal
+            else:
+                if is_dusk:
+                    a_bg = int(18 + 22 * self._hover_alpha)
+                    a_bd = int(32 + 25 * self._hover_alpha)
+                else:
+                    a_bg = int(120 + 75 * self._hover_alpha)
+                    a_bd = int(155 + 75 * self._hover_alpha)
+                bg = QColor(255, 255, 255, a_bg)
+                border = QColor(255, 255, 255, a_bd)
+                text_color = self.theme.charcoal if self._hover_alpha > 0.35 else self.theme.slate_dark
         else:
-            bg = QColor(self.theme.oat_surface)
-            if self._hover_alpha > 0.01:
-                hov = self.theme.card_elevated
-                r = int(bg.red() + (hov.red() - bg.red()) * self._hover_alpha)
-                g = int(bg.green() + (hov.green() - bg.green()) * self._hover_alpha)
-                b = int(bg.blue() + (hov.blue() - bg.blue()) * self._hover_alpha)
-                a = int(bg.alpha() + (hov.alpha() - bg.alpha()) * self._hover_alpha)
-                bg = QColor(r, g, b, a)
-            border = self.theme.stroke_outer
-            text_color = self.theme.charcoal if self._hover_alpha > 0.4 else self.theme.slate_dark
+            if self.is_chip_active:
+                bg = self.theme.sage_soft
+                border = self.theme.sage_border
+                text_color = self.theme.charcoal
+            else:
+                bg = QColor(self.theme.oat_surface)
+                if self._hover_alpha > 0.01:
+                    hov = self.theme.card_elevated
+                    r = int(bg.red() + (hov.red() - bg.red()) * self._hover_alpha)
+                    g = int(bg.green() + (hov.green() - bg.green()) * self._hover_alpha)
+                    b = int(bg.blue() + (hov.blue() - bg.blue()) * self._hover_alpha)
+                    a = int(bg.alpha() + (hov.alpha() - bg.alpha()) * self._hover_alpha)
+                    bg = QColor(r, g, b, a)
+                border = self.theme.stroke_outer
+                text_color = self.theme.charcoal if self._hover_alpha > 0.4 else self.theme.slate_dark
 
         painter.fillPath(path, bg)
         painter.setPen(QPen(border, 1.0))
@@ -265,8 +292,8 @@ class WinUITitleBar(QWidget):
         self.btn_mini.clicked.connect(self.miniPlayerClicked.emit)
         layout.addWidget(self.btn_mini)
 
-        self.btn_immersive = WinUIChipButton("沉浸", active=False, icon_kind="fullscreen", parent=self)
-        self.btn_immersive.setToolTip("全屏沉浸 (F11)")
+        self.btn_immersive = WinUIChipButton("全屏", active=False, icon_kind="fullscreen", parent=self)
+        self.btn_immersive.setToolTip("全屏模式 (F11)")
         self.btn_immersive.clicked.connect(self.immersiveClicked.emit)
         layout.addWidget(self.btn_immersive)
 
@@ -358,6 +385,26 @@ class WinUITitleBar(QWidget):
         self.btn_theme.setText("浅色" if next_name == "daylight" else "深色")
         self.themeToggled.emit(next_name)
 
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        chips = [
+            getattr(self, "btn_sidebar", None),
+            getattr(self, "btn_desktop_lyric", None),
+            getattr(self, "btn_mini", None),
+            getattr(self, "btn_immersive", None),
+            getattr(self, "btn_settings", None),
+            getattr(self, "btn_scrape", None),
+            getattr(self, "btn_font_dec", None),
+            getattr(self, "btn_font_inc", None),
+            getattr(self, "btn_trans", None),
+            getattr(self, "btn_syllable", None),
+            getattr(self, "btn_theme", None),
+        ]
+        for btn in chips:
+            if btn and hasattr(btn, "set_backdrop_material"):
+                btn.set_backdrop_material(material)
+        self.update()
+
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
         self.brand_label.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
@@ -383,24 +430,25 @@ class WinUITitleBar(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             win = self.window()
-            if sys.platform == "win32" and win and hasattr(win, "windowEffect"):
-                try:
-                    win.windowEffect.moveWindow(int(win.winId()))
-                    return
-                except Exception:
-                    pass
-            winHandle = win.windowHandle() if win else None
-            if winHandle is not None and hasattr(winHandle, "startSystemMove"):
-                winHandle.startSystemMove()
-                return
             if win:
                 self._drag_pos = event.globalPosition().toPoint() - win.frameGeometry().topLeft()
+                self._press_global_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            if not self.window().isMaximized():
-                self.window().move(event.globalPosition().toPoint() - self._drag_pos)
+        if self._drag_pos is not None and (event.buttons() & Qt.MouseButton.LeftButton):
+            win = self.window()
+            if win:
+                cur_global = event.globalPosition().toPoint()
+                if win.isMaximized():
+                    if hasattr(self, "_press_global_pos") and (cur_global - self._press_global_pos).manhattanLength() > 6:
+                        ratio_x = event.position().x() / max(1.0, float(self.width()))
+                        win.showNormal()
+                        new_w = win.width()
+                        self._drag_pos = QPoint(int(new_w * ratio_x), int(event.position().y()))
+                        win.move(cur_global - self._drag_pos)
+                else:
+                    win.move(cur_global - self._drag_pos)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:

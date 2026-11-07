@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QPoint,
     QTimer,
     QElapsedTimer,
+    QDateTime,
     pyqtSignal,
 )
 from PyQt6.QtGui import (
@@ -133,6 +134,7 @@ class ImmersiveArtworkView(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.track: Optional[NordicTrack] = None
         self.cover_pixmap: Optional[QPixmap] = None
         self.is_playing: bool = False
@@ -144,6 +146,18 @@ class ImmersiveArtworkView(QWidget):
         self.accent_color: QColor = QColor("#5B9E83")
         self._cached_disc_key: Optional[str] = None
         self._cached_disc_pixmap: Optional[QPixmap] = None
+        self._cached_sleeve_key: Optional[str] = None
+        self._cached_sleeve_pixmap: Optional[QPixmap] = None
+
+        # 预缓存字体与度量，避免 120 FPS paintEvent 中重复构造 QFont
+        self._font_badge = get_nordic_font(8, QFont.Weight.Bold, mono=True)
+        self._fm_badge = QFontMetricsF(self._font_badge)
+        self._font_title = get_nordic_font(22, QFont.Weight.Bold)
+        self._fm_title = QFontMetricsF(self._font_title)
+        self._font_sub = get_nordic_font(14, QFont.Weight.Medium)
+        self._fm_sub = QFontMetricsF(self._font_sub)
+        self._font_time = get_nordic_font(11, QFont.Weight.Medium, mono=True)
+        self._font_loop1 = get_nordic_font(8, QFont.Weight.Bold)
 
         # 现代极简线性唱臂系统 (仅在 vinyl_mode == "arm" 时生效)
         self.tonearm_angle: float = -16.0        # 当前旋转角 (deg): -16° 为停靠外侧, 0°~+8° 为音轨
@@ -202,6 +216,8 @@ class ImmersiveArtworkView(QWidget):
         self.cover_pixmap = None
         self._cached_disc_pixmap = None
         self._cached_disc_key = None
+        self._cached_sleeve_pixmap = None
+        self._cached_sleeve_key = None
         if track is not None:
             self.cover_pixmap = track.get_cover_pixmap()
             pal = track.palette or {}
@@ -223,13 +239,20 @@ class ImmersiveArtworkView(QWidget):
         self.update()
 
     def update_time(self, cur_time: float, dur: float) -> None:
-        self.current_time = max(0.0, cur_time)
         self.duration = max(1.0, dur)
-        if not self.is_dragging_progress:
-            self.update()
+        cur_time = max(0.0, cur_time)
+        if not self.is_playing or abs(cur_time - self.current_time) > 0.12:
+            self.current_time = cur_time
+            if not self.is_playing and not self.is_dragging_progress:
+                self.update()
+        else:
+            # 播放中通过微阻尼与音频时钟对齐，避免帧间阶跃与错相重绘
+            self.current_time += (cur_time - self.current_time) * 0.25
 
     def step_physics(self, dt: float) -> None:
         dt = max(0.001, min(0.05, dt))
+        if self.is_playing and not self.is_dragging_progress:
+            self.current_time = min(self.duration, self.current_time + dt)
         # 1. 黑胶盘旋转角速度平滑推进与惯性衰减
         target_vel = 36.0 if (self.is_playing and self.show_vinyl) else 0.0
         self.angular_vel += (target_vel - self.angular_vel) * min(1.0, dt * 3.6)
@@ -600,6 +623,62 @@ class ImmersiveArtworkView(QWidget):
             return
         super().mouseReleaseEvent(event)
 
+    def _render_sleeve_card(self, sleeve_sz: int) -> QPixmap:
+        """预渲染带 3 层弥散阴影与圆角玻璃高光的专辑封面卡片，避免每帧重复裁剪与重绘"""
+        pad = 36
+        total_w = sleeve_sz + pad * 2
+        total_h = sleeve_sz + pad * 2
+        dpr = max(1.0, self.devicePixelRatioF())
+        pix = QPixmap(int(total_w * dpr), int(total_h * dpr))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.GlobalColor.transparent)
+
+        sp = QPainter(pix)
+        sp.setRenderHint(QPainter.RenderHint.Antialiasing)
+        sp.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        card_rect = QRectF(float(pad), float(pad), float(sleeve_sz), float(sleeve_sz))
+        s_radius = 22.0
+
+        # 现代柔和连续景深阴影 (多层极低透明度漫反射，消除硬边缘暗阶与伪线)
+        for i in range(16):
+            t_sh = (i + 1) / 16.0
+            spread = 1.5 + t_sh * 22.0
+            alpha = int(round(18.0 * math.exp(-2.5 * t_sh * t_sh)))
+            if alpha > 0:
+                sh_rect = card_rect.adjusted(-spread * 0.35, spread * 0.5, spread * 0.35, spread * 1.1)
+                sh_path = QPainterPath()
+                sh_path.addRoundedRect(sh_rect, s_radius + spread * 0.4, s_radius + spread * 0.4)
+                sp.fillPath(sh_path, QColor(0, 0, 0, alpha))
+
+        jacket_path = QPainterPath()
+        jacket_path.addRoundedRect(card_rect, s_radius, s_radius)
+        sp.save()
+        sp.setClipPath(jacket_path)
+        if self.cover_pixmap is not None and not self.cover_pixmap.isNull():
+            sp.drawPixmap(card_rect.toRect(), self.cover_pixmap)
+        elif self.track is not None:
+            grad = QLinearGradient(card_rect.topLeft(), card_rect.bottomRight())
+            grad.setColorAt(0.0, QColor(self.track.palette["bg_primary"]))
+            grad.setColorAt(1.0, QColor(self.track.palette["bg_secondary"]))
+            sp.fillRect(card_rect, grad)
+        else:
+            sp.fillRect(card_rect, QColor(36, 42, 50))
+
+        glass_grad = QLinearGradient(card_rect.topLeft(), card_rect.bottomRight())
+        glass_grad.setColorAt(0.0, QColor(255, 255, 255, 45))
+        glass_grad.setColorAt(0.35, QColor(255, 255, 255, 8))
+        glass_grad.setColorAt(0.38, Qt.GlobalColor.transparent)
+        glass_grad.setColorAt(1.0, Qt.GlobalColor.transparent)
+        sp.fillRect(card_rect, glass_grad)
+        sp.restore()
+
+        sp.setPen(QPen(QColor(255, 255, 255, 38), 1.0))
+        sp.setBrush(Qt.BrushStyle.NoBrush)
+        sp.drawPath(jacket_path)
+        sp.end()
+        return pix
+
     def paintEvent(self, event) -> None:
         w, h = self.width(), self.height()
         if w < 100 or h < 100:
@@ -611,7 +690,7 @@ class ImmersiveArtworkView(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         # 1. 计算自适应几何排版 (整体下移平稳居中)
-        ctrl_h = 216.0 # 下方控件区总高度 (加大呼吸空间)
+        ctrl_h = 216.0  # 下方控件区总高度 (加大呼吸空间)
         max_sleeve = min(390.0, min(w * 0.74, h - ctrl_h - 80.0))
         sleeve_sz = int(max(240.0, max_sleeve))
         disc_sz = int(sleeve_sz * 0.94)
@@ -629,24 +708,11 @@ class ImmersiveArtworkView(QWidget):
         sleeve_left = center_x - sleeve_sz / 2.0
         center_y = sleeve_top + sleeve_sz / 2.0
 
-        # A. 绘制封面背后超大 Ambilight 环境溢彩氛围光
-        amb_radius = sleeve_sz * (0.88 + 0.16 * self.audio_energy)
-        amb_glow = QRadialGradient(QPointF(center_x, center_y), amb_radius)
-        c_glow = QColor(self.accent_color)
-        c_glow.setAlpha(int(round(90 + 35 * self.audio_energy)))
-        amb_glow.setColorAt(0.0, c_glow)
-        amb_glow.setColorAt(0.50, QColor(c_glow.red(), c_glow.green(), c_glow.blue(), 24))
-        amb_glow.setColorAt(1.0, Qt.GlobalColor.transparent)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(amb_glow)
-        p.drawEllipse(QPointF(center_x, center_y), amb_radius, amb_radius)
-
         # B. 若开启黑胶模式，绘制微露出的伴生黑胶唱片
+        disc_cx = center_x + slide_offset
+        disc_cy = center_y
         if self.show_vinyl and (self.slide_prog > 0.01 or self.is_playing):
-            disc_cx = center_x + slide_offset
-            disc_cy = center_y
-
-            disc_key = f"{self.track.track_id if self.track else 'none'}_{disc_sz}"
+            disc_key = f"{self.track.track_id if self.track else 'none'}_{disc_sz}_{id(self.cover_pixmap)}"
             if self._cached_disc_key != disc_key or self._cached_disc_pixmap is None:
                 self._cached_disc_pixmap = self._render_vinyl_disc(disc_sz)
                 self._cached_disc_key = disc_key
@@ -657,59 +723,16 @@ class ImmersiveArtworkView(QWidget):
                 p.translate(disc_cx, disc_cy)
                 p.rotate(self.vinyl_angle)
                 p.drawPixmap(int(-disc_sz / 2.0), int(-disc_sz / 2.0), self._cached_disc_pixmap)
-
-                sheen = QConicalGradient(QPointF(0, 0), 45.0)
-                sheen.setColorAt(0.0, QColor(255, 255, 255, 30))
-                sheen.setColorAt(0.12, QColor(255, 255, 255, 6))
-                sheen.setColorAt(0.25, Qt.GlobalColor.transparent)
-                sheen.setColorAt(0.50, QColor(255, 255, 255, 30))
-                sheen.setColorAt(0.62, QColor(255, 255, 255, 6))
-                sheen.setColorAt(0.75, Qt.GlobalColor.transparent)
-                sheen.setColorAt(1.0, QColor(255, 255, 255, 30))
-
-                sheen_path = QPainterPath()
-                sheen_path.addEllipse(QPointF(0, 0), disc_sz / 2.0 - 2.0, disc_sz / 2.0 - 2.0)
-                hole_cut = QPainterPath()
-                hole_cut.addEllipse(QPointF(0, 0), disc_sz * 0.18, disc_sz * 0.18)
-                p.fillPath(sheen_path.subtracted(hole_cut), sheen)
                 p.restore()
 
-        # C. 绘制前景核心现代专辑封面卡片
+        # C. 绘制前景核心现代专辑封面卡片 (使用预缓存纹理，单次 Blit 零裁剪开销)
         sleeve_rect = QRectF(sleeve_left, sleeve_top, float(sleeve_sz), float(sleeve_sz))
-        s_radius = 22.0
-
-        for pad_w, pad_h, alpha in ((28.0, 36.0, 32), (16.0, 20.0, 60), (6.0, 8.0, 95)):
-            sh_rect = sleeve_rect.adjusted(-pad_w * 0.5, pad_h * 0.6, pad_w * 0.5, pad_h * 1.4)
-            sh_path = QPainterPath()
-            sh_path.addRoundedRect(sh_rect, s_radius + 4.0, s_radius + 4.0)
-            p.fillPath(sh_path, QColor(0, 0, 0, alpha))
-
-        jacket_path = QPainterPath()
-        jacket_path.addRoundedRect(sleeve_rect, s_radius, s_radius)
-        p.save()
-        p.setClipPath(jacket_path)
-        if self.cover_pixmap is not None and not self.cover_pixmap.isNull():
-            p.drawPixmap(sleeve_rect.toRect(), self.cover_pixmap)
-        elif self.track is not None:
-            grad = QLinearGradient(sleeve_rect.topLeft(), sleeve_rect.bottomRight())
-            grad.setColorAt(0.0, QColor(self.track.palette["bg_primary"]))
-            grad.setColorAt(1.0, QColor(self.track.palette["bg_secondary"]))
-            p.fillRect(sleeve_rect, grad)
-        else:
-            p.fillRect(sleeve_rect, QColor(36, 42, 50))
-
-        # 缎面高光与细描边
-        glass_grad = QLinearGradient(sleeve_rect.topLeft(), sleeve_rect.bottomRight())
-        glass_grad.setColorAt(0.0, QColor(255, 255, 255, 45))
-        glass_grad.setColorAt(0.35, QColor(255, 255, 255, 8))
-        glass_grad.setColorAt(0.38, Qt.GlobalColor.transparent)
-        glass_grad.setColorAt(1.0, Qt.GlobalColor.transparent)
-        p.fillRect(sleeve_rect, glass_grad)
-        p.restore()
-
-        p.setPen(QPen(QColor(255, 255, 255, 38), 1.0))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(jacket_path)
+        sleeve_key = f"{self.track.track_id if self.track else 'none'}_{sleeve_sz}_{id(self.cover_pixmap)}"
+        if self._cached_sleeve_key != sleeve_key or self._cached_sleeve_pixmap is None:
+            self._cached_sleeve_pixmap = self._render_sleeve_card(sleeve_sz)
+            self._cached_sleeve_key = sleeve_key
+        if self._cached_sleeve_pixmap is not None:
+            p.drawPixmap(int(round(sleeve_left - 36.0)), int(round(sleeve_top - 36.0)), self._cached_sleeve_pixmap)
 
         # 若开启现代黑胶模式且包含唱臂，在暴露的右侧音轨上方绘制现代极简线性唱臂
         if self.show_vinyl and self.show_tonearm and (self.slide_prog > 0.05 or self.is_playing):
@@ -754,8 +777,8 @@ class ImmersiveArtworkView(QWidget):
         else:
             atmos_txt = "LOSSLESS"
 
-        b_font = get_nordic_font(8, QFont.Weight.Bold, mono=True)
-        fm_badge = QFontMetricsF(b_font)
+        b_font = self._font_badge
+        fm_badge = self._fm_badge
         badge_w = max(66.0, fm_badge.horizontalAdvance(atmos_txt) + 16.0)
         title_max_w = sleeve_sz - badge_w - 10.0
 
@@ -764,10 +787,8 @@ class ImmersiveArtworkView(QWidget):
         album_str = self.track.album if (self.track and self.track.album) else ""
 
         # 歌曲名 (22px SF Pro Bold)
-        title_font = get_nordic_font(22, QFont.Weight.Bold)
-        p.setFont(title_font)
-        fm_title = QFontMetricsF(title_font)
-        elided_title = fm_title.elidedText(title_str, Qt.TextElideMode.ElideRight, title_max_w)
+        p.setFont(self._font_title)
+        elided_title = self._fm_title.elidedText(title_str, Qt.TextElideMode.ElideRight, title_max_w)
         p.setPen(QColor(255, 255, 255, 255))
         p.drawText(QRectF(sleeve_left, info_top, title_max_w, 28.0), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_title)
 
@@ -793,10 +814,8 @@ class ImmersiveArtworkView(QWidget):
 
         # 歌手与专辑副标题 (14px SF Pro Medium)
         sub_str = f"{artist_str}  ·  {album_str}" if album_str else artist_str
-        sub_font = get_nordic_font(14, QFont.Weight.Medium)
-        p.setFont(sub_font)
-        fm_sub = QFontMetricsF(sub_font)
-        elided_sub = fm_sub.elidedText(sub_str, Qt.TextElideMode.ElideRight, sleeve_sz)
+        p.setFont(self._font_sub)
+        elided_sub = self._fm_sub.elidedText(sub_str, Qt.TextElideMode.ElideRight, sleeve_sz)
         p.setPen(QColor(255, 255, 255, 175))
         p.drawText(QRectF(sleeve_left, info_top + 26.0, sleeve_sz, 22.0), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_sub)
 
@@ -828,9 +847,9 @@ class ImmersiveArtworkView(QWidget):
                 p.setBrush(QColor(255, 255, 255, 255))
                 p.drawEllipse(QPointF(th_cx, sl_y), 5.5, 5.5)
 
-        # 进度条下方时间戳 (左已播时间，右负值倒计时剩余时间，同图片二)
+        # 进度条下方时间戳
         time_y = sl_y + 8.0
-        p.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
+        p.setFont(self._font_time)
         p.setPen(QColor(255, 255, 255, 175))
         left_time_str = format_timecode(self.current_time)
         rem_sec = max(0.0, self.duration - self.current_time)
@@ -842,25 +861,37 @@ class ImmersiveArtworkView(QWidget):
         btn_cy = sl_y + 48.0
         gap = sleeve_sz * 0.20
 
-        # A. 模式 / 随机播放 (左一)
+        # A. 模式 / 随机或情绪漫游播放 (左一)
         mode_x = center_x - gap * 2.0
         self._rect_btn_mode = QRectF(mode_x - 18.0, btn_cy - 18.0, 36.0, 36.0)
         is_mode_hov = (self._hover_element == "mode")
-        is_shuffle = (self.play_mode == "shuffle")
-        p.setPen(QPen(QColor(self.accent_color if is_shuffle else QColor(255, 255, 255, 230 if is_mode_hov else 165)), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        is_shuffle_or_flow = (self.play_mode in ("shuffle", "smart_flow"))
+        mode_col = QColor(self.accent_color if is_shuffle_or_flow else QColor(255, 255, 255, 230 if is_mode_hov else 165))
+        p.setPen(QPen(mode_col, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        # 交叉随机箭头
-        p.drawLine(QPointF(mode_x - 7.0, btn_cy - 5.0), QPointF(mode_x - 2.0, btn_cy - 5.0))
-        p.drawLine(QPointF(mode_x - 2.0, btn_cy - 5.0), QPointF(mode_x + 3.0, btn_cy + 5.0))
-        p.drawLine(QPointF(mode_x + 3.0, btn_cy + 5.0), QPointF(mode_x + 7.0, btn_cy + 5.0))
-        p.drawLine(QPointF(mode_x - 7.0, btn_cy + 5.0), QPointF(mode_x - 2.0, btn_cy + 5.0))
-        p.drawLine(QPointF(mode_x - 2.0, btn_cy + 5.0), QPointF(mode_x + 3.0, btn_cy - 5.0))
-        p.drawLine(QPointF(mode_x + 3.0, btn_cy - 5.0), QPointF(mode_x + 7.0, btn_cy - 5.0))
-        # 箭头头部
-        p.drawLine(QPointF(mode_x + 4.0, btn_cy - 8.0), QPointF(mode_x + 7.0, btn_cy - 5.0))
-        p.drawLine(QPointF(mode_x + 4.0, btn_cy - 2.0), QPointF(mode_x + 7.0, btn_cy - 5.0))
-        p.drawLine(QPointF(mode_x + 4.0, btn_cy + 2.0), QPointF(mode_x + 7.0, btn_cy + 5.0))
-        p.drawLine(QPointF(mode_x + 4.0, btn_cy + 8.0), QPointF(mode_x + 7.0, btn_cy + 5.0))
+        if self.play_mode == "smart_flow":
+            flow_path = QPainterPath()
+            flow_path.moveTo(mode_x - 8.0, btn_cy + 1.5)
+            flow_path.cubicTo(mode_x - 4.0, btn_cy - 7.0, mode_x - 0.5, btn_cy + 7.0, mode_x + 3.5, btn_cy - 2.0)
+            flow_path.quadTo(mode_x + 6.0, btn_cy - 5.5, mode_x + 8.0, btn_cy - 1.0)
+            p.drawPath(flow_path)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(mode_col)
+            p.drawEllipse(QPointF(mode_x + 6.5, btn_cy - 5.5), 1.6, 1.6)
+            p.drawEllipse(QPointF(mode_x - 6.0, btn_cy - 5.0), 1.3, 1.3)
+        else:
+            # 交叉随机箭头
+            p.drawLine(QPointF(mode_x - 7.0, btn_cy - 5.0), QPointF(mode_x - 2.0, btn_cy - 5.0))
+            p.drawLine(QPointF(mode_x - 2.0, btn_cy - 5.0), QPointF(mode_x + 3.0, btn_cy + 5.0))
+            p.drawLine(QPointF(mode_x + 3.0, btn_cy + 5.0), QPointF(mode_x + 7.0, btn_cy + 5.0))
+            p.drawLine(QPointF(mode_x - 7.0, btn_cy + 5.0), QPointF(mode_x - 2.0, btn_cy + 5.0))
+            p.drawLine(QPointF(mode_x - 2.0, btn_cy + 5.0), QPointF(mode_x + 3.0, btn_cy - 5.0))
+            p.drawLine(QPointF(mode_x + 3.0, btn_cy - 5.0), QPointF(mode_x + 7.0, btn_cy - 5.0))
+            # 箭头头部
+            p.drawLine(QPointF(mode_x + 4.0, btn_cy - 8.0), QPointF(mode_x + 7.0, btn_cy - 5.0))
+            p.drawLine(QPointF(mode_x + 4.0, btn_cy - 2.0), QPointF(mode_x + 7.0, btn_cy - 5.0))
+            p.drawLine(QPointF(mode_x + 4.0, btn_cy + 2.0), QPointF(mode_x + 7.0, btn_cy + 5.0))
+            p.drawLine(QPointF(mode_x + 4.0, btn_cy + 8.0), QPointF(mode_x + 7.0, btn_cy + 5.0))
 
         # B. 上一首按钮 (左二)
         prev_x = center_x - gap
@@ -917,8 +948,8 @@ class ImmersiveArtworkView(QWidget):
         rep_x = center_x + gap * 2.0
         self._rect_btn_repeat = QRectF(rep_x - 18.0, btn_cy - 18.0, 36.0, 36.0)
         is_rep_hov = (self._hover_element == "repeat")
-        is_loop = (self.play_mode in ("loop_list", "loop_single"))
-        is_single = (self.play_mode == "loop_single")
+        is_loop = (self.play_mode in ("loop_list", "loop_one", "loop_single"))
+        is_single = (self.play_mode in ("loop_one", "loop_single"))
         p.setPen(QPen(QColor(self.accent_color if is_loop else QColor(255, 255, 255, 230 if is_rep_hov else 165)), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         p.setBrush(Qt.BrushStyle.NoBrush)
         # 闭环圆弧箭头
@@ -1019,12 +1050,15 @@ class ImmersiveLyricsView(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
         self.lyrics: List[LyricLine] = []
         self.active_index: int = -1
         self.smooth_focus_idx: float = 0.0
+        self.smooth_focus_vel: float = 0.0
         self.current_time: float = 0.0
         self.lyric_offset: float = 0.0
+        self.is_playing: bool = False
         self.syllable_mode: bool = True
         self.show_translation: bool = True
         self.accent_color: QColor = QColor("#5B9E83")
@@ -1041,20 +1075,40 @@ class ImmersiveLyricsView(QWidget):
         self._line_heights: List[float] = []
         self._line_y_tops: List[float] = []
 
+        # 预缓存无网格吸附 (PreferNoHinting) 字体与浮点基线，彻底消除缩放/滚动时的 1px 阶梯抖动
+        self._main_font = get_nordic_font(38, QFont.Weight.Bold)
+        self._main_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+        self._main_font.setStyleStrategy(
+            QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
+        )
+        self._sub_font = get_nordic_font(18, QFont.Weight.Medium)
+        self._sub_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+        self._sub_font.setStyleStrategy(
+            QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
+        )
+        self._empty_font = get_nordic_font(26, QFont.Weight.Medium)
+        self._fm_main = QFontMetricsF(self._main_font)
+        self._fm_sub = QFontMetricsF(self._sub_font)
+        self._main_baseline_y: float = (48.0 + self._fm_main.ascent() - self._fm_main.descent()) * 0.5
+        self._sub_baseline_y: float = 50.0 + (28.0 + self._fm_sub.ascent() - self._fm_sub.descent()) * 0.5
+        self._cached_layout_w: int = -1
+        self._elided_main_cache: List[str] = []
+        self._adv_main_cache: List[float] = []
+        self._elided_sub_cache: List[str] = []
+
     def set_lyrics(self, lyrics: List[LyricLine], offset: float = 0.0) -> None:
         self.lyrics = list(lyrics)
         self.lyric_offset = offset
         self.active_index = -1
         self.smooth_focus_idx = 0.0
+        self.smooth_focus_vel = 0.0
         self._recompute_layout()
         self.scroll_y = 0.0
         self.scroll_target_y = 0.0
         self.scroll_vel = 0.0
         self.update()
 
-    def sync_time(self, cur_time: float) -> None:
-        self.current_time = cur_time
-        eff_time = max(0.0, cur_time + self.lyric_offset)
+    def _update_active_index_for_time(self, eff_time: float) -> bool:
         new_idx = -1
         for idx, line in enumerate(self.lyrics):
             if eff_time >= line.time:
@@ -1062,8 +1116,34 @@ class ImmersiveLyricsView(QWidget):
             else:
                 break
         if new_idx != self.active_index:
+            prev_idx = self.active_index
             self.active_index = new_idx
-        self.update()
+            if prev_idx == -1 and 0 <= new_idx < len(self._line_y_tops):
+                # 首次切歌定位时直接对齐起始行，避免从第 0 行生硬大跨度滚下来
+                self.smooth_focus_idx = float(new_idx)
+                self.smooth_focus_vel = 0.0
+                target_y = self._line_y_tops[new_idx] + self._line_heights[new_idx] * 0.5
+                self.scroll_y = target_y
+                self.scroll_target_y = target_y
+                self.scroll_vel = 0.0
+            return True
+        return False
+
+    def sync_time(self, cur_time: float) -> None:
+        cur_time = max(0.0, cur_time)
+        if not self.is_playing or abs(cur_time - self.current_time) > 0.12:
+            self.current_time = cur_time
+            eff_time = max(0.0, self.current_time + self.lyric_offset)
+            self._update_active_index_for_time(eff_time)
+            if not self.is_playing and 0 <= self.active_index < len(self._line_y_tops) and not self.user_scrolling:
+                self.scroll_target_y = self._line_y_tops[self.active_index] + self._line_heights[self.active_index] * 0.5
+            if not self.is_playing:
+                self.update()
+        else:
+            # 播放中通过微阻尼平滑消除时钟抖动，由 120 FPS step_physics 统一推进与重绘
+            self.current_time += (cur_time - self.current_time) * 0.25
+            eff_time = max(0.0, self.current_time + self.lyric_offset)
+            self._update_active_index_for_time(eff_time)
 
     def step_physics(self, dt: float) -> None:
         if not self.lyrics or len(self._line_y_tops) != len(self.lyrics):
@@ -1071,32 +1151,32 @@ class ImmersiveLyricsView(QWidget):
 
         dt = max(0.001, min(0.05, dt))
 
-        # 1. 非线性平滑光标跟随 (Smooth Focus Index Follower)
+        # 0. 120 FPS 连续帧间时钟推进（消除卡拉OK逐字扫掠在相邻帧卡顿冻结）
+        if self.is_playing:
+            self.current_time += dt
+            eff_time = max(0.0, self.current_time + self.lyric_offset)
+            self._update_active_index_for_time(eff_time)
+
+        # 1. 解析解临界阻尼弹簧光标跟随 (Analytical Critically-Damped Focus Follower)
         target_focus = float(self.active_index) if self.active_index >= 0 else 0.0
-        focus_rate = min(1.0, 1.0 - math.exp(-8.5 * dt))
-        self.smooth_focus_idx += (target_focus - self.smooth_focus_idx) * focus_rate
+        omega_f = 13.5
+        exp_f = math.exp(-omega_f * dt)
+        diff_f = self.smooth_focus_idx - target_focus
+        temp_f = self.smooth_focus_vel + omega_f * diff_f
+        self.smooth_focus_idx = target_focus + (diff_f + temp_f * dt) * exp_f
+        self.smooth_focus_vel = (self.smooth_focus_vel - omega_f * temp_f * dt) * exp_f
 
-        # 2. 目标滚动位置平滑计算 (根据平滑光标连续三次 Hermite 插值)
+        # 2. 直接锁定当前激活行的真实几何中心（去除双重级联 Hermite 导致的跨行停顿感）
         if not self.user_scrolling and 0 <= self.active_index < len(self._line_y_tops):
-            base_i = int(self.smooth_focus_idx)
-            frac = max(0.0, min(1.0, self.smooth_focus_idx - base_i))
-            frac_eased = frac * frac * (3.0 - 2.0 * frac)
-            if 0 <= base_i < len(self._line_y_tops):
-                y0 = self._line_y_tops[base_i] + self._line_heights[base_i] * 0.5
-                if base_i + 1 < len(self._line_y_tops):
-                    y1 = self._line_y_tops[base_i + 1] + self._line_heights[base_i + 1] * 0.5
-                    target_y = y0 + (y1 - y0) * frac_eased
-                else:
-                    target_y = y0
-                self.scroll_target_y = target_y
+            self.scroll_target_y = self._line_y_tops[self.active_index] + self._line_heights[self.active_index] * 0.5
 
-        # 3. 苹果流体谐振弹簧滚动物理 (Critically Damped Harmonic Spring)
-        diff = self.scroll_target_y - self.scroll_y
-        k_spring = 56.0
-        damping = 15.2
-        spring_accel = k_spring * diff - damping * self.scroll_vel
-        self.scroll_vel += spring_accel * dt
-        self.scroll_y += self.scroll_vel * dt
+        # 3. 解析解临界阻尼弹簧滚动物理 (Exact Analytical Critically-Damped Spring, 零过冲/零停顿)
+        omega_s = 11.5
+        exp_s = math.exp(-omega_s * dt)
+        diff_y = self.scroll_y - self.scroll_target_y
+        temp_y = self.scroll_vel + omega_s * diff_y
+        self.scroll_y = self.scroll_target_y + (diff_y + temp_y * dt) * exp_s
+        self.scroll_vel = (self.scroll_vel - omega_s * temp_y * dt) * exp_s
 
     def _resume_auto_center(self) -> None:
         self.user_scrolling = False
@@ -1118,12 +1198,36 @@ class ImmersiveLyricsView(QWidget):
     def _recompute_layout(self) -> None:
         self._line_heights = []
         self._line_y_tops = []
+        self._cached_layout_w = -1
         cur_y = 0.0
         for line in self.lyrics:
             h = 92.0 if (line.sub and self.show_translation) else 62.0
             self._line_y_tops.append(cur_y)
             self._line_heights.append(h)
             cur_y += h + 22.0
+
+    def _ensure_text_metrics_cache(self, max_text_w: float) -> None:
+        w_key = int(round(max_text_w))
+        if self._cached_layout_w == w_key and len(self._elided_main_cache) == len(self.lyrics):
+            return
+        self._cached_layout_w = w_key
+        self._elided_main_cache = []
+        self._adv_main_cache = []
+        self._elided_sub_cache = []
+        fm_main = self._fm_main
+        fm_sub = self._fm_sub
+        for line in self.lyrics:
+            elided_m = fm_main.elidedText(line.text, Qt.TextElideMode.ElideRight, max_text_w)
+            adv_m = min(max_text_w, fm_main.horizontalAdvance(elided_m))
+            self._elided_main_cache.append(elided_m)
+            self._adv_main_cache.append(adv_m)
+            if line.sub:
+                sub_str = str(line.sub).strip()
+                self._elided_sub_cache.append(
+                    fm_sub.elidedText(sub_str, Qt.TextElideMode.ElideRight, max_text_w) if sub_str else ""
+                )
+            else:
+                self._elided_sub_cache.append("")
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         self.user_scrolling = True
@@ -1136,7 +1240,7 @@ class ImmersiveLyricsView(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            viewport_center = self.height() * 0.45
+            viewport_center = self.height() * 0.48
             click_y = event.position().y()
             for idx, top_y in enumerate(self._line_y_tops):
                 h = self._line_heights[idx]
@@ -1153,7 +1257,7 @@ class ImmersiveLyricsView(QWidget):
         if not self.lyrics or len(self._line_y_tops) != len(self.lyrics):
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.setFont(get_nordic_font(26, QFont.Weight.Medium))
+            p.setFont(self._empty_font)
             p.setPen(QColor(255, 255, 255, 120))
             p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "纯音乐，请静心聆听")
             return
@@ -1168,11 +1272,13 @@ class ImmersiveLyricsView(QWidget):
         max_text_w = max(100.0, w - pad_left - 48.0)
         fade_zone = max(80.0, h * 0.22)
 
-        main_font = get_nordic_font(38, QFont.Weight.Bold)
-        sub_font = get_nordic_font(18, QFont.Weight.Medium)
-        fm_main = QFontMetricsF(main_font)
-        fm_sub = QFontMetricsF(sub_font)
+        self._ensure_text_metrics_cache(max_text_w)
+        main_font = self._main_font
+        sub_font = self._sub_font
         main_text_h = 48.0
+        main_base_pt = QPointF(0.0, self._main_baseline_y)
+        main_glow_pt = QPointF(0.0, self._main_baseline_y + 1.0)
+        sub_base_pt = QPointF(0.0, self._sub_baseline_y)
 
         for idx, line in enumerate(self.lyrics):
             top_y = self._line_y_tops[idx]
@@ -1183,7 +1289,11 @@ class ImmersiveLyricsView(QWidget):
                 continue
 
             # 边缘羽化渐隐
-            edge_factor = min(1.0, max(0.0, (h - (screen_y + line_h * 0.5)) / fade_zone), max(0.0, (screen_y + line_h * 0.5) / fade_zone))
+            edge_factor = min(
+                1.0,
+                max(0.0, (h - (screen_y + line_h * 0.5)) / fade_zone),
+                max(0.0, (screen_y + line_h * 0.5) / fade_zone),
+            )
             edge_curve = edge_factor * edge_factor * (3.0 - 2.0 * edge_factor)
 
             # 连续非线性距离
@@ -1191,8 +1301,8 @@ class ImmersiveLyricsView(QWidget):
             focus_raw = max(0.0, 1.0 - d)
             focus_eased = focus_raw * focus_raw * (3.0 - 2.0 * focus_raw)
 
-            # 非线性字号缩放 (0.75 ~ 1.0 连续平滑无级变焦)
-            line_scale = 0.75 + 0.25 * focus_eased
+            # 非线性字号缩放 (0.76 ~ 1.0 连续平滑无级变焦)
+            line_scale = 0.76 + 0.24 * focus_eased
 
             # 非线性透明度过渡 (景深衰减)
             if d < 1.0:
@@ -1216,8 +1326,7 @@ class ImmersiveLyricsView(QWidget):
             p.scale(line_scale, line_scale)
 
             p.setFont(main_font)
-            text_rect = QRectF(0, 0, max_text_w / line_scale, main_text_h)
-            elided_str = fm_main.elidedText(line.text, Qt.TextElideMode.ElideRight, max_text_w / line_scale)
+            elided_str = self._elided_main_cache[idx]
 
             # 间奏跳动指示器
             if line.is_interlude:
@@ -1237,13 +1346,13 @@ class ImmersiveLyricsView(QWidget):
                         raw_prog = min(1.0, max(0.0, (eff_time - line.time) / line_span))
                     prog = math.sin(raw_prog * math.pi * 0.5)
 
-                    adv_w = min(max_text_w / line_scale, fm_main.horizontalAdvance(elided_str))
+                    adv_w = self._adv_main_cache[idx]
 
-                    # 1. 绘制暗部未唱到的半透明歌词底色
+                    # 1. 绘制暗部未唱到的半透明歌词底色 (使用浮点 QPointF 基线，实现 DirectWrite 亚像素定位)
                     p.setPen(QColor(255, 255, 255, 105))
-                    p.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_str)
+                    p.drawText(main_base_pt, elided_str)
 
-                    # 2. 液态流光亮部 (带边缘柔光 Feathered Gradient)
+                    # 2. 液态流光亮部
                     if prog > 0.002:
                         fill_w = adv_w * prog
                         p.save()
@@ -1254,32 +1363,27 @@ class ImmersiveLyricsView(QWidget):
                         glow_col = QColor(self.accent_color)
                         glow_col.setAlpha(int(round(90 * focus_eased)))
                         p.setPen(glow_col)
-                        p.drawText(text_rect.adjusted(-1.0, -1.0, 1.0, 1.0), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_str)
+                        p.drawText(main_glow_pt, elided_str)
 
                         # 表层纯白流光高亮
                         p.setPen(QColor(255, 255, 255, 255))
-                        p.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_str)
-
-                        # 纯白渐进流光高亮 (去除了多余的矩形白色扫掠光标，视觉纯净平滑)
-
+                        p.drawText(main_base_pt, elided_str)
                         p.restore()
                 else:
                     p_alpha = int(round(255 * focus_eased + 130 * (1.0 - focus_eased)))
                     p.setPen(QColor(255, 255, 255, p_alpha))
-                    p.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_str)
+                    p.drawText(main_base_pt, elided_str)
 
             p.restore()
 
-            # 绘制翻译译文行
-            if line.sub and self.show_translation:
-                sub_text = str(line.sub).strip()
-                if sub_text:
-                    sub_rect = QRectF(0, main_text_h + 2.0, max_text_w, 28.0)
-                    elided_sub = fm_sub.elidedText(sub_text, Qt.TextElideMode.ElideRight, max_text_w)
+            # 绘制翻译译文行 (浮点亚像素基线定位)
+            if self.show_translation:
+                elided_sub = self._elided_sub_cache[idx]
+                if elided_sub:
                     p.setFont(sub_font)
                     sub_alpha = int(round(195 * focus_eased + 90 * (1.0 - focus_eased)))
                     p.setPen(QColor(255, 255, 255, sub_alpha))
-                    p.drawText(sub_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), elided_sub)
+                    p.drawText(sub_base_pt, elided_sub)
 
             p.restore()
 
@@ -1547,6 +1651,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.setWindowTitle("Klang — 极光沉浸视界")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setStyleSheet("background: transparent; border: none;")
         self.setMouseTracking(True)
 
         self.setFont(get_nordic_font(14, QFont.Weight.Normal))
@@ -1571,6 +1676,8 @@ class ImmersiveFullscreenWindow(QWidget):
 
         self._audio_energy: float = 0.0
         self._aurora_buffer: Optional[QImage] = None
+        self._aurora_pixmap: Optional[QPixmap] = None
+        self._last_aurora_ms: int = -1000
         self._clock = QElapsedTimer()
         self._clock.start()
 
@@ -1597,31 +1704,31 @@ class ImmersiveFullscreenWindow(QWidget):
         self._idle_timer.setInterval(3000)
         self._idle_timer.timeout.connect(self._on_idle_timeout)
 
-        # 动画与歌词刷新率控制 (60fps / 120fps)
-        self.target_fps: int = 60
+        # 动画与歌词刷新率控制 (默认 120 FPS 原生高刷)
+        self.target_fps: int = 120
         self._frame_clock = QElapsedTimer()
         self._frame_clock.start()
 
         self._render_timer = QTimer(self)
         self._render_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._render_timer.setInterval(16)
+        self._render_timer.setInterval(7)
         self._render_timer.timeout.connect(self._on_animation_frame)
 
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         root_vbox = QVBoxLayout(self)
-        root_vbox.setContentsMargins(40, 26, 40, 30)
+        root_vbox.setContentsMargins(0, 26, 0, 30)
         root_vbox.setSpacing(0)
 
         # 1. 顶部悬浮工具条
         self.top_bar_widget = QWidget(self)
         self.top_bar_widget.setFixedHeight(48)
         top_hbox = QHBoxLayout(self.top_bar_widget)
-        top_hbox.setContentsMargins(0, 0, 0, 0)
+        top_hbox.setContentsMargins(40, 0, 40, 0)
         top_hbox.setSpacing(12)
 
-        self.lbl_title_badge = QLabel("KLANG 沉浸视界", self.top_bar_widget)
+        self.lbl_title_badge = QLabel("KLANG", self.top_bar_widget)
         self.lbl_title_badge.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         self.lbl_title_badge.setStyleSheet("color: rgba(255, 255, 255, 0.76); padding-left: 6px; letter-spacing: 0.5px;")
         top_hbox.addWidget(self.lbl_title_badge)
@@ -1668,7 +1775,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_poster.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         self.btn_poster.setFixedHeight(30)
         self.btn_poster.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_poster.setToolTip("生成精致歌词海报卡片 (一键复制 / 保存分享)")
+        self.btn_poster.setToolTip("生成歌词卡片")
         self.btn_poster.setStyleSheet(
             "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
             "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 12px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
@@ -1695,11 +1802,13 @@ class ImmersiveFullscreenWindow(QWidget):
 
         # 2. 中间舞台左右分栏 (左黑胶唱机与封面，右大字滚动流光歌词)
         stage_split = QWidget(self)
+        stage_split.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         split_hbox = QHBoxLayout(stage_split)
-        split_hbox.setContentsMargins(0, 0, 0, 0)
+        split_hbox.setContentsMargins(0, 0, 40, 0)
         split_hbox.setSpacing(36)
 
         self.artwork_view = ImmersiveArtworkView(stage_split)
+        self.artwork_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.artwork_view.playToggled.connect(self.playToggled.emit)
         self.artwork_view.prevClicked.connect(self.prevRequested.emit)
         self.artwork_view.nextClicked.connect(self.nextRequested.emit)
@@ -1709,6 +1818,7 @@ class ImmersiveFullscreenWindow(QWidget):
         split_hbox.addWidget(self.artwork_view, 45)
 
         self.lyrics_view = ImmersiveLyricsView(stage_split)
+        self.lyrics_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.lyrics_view.seekRequested.connect(self.seekTimeRequested.emit)
         split_hbox.addWidget(self.lyrics_view, 55)
 
@@ -1764,8 +1874,8 @@ class ImmersiveFullscreenWindow(QWidget):
         new_mode = mode_cycle[next_idx]
         self.artwork_view.set_vinyl_mode(new_mode)
 
-        labels = {"none": "现代封面", "pure": "纯净黑胶", "arm": "极简唱机"}
-        label = labels.get(new_mode, "现代封面")
+        labels = {"none": "方形封面", "pure": "黑胶唱片", "arm": "黑胶唱机"}
+        label = labels.get(new_mode, "方形封面")
         self.btn_vinyl_mode.setText(label)
         is_active = (new_mode != "none")
         self.btn_vinyl_mode.setStyleSheet(
@@ -1781,7 +1891,7 @@ class ImmersiveFullscreenWindow(QWidget):
 
     def set_target_fps(self, fps: int) -> None:
         self.target_fps = 120 if fps >= 100 else 60
-        interval = 8 if self.target_fps == 120 else 16
+        interval = 7 if self.target_fps == 120 else 15
         self._render_timer.setInterval(interval)
         self._update_fps_btn_style()
 
@@ -1790,14 +1900,14 @@ class ImmersiveFullscreenWindow(QWidget):
             return
         self.btn_fps.setText(f"{self.target_fps} FPS")
         if self.target_fps == 120:
-            self.btn_fps.setToolTip("当前刷新率：120 FPS（极速流畅，点击切换至 60 FPS 标准模式）")
+            self.btn_fps.setToolTip("刷新率：120 FPS（点击切换至 60 FPS）")
             self.btn_fps.setStyleSheet(
                 "QPushButton { background: rgba(91, 158, 131, 0.35); border: 1px solid rgba(126, 224, 182, 0.65); "
                 "border-radius: 7px; color: #7EE0B6; font-weight: 700; font-size: 13px; padding: 0 10px; font-family: 'SF Mono', 'Consolas', monospace; }"
                 "QPushButton:hover { background: rgba(91, 158, 131, 0.50); }"
             )
         else:
-            self.btn_fps.setToolTip("当前刷新率：60 FPS（标准节能，点击切换至 120 FPS 极速流畅模式）")
+            self.btn_fps.setToolTip("刷新率：60 FPS（点击切换至 120 FPS）")
             self.btn_fps.setStyleSheet(
                 "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
                 "border-radius: 7px; color: rgba(255, 255, 255, 0.88); font-weight: 600; font-size: 13px; padding: 0 10px; font-family: 'SF Mono', 'Consolas', monospace; }"
@@ -1838,7 +1948,9 @@ class ImmersiveFullscreenWindow(QWidget):
 
         self._hud_opacity = 1.0
         self._hud_target_opacity = 1.0
+        self.top_bar_widget.setVisible(True)
         self._top_opacity_eff.setOpacity(1.0)
+        self._top_opacity_eff.setEnabled(False)
         self.artwork_view.controls_opacity = 1.0
         self.unsetCursor()
         self._idle_timer.start(3000)
@@ -1862,6 +1974,7 @@ class ImmersiveFullscreenWindow(QWidget):
 
     def update_track(self, track: Optional[NordicTrack]) -> None:
         self.current_track = track
+        self._last_aurora_ms = -1000
         self.artwork_view.set_track(track)
         if track:
             pal = track.palette or {}
@@ -1879,6 +1992,7 @@ class ImmersiveFullscreenWindow(QWidget):
     def update_play_state(self, is_playing: bool) -> None:
         self.is_playing = is_playing
         self.artwork_view.set_playing_state(is_playing)
+        self.lyrics_view.is_playing = is_playing
 
     def update_time(self, current_time: float, duration: float) -> None:
         self.artwork_view.update_time(current_time, duration)
@@ -1886,8 +2000,13 @@ class ImmersiveFullscreenWindow(QWidget):
 
     def update_spectrum(self, bands: List[float]) -> None:
         if bands:
+            # 提取 20Hz~120Hz Sub-Bass 超重低音 / 底鼓频段 (前 4 频段)
             low_energy = sum(bands[:4]) / 4.0
-            self._audio_energy += (low_energy - self._audio_energy) * 0.22
+            # 非对称声学包络检波：快起 (Attack 0.48 瞬时捕捉鼓点下潜) 慢释 (Decay 0.09 呼吸式平稳回弹)
+            if low_energy > self._audio_energy:
+                self._audio_energy += (low_energy - self._audio_energy) * 0.48
+            else:
+                self._audio_energy += (low_energy - self._audio_energy) * 0.09
             self.artwork_view.audio_energy = self._audio_energy
 
     def update_play_mode(self, mode: str) -> None:
@@ -1921,12 +2040,12 @@ class ImmersiveFullscreenWindow(QWidget):
             event.accept()
             return
         if key == Qt.Key.Key_Left:
-            target = max(0.0, self.control_dock.current_time - 5.0)
+            target = max(0.0, self.artwork_view.current_time - 5.0)
             self.seekTimeRequested.emit(target)
             event.accept()
             return
         if key == Qt.Key.Key_Right:
-            target = min(self.control_dock.duration, self.control_dock.current_time + 5.0)
+            target = min(self.artwork_view.duration, self.artwork_view.current_time + 5.0)
             self.seekTimeRequested.emit(target)
             event.accept()
             return
@@ -1966,23 +2085,41 @@ class ImmersiveFullscreenWindow(QWidget):
             m.x = (m.x + m.speed_x * dt) % 1.0
             m.y = (m.y + m.speed_y * dt) % 1.0
 
-        # 唱片与歌词物理弹簧动力学推进 (高刷新率无抖动平滑推进)
+        # 唱片与歌词物理弹簧动力学推进 (120 FPS 原生高刷新率无抖动平滑推进)
         self.artwork_view.step_physics(dt)
         self.lyrics_view.step_physics(dt)
-        self.artwork_view.update()
-        self.lyrics_view.update()
 
-        # 悬浮 HUD 与封面下置控制栏透明度平滑过渡
+        # 悬浮 HUD 与封面下置控制栏透明度平滑过渡 (非过渡期停用 QGraphicsOpacityEffect 以消除离屏 FBO 开销)
         if abs(self._hud_target_opacity - self._hud_opacity) > 0.005:
             hud_rate = min(1.0, 1.0 - math.exp(-9.0 * dt))
             self._hud_opacity += (self._hud_target_opacity - self._hud_opacity) * hud_rate
-            self._top_opacity_eff.setOpacity(self._hud_opacity)
+            if self._hud_opacity <= 0.01:
+                self._hud_opacity = 0.0
+                self.top_bar_widget.setVisible(False)
+                self._top_opacity_eff.setEnabled(False)
+            elif self._hud_opacity >= 0.99:
+                self._hud_opacity = 1.0
+                if not self.top_bar_widget.isVisible():
+                    self.top_bar_widget.setVisible(True)
+                self._top_opacity_eff.setEnabled(False)
+            else:
+                if not self.top_bar_widget.isVisible():
+                    self.top_bar_widget.setVisible(True)
+                if not self._top_opacity_eff.isEnabled():
+                    self._top_opacity_eff.setEnabled(True)
+                self._top_opacity_eff.setOpacity(self._hud_opacity)
         self.artwork_view.controls_opacity = self._hud_opacity
+
+        # 极光慢速等离子流背景限频 ~30Hz 更新，前景歌词/黑胶/粒子保持完整 120 FPS
+        now_ms = self._clock.elapsed()
+        if self._aurora_pixmap is None or (now_ms - self._last_aurora_ms) >= 32:
+            self._last_aurora_ms = now_ms
+            self._render_aurora_buffer(240, 135)
 
         self.update()
 
     def _render_aurora_buffer(self, bw: int, bh: int) -> None:
-        """5 核流动等离子体极光流体动力学渲染"""
+        """5 核流动等离子体极光流体动力学渲染（含预烘焙午夜天鹅绒暗角，转存 GPU QPixmap）"""
         if self._aurora_buffer is None or self._aurora_buffer.width() != bw or self._aurora_buffer.height() != bh:
             self._aurora_buffer = QImage(bw, bh, QImage.Format.Format_RGB32)
 
@@ -1991,29 +2128,31 @@ class ImmersiveFullscreenWindow(QWidget):
         p.fillRect(0, 0, bw, bh, self._col_base_cur)
 
         t = self._clock.elapsed() / 1000.0
-        energy_boost = self._audio_energy * 0.22
+        # Sub-Bass 柔光呼吸 (低频能量联动)
+        energy_boost = self._audio_energy * 0.36
+        core_alpha_boost = int(round(35 * self._audio_energy))
 
         # 1号极光核 (左上方有机流动)
         c1 = QColor(self._col1_cur)
-        c1.setAlpha(185)
+        c1.setAlpha(min(255, 185 + core_alpha_boost))
         cx1 = bw * (0.26 + 0.16 * math.sin(t * 0.23))
         cy1 = bh * (0.30 + 0.14 * math.cos(t * 0.19))
         r1 = min(bw, bh) * (0.68 + 0.08 * math.sin(t * 0.31) + energy_boost)
         g1 = QRadialGradient(QPointF(cx1, cy1), r1)
         g1.setColorAt(0.0, c1)
-        g1.setColorAt(0.65, QColor(c1.red(), c1.green(), c1.blue(), 60))
+        g1.setColorAt(0.65, QColor(c1.red(), c1.green(), c1.blue(), min(255, 60 + core_alpha_boost // 2)))
         g1.setColorAt(1.0, Qt.GlobalColor.transparent)
         p.fillRect(0, 0, bw, bh, g1)
 
         # 2号极光核 (右下方弥散)
         c2 = QColor(self._col2_cur)
-        c2.setAlpha(170)
+        c2.setAlpha(min(255, 170 + core_alpha_boost))
         cx2 = bw * (0.78 + 0.14 * math.cos(t * 0.21))
         cy2 = bh * (0.68 + 0.15 * math.sin(t * 0.27))
-        r2 = min(bw, bh) * (0.62 + 0.06 * math.cos(t * 0.25) + energy_boost)
+        r2 = min(bw, bh) * (0.62 + 0.06 * math.cos(t * 0.25) + energy_boost * 0.88)
         g2 = QRadialGradient(QPointF(cx2, cy2), r2)
         g2.setColorAt(0.0, c2)
-        g2.setColorAt(0.60, QColor(c2.red(), c2.green(), c2.blue(), 50))
+        g2.setColorAt(0.60, QColor(c2.red(), c2.green(), c2.blue(), min(255, 50 + core_alpha_boost // 2)))
         g2.setColorAt(1.0, Qt.GlobalColor.transparent)
         p.fillRect(0, 0, bw, bh, g2)
 
@@ -2041,7 +2180,15 @@ class ImmersiveFullscreenWindow(QWidget):
         g4.setColorAt(1.0, Qt.GlobalColor.transparent)
         p.fillRect(0, 0, bw, bh, g4)
 
+        # 5. 预烘焙午夜天鹅绒深色暗角 (避免每帧在 1080p/4K 全屏画布上实时光栅化径向渐变)
+        vignette = QRadialGradient(QPointF(bw * 0.5, bh * 0.5), max(bw, bh) * 0.75)
+        vignette.setColorAt(0.0, QColor(8, 12, 16, 70))
+        vignette.setColorAt(0.60, QColor(8, 12, 16, 120))
+        vignette.setColorAt(1.0, QColor(5, 7, 10, 195))
+        p.fillRect(0, 0, bw, bh, vignette)
+
         p.end()
+        self._aurora_pixmap = QPixmap.fromImage(self._aurora_buffer)
 
     def paintEvent(self, event) -> None:
         w, h = self.width(), self.height()
@@ -2052,12 +2199,40 @@ class ImmersiveFullscreenWindow(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # 1. 绘制极光超平滑低开销模糊缓冲 (480x270 硬件平滑插值放大)
-        buf_w = 480
-        buf_h = 270
-        self._render_aurora_buffer(buf_w, buf_h)
-        if self._aurora_buffer is not None:
-            p.drawImage(self.rect(), self._aurora_buffer)
+        # 1. 绘制预缓存极光+暗角纹理 (240x135 硬件双线性平滑放大，单帧耗时 < 0.2ms)
+        if self._aurora_pixmap is None:
+            self._render_aurora_buffer(240, 135)
+        if self._aurora_pixmap is not None:
+            p.drawPixmap(self.rect(), self._aurora_pixmap)
+
+        # 1.5 绘制封面背后无界 Ambilight 动态氛围溢彩 (全屏画布渲染，彻底消除子控件边界裁切生硬分割线)
+        if hasattr(self, "artwork_view"):
+            av = self.artwork_view
+            av_w = av.width()
+            av_h = av.height()
+            if av_w >= 100 and av_h >= 100:
+                ctrl_h = 216.0
+                max_sleeve = min(390.0, min(av_w * 0.74, av_h - ctrl_h - 80.0))
+                sleeve_sz = int(max(240.0, max_sleeve))
+                center_x_local = av_w * 0.40 if av.show_vinyl else av_w * 0.48
+                total_content_h = sleeve_sz + ctrl_h
+                sleeve_top_local = max(40.0, (av_h - total_content_h) * 0.52 + 36.0)
+                center_y_local = sleeve_top_local + sleeve_sz / 2.0
+
+                pos = av.mapTo(self, QPoint(0, 0))
+                g_cx = float(pos.x()) + center_x_local
+                g_cy = float(pos.y()) + center_y_local
+
+                amb_radius = sleeve_sz * (0.86 + 0.28 * self._audio_energy)
+                amb_glow = QRadialGradient(QPointF(g_cx, g_cy), amb_radius)
+                c_glow = QColor(av.accent_color)
+                c_glow.setAlpha(int(round(85 + 55 * self._audio_energy)))
+                amb_glow.setColorAt(0.0, c_glow)
+                amb_glow.setColorAt(0.50, QColor(c_glow.red(), c_glow.green(), c_glow.blue(), int(round(24 + 18 * self._audio_energy))))
+                amb_glow.setColorAt(1.0, Qt.GlobalColor.transparent)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(amb_glow)
+                p.drawEllipse(QPointF(g_cx, g_cy), amb_radius, amb_radius)
 
         # 2. 绘制漂浮星芒柔光微粒 (Atmospheric Dust Particles)
         t = self._clock.elapsed() / 1000.0
@@ -2070,10 +2245,3 @@ class ImmersiveFullscreenWindow(QWidget):
             if alpha > 15:
                 p.setBrush(QColor(255, 255, 255, alpha))
                 p.drawEllipse(QPointF(px, py), m.r, m.r)
-
-        # 3. Apple Music 式午夜天鹅绒深色微暗降滤镜 (确保前景大字歌词最高对比度与柔光感)
-        vignette = QRadialGradient(QPointF(w * 0.5, h * 0.5), max(w, h) * 0.75)
-        vignette.setColorAt(0.0, QColor(8, 12, 16, 70))
-        vignette.setColorAt(0.60, QColor(8, 12, 16, 120))
-        vignette.setColorAt(1.0, QColor(5, 7, 10, 195))
-        p.fillRect(self.rect(), vignette)

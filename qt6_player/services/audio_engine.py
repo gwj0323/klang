@@ -4,7 +4,10 @@ from typing import Optional, List, Dict, Tuple
 import numpy as np
 from scipy.signal import sosfilt, butter
 
+from qt6_player.services.headphone_eq import HEADPHONE_PROFILES, build_headphone_sos
+
 from PyQt6.QtCore import (
+    Qt,
     QObject,
     QTimer,
     QElapsedTimer,
@@ -40,6 +43,84 @@ SOUND_PROFILES["北欧厅堂"] = SOUND_PROFILES["现场空间"]
 SOUND_PROFILES["温暖人声"] = SOUND_PROFILES["流行人声"]
 SOUND_PROFILES["深沉低音"] = SOUND_PROFILES["低音增强"]
 SOUND_PROFILES["清澈器乐"] = SOUND_PROFILES["清澈高音"]
+
+
+def compute_pcm_acoustic_dna(
+    raw_bytes: bytearray,
+    sample_rate: int = 44100,
+    start_frame: int = 0,
+    end_frame: int = 0,
+) -> Optional[Dict[str, float]]:
+    """
+    完全离线提取曲目的 4 维声学 DNA 指纹：
+    - bpm: 节拍速度 (68 ~ 168 BPM，基于包络瞬态自相关分析)
+    - energy: 能量密度 (0.0 ~ 1.0)
+    - brightness: 高频明亮度 (0.0 ~ 1.0)
+    - warmth: 中低频温暖度 (0.0 ~ 1.0)
+    耗时 < 3ms，用于「离线声学 DNA 情绪漫游」无缝智能选曲。
+    """
+    total_frames = len(raw_bytes) // 4
+    if total_frames < sample_rate * 4:
+        return None
+
+    s_f = max(0, start_frame)
+    e_f = min(total_frames, end_frame) if end_frame > s_f else total_frames
+    span = e_f - s_f
+    if span < sample_rate * 3:
+        return None
+
+    # 截取曲目黄金中段 12 秒（避开前奏静音）
+    window_frames = min(span, sample_rate * 12)
+    mid_start = s_f + max(0, (span - window_frames) // 3)
+    mid_end = mid_start + window_frames
+
+    try:
+        pcm = np.frombuffer(raw_bytes[mid_start * 4 : mid_end * 4], dtype=np.int16).astype(np.float32) / 32768.0
+        mono = (pcm[0::2] + pcm[1::2]) * 0.5
+        if len(mono) < 4096:
+            return None
+
+        # 1. 能量密度 (RMS Energy)
+        rms = float(np.sqrt(np.mean(mono * mono)))
+        energy = max(0.05, min(0.98, (rms / 0.24) ** 0.65))
+
+        # 2. 频谱明亮度与中低频温暖度 (取 16384 样本做快速 FFT 频段能量比)
+        fft_len = min(len(mono), 16384)
+        spec = np.abs(np.fft.rfft(mono[:fft_len] * np.hanning(fft_len)))
+        freqs = np.fft.rfftfreq(fft_len, d=1.0 / float(sample_rate))
+        total_spec_e = float(np.sum(spec)) + 1e-6
+        low_warm_e = float(np.sum(spec[(freqs >= 80.0) & (freqs <= 750.0)]))
+        high_bright_e = float(np.sum(spec[freqs >= 2200.0]))
+
+        warmth = max(0.05, min(0.98, (low_warm_e / total_spec_e) * 1.45))
+        brightness = max(0.05, min(0.98, (high_bright_e / total_spec_e) * 2.35))
+
+        # 3. 节拍速度 BPM (以 512 帧步长计算一阶瞬态能量包络并做 68~168 BPM 自相关峰值检测)
+        hop = 512
+        env_fps = float(sample_rate) / float(hop)
+        n_hops = len(mono) // hop
+        bpm = 108.0
+        if n_hops >= 64:
+            env = np.sqrt(np.mean(mono[: n_hops * hop].reshape(n_hops, hop) ** 2, axis=1))
+            onset = np.maximum(0.0, np.diff(env, prepend=env[0]))
+            onset = onset - np.mean(onset)
+            norm = float(np.sum(onset * onset))
+            if norm > 1e-7:
+                ac = np.correlate(onset, onset, mode="full")[len(onset) - 1 :]
+                min_lag = max(4, int(round(env_fps * 60.0 / 168.0)))
+                max_lag = min(len(ac) - 1, int(round(env_fps * 60.0 / 68.0)))
+                if max_lag > min_lag:
+                    best_lag = min_lag + int(np.argmax(ac[min_lag : max_lag + 1]))
+                    bpm = round(float(env_fps * 60.0 / max(1, best_lag)), 1)
+
+        return {
+            "bpm": float(max(68.0, min(168.0, bpm))),
+            "energy": round(float(energy), 3),
+            "brightness": round(float(brightness), 3),
+            "warmth": round(float(warmth), 3),
+        }
+    except Exception:
+        return None
 
 
 class DolbyAtmosSpatializer:
@@ -265,6 +346,26 @@ class NordicDspProcessor:
         self._target_pre_gain: float = 0.82
         self._cur_rev_mix: float = 0.03
         self._target_rev_mix: float = 0.03
+        self.replay_gain_enabled: bool = False
+        self._cur_rg_gain: float = 1.0
+        self._target_rg_gain: float = 1.0
+
+        # 人声 ⟷ 伴奏 无极天平 (-1.0 = 纯享伴奏, 0.0 = 原声均衡, +1.0 = 人声清唱聚焦)
+        self.vocal_balance: float = 0.0
+        self._cur_vocal_bal: float = 0.0
+        self._target_vocal_bal: float = 0.0
+        nyq = self.sample_rate * 0.5
+        self._vocal_lp_sos = butter(2, max(60.0, 145.0) / nyq, btype="lowpass", output="sos")
+        self._vocal_hp_sos = butter(2, min(8200.0, nyq * 0.88) / nyq, btype="highpass", output="sos")
+        self._vocal_lp_zi = np.zeros((self._vocal_lp_sos.shape[0], 2), dtype=np.float64)
+        self._vocal_hp_zi = np.zeros((self._vocal_hp_sos.shape[0], 2), dtype=np.float64)
+
+        # 黑胶模拟温暖味 (0.0 ~ 1.0: 电子管偶次谐波饱和 + 细腻黑胶接触静噪)
+        self.vinyl_warmth: float = 0.0
+        self._cur_vinyl_warmth: float = 0.0
+        self._target_vinyl_warmth: float = 0.0
+        self._crackle_lp_state: np.ndarray = np.zeros(2, dtype=np.float64)
+        self._rng = np.random.default_rng(42)
 
         self._sos: np.ndarray = self._build_sos(self.gains_db)
         self._pending_sos: Optional[np.ndarray] = None
@@ -276,18 +377,89 @@ class NordicDspProcessor:
         self._rev_lp_state: np.ndarray = np.zeros(2, dtype=np.float64)
         self.spatializer = DolbyAtmosSpatializer(self.sample_rate)
 
+        # 耳机硬件声学校准 (AutoEq 哈曼曲线目标补偿)
+        self.headphone_profile_id: str = "bypass"
+        self._headphone_sos: Optional[np.ndarray] = None
+        self._headphone_zi: Optional[np.ndarray] = None
+        self._headphone_preamp: float = 1.0
+        self._cur_hp_wet: float = 0.0
+        self._target_hp_wet: float = 0.0
+
     def reset_state(self) -> None:
         self._zi.fill(0.0)
+        self._vocal_lp_zi.fill(0.0)
+        self._vocal_hp_zi.fill(0.0)
+        self._crackle_lp_state.fill(0.0)
         self._input_hist.fill(0.0)
         self._rev_ring.fill(0.0)
         self._rev_write_pos = 0
         self._rev_lp_state.fill(0.0)
+        if self._headphone_zi is not None:
+            self._headphone_zi.fill(0.0)
         self._cur_pre_gain = self._target_pre_gain
         self._cur_rev_mix = self._target_rev_mix
+        self._cur_rg_gain = self._target_rg_gain
+        self._cur_vocal_bal = self._target_vocal_bal
+        self._cur_vinyl_warmth = self._target_vinyl_warmth
+        self._cur_hp_wet = self._target_hp_wet
         self.spatializer.reset_state()
         if self._pending_sos is not None:
             self._sos = self._pending_sos
             self._pending_sos = None
+
+    def set_headphone_profile(self, profile_id: str) -> None:
+        """设置 AutoEq 耳机硬件声学校准档案"""
+        self.headphone_profile_id = profile_id
+        prof = HEADPHONE_PROFILES.get(profile_id)
+        if prof is None or profile_id == "bypass":
+            self._target_hp_wet = 0.0
+            return
+
+        sos, preamp = build_headphone_sos(prof, self.sample_rate)
+        if sos is not None:
+            self._headphone_sos = sos
+            self._headphone_preamp = preamp
+            self._headphone_zi = np.zeros((sos.shape[0], 2, 2), dtype=np.float64)
+            self._target_hp_wet = 1.0
+        else:
+            self._target_hp_wet = 0.0
+
+    def update_sample_rate(self, new_sr: int) -> None:
+        if self.sample_rate == new_sr:
+            return
+        self.sample_rate = new_sr
+        nyq = self.sample_rate * 0.5
+        self._vocal_lp_sos = butter(2, max(60.0, 145.0) / nyq, btype="lowpass", output="sos")
+        self._vocal_hp_sos = butter(2, min(8200.0, nyq * 0.88) / nyq, btype="highpass", output="sos")
+        self._sos = self._build_sos(self.gains_db)
+        self.spatializer = DolbyAtmosSpatializer(self.sample_rate)
+        if self.headphone_profile_id != "bypass":
+            self.set_headphone_profile(self.headphone_profile_id)
+        self.reset_state()
+
+    def set_vocal_balance(self, balance: float) -> None:
+        """设置人声 ⟷ 伴奏无极天平: -1.0 (纯享伴奏) ~ 0.0 (原声) ~ +1.0 (人声聚焦)"""
+        clamped = max(-1.0, min(1.0, float(balance)))
+        self.vocal_balance = clamped
+        self._target_vocal_bal = clamped
+
+    def set_vinyl_warmth(self, warmth: float) -> None:
+        """设置黑胶模拟温暖味: 0.0 (关闭) ~ 1.0 (电子管偶次谐波与细腻黑胶静噪)"""
+        clamped = max(0.0, min(1.0, float(warmth)))
+        self.vinyl_warmth = clamped
+        self._target_vinyl_warmth = clamped
+
+    def set_replay_gain(self, enabled: bool, rg_db: Optional[float], peak: Optional[float] = None) -> None:
+        self.replay_gain_enabled = bool(enabled)
+        if not self.replay_gain_enabled or rg_db is None:
+            self._target_rg_gain = 1.0
+            return
+        clamped_db = max(-14.0, min(10.0, float(rg_db)))
+        lin_gain = float(10.0 ** (clamped_db / 20.0))
+        if peak is not None and peak > 0.01:
+            # 防止 ReplayGain 正增益导致数字削波
+            lin_gain = min(lin_gain, 0.96 / float(peak))
+        self._target_rg_gain = max(0.20, min(3.16, lin_gain))
 
     def set_parameters(self, gains_db: List[float], reverb_mix: float) -> None:
         clamped_gains = [max(-12.0, min(12.0, float(g))) for g in (gains_db + [0.0] * 5)[:5]]
@@ -357,12 +529,92 @@ class NordicDspProcessor:
         if n == 0:
             return stereo_in
 
+        # ReplayGain (响度均衡 / 自动音量归一化) 前端增益平滑过渡
+        if abs(self._cur_rg_gain - self._target_rg_gain) > 1e-4:
+            rg_ramp = np.linspace(self._cur_rg_gain, self._target_rg_gain, n, dtype=np.float64)[np.newaxis, :]
+            self._cur_rg_gain = self._target_rg_gain
+            stereo_in = stereo_in * rg_ramp
+        elif abs(self._cur_rg_gain - 1.0) > 1e-4:
+            stereo_in = stereo_in * self._cur_rg_gain
+
+        # 人声 ⟷ 伴奏 无极天平 (Mid/Side 频域掩蔽分离，完整保留中置低频底鼓与极高频空气感)
+        if abs(self._cur_vocal_bal) > 1e-3 or abs(self._target_vocal_bal) > 1e-3:
+            if abs(self._cur_vocal_bal - self._target_vocal_bal) > 1e-4:
+                v_bal = np.linspace(self._cur_vocal_bal, self._target_vocal_bal, n, dtype=np.float64)
+                self._cur_vocal_bal = self._target_vocal_bal
+            else:
+                v_bal = self._cur_vocal_bal
+
+            mid = (stereo_in[0] + stereo_in[1]) * 0.5
+            side = (stereo_in[0] - stereo_in[1]) * 0.5
+            mid_bass, self._vocal_lp_zi = sosfilt(self._vocal_lp_sos, mid, zi=self._vocal_lp_zi)
+            mid_air, self._vocal_hp_zi = sosfilt(self._vocal_hp_sos, mid, zi=self._vocal_hp_zi)
+            mid_bass_air = mid_bass + mid_air
+            mid_vocal = mid - mid_bass_air
+
+            # 负值 (< 0): 实时隐去中置人声，保留底鼓/贝斯与立体声伴奏；正值 (> 0): 压暗伴奏、提亮人声细节
+            neg_k = np.maximum(0.0, -v_bal)
+            pos_k = np.maximum(0.0, v_bal)
+            vocal_gain = (1.0 - 0.96 * neg_k) + 0.54 * pos_k
+            bass_air_gain = 1.0 - 0.36 * pos_k
+            side_gain = (1.0 + 0.26 * neg_k) * (1.0 - 0.68 * pos_k)
+
+            new_mid = mid_vocal * vocal_gain + mid_bass_air * bass_air_gain
+            new_side = side * side_gain
+            stereo_in = np.vstack((new_mid + new_side, new_mid - new_side))
+        else:
+            # 保持滤波器状态连续，确保随时拖动滑块零爆音
+            mid = (stereo_in[0] + stereo_in[1]) * 0.5
+            _, self._vocal_lp_zi = sosfilt(self._vocal_lp_sos, mid, zi=self._vocal_lp_zi)
+            _, self._vocal_hp_zi = sosfilt(self._vocal_hp_sos, mid, zi=self._vocal_hp_zi)
+
+        # 黑胶模拟温暖味 (电子管偶次谐波微饱和 + 细腻黑胶接触底噪)
+        if self._cur_vinyl_warmth > 1e-3 or self._target_vinyl_warmth > 1e-3:
+            if abs(self._cur_vinyl_warmth - self._target_vinyl_warmth) > 1e-4:
+                w_mix = np.linspace(self._cur_vinyl_warmth, self._target_vinyl_warmth, n, dtype=np.float64)[np.newaxis, :]
+                w_scalar = float(self._target_vinyl_warmth)
+                self._cur_vinyl_warmth = self._target_vinyl_warmth
+            else:
+                w_mix = self._cur_vinyl_warmth
+                w_scalar = float(self._cur_vinyl_warmth)
+
+            drive = 1.0 + 0.42 * w_scalar
+            bias = 0.045 * w_scalar
+            tube_out = (np.tanh(stereo_in * drive + bias) - math.tanh(bias)) / math.tanh(drive)
+            stereo_in = stereo_in * (1.0 - 0.55 * w_mix) + tube_out * (0.55 * w_mix)
+
+            # 合成极其克制的真实黑胶唱针接触微尘脉冲与温暖底噪
+            dust_prob = 0.0009 * w_scalar
+            impulses = (self._rng.random((2, n)) < dust_prob).astype(np.float64)
+            imp_amp = (self._rng.uniform(-1.0, 1.0, size=(2, n)) * impulses) * (0.011 * w_scalar)
+            surface_hiss = self._rng.normal(0.0, 0.00028 * w_scalar, size=(2, n))
+            raw_vinyl_noise = imp_amp + surface_hiss
+            # 简单一阶唱头谐振柔化，消除数字毛刺感
+            vinyl_filtered = raw_vinyl_noise * 0.55
+            vinyl_filtered[:, 1:] += raw_vinyl_noise[:, :-1] * 0.45
+            stereo_in = stereo_in + vinyl_filtered
+
         if abs(self._cur_pre_gain - self._target_pre_gain) > 1e-4:
             gain_ramp = np.linspace(self._cur_pre_gain, self._target_pre_gain, n, dtype=np.float64)
             self._cur_pre_gain = self._target_pre_gain
             x = stereo_in * gain_ramp[np.newaxis, :]
         else:
             x = stereo_in * self._cur_pre_gain
+
+        # 耳机硬件声学校准 (AutoEq 参量双二阶滤波级联)
+        if self._headphone_sos is not None and (self._cur_hp_wet > 1e-4 or self._target_hp_wet > 1e-4):
+            calibrated, self._headphone_zi = sosfilt(
+                self._headphone_sos,
+                x * self._headphone_preamp,
+                axis=-1,
+                zi=self._headphone_zi,
+            )
+            if abs(self._cur_hp_wet - self._target_hp_wet) > 1e-4:
+                ramp = np.linspace(self._cur_hp_wet, self._target_hp_wet, n, dtype=np.float64)[np.newaxis, :]
+                self._cur_hp_wet = self._target_hp_wet
+                x = x * (1.0 - ramp) + calibrated * ramp
+            elif self._cur_hp_wet > 0.001:
+                x = x * (1.0 - self._cur_hp_wet) + calibrated * self._cur_hp_wet
 
         pending = self._pending_sos
         if pending is not None:
@@ -454,6 +706,8 @@ class NordicDspProcessor:
 
 class ContinuousDspStreamDevice(QIODevice):
     BLOCK_FRAMES = 1024
+    FADEOUT_FRAMES = 3584  # ~81.3ms @ 44.1kHz，消除切歌/暂停时的数字截断爆音 (Click/Pop)
+    TURNTABLE_BRAKE_FRAMES = 6144  # ~139.3ms @ 44.1kHz，B&O 黑胶唱盘断电惯性降调降速阻尼曲线
     SPECTRUM_BANDS = 24
 
     def __init__(self, engine: "NordicAudioEngine"):
@@ -463,11 +717,15 @@ class ContinuousDspStreamDevice(QIODevice):
         self._last_tail_frame = np.zeros((2, 1), dtype=np.float64)
         self._crossfade_on_next_block: bool = False
         self._env_gain: float = 0.0
+        self._tt_speed: float = 1.0  # 黑胶唱盘实时转速倍率 (0.22x -> 1.0x 柔顺加速曲线)
         self._hann_win = np.hanning(self.BLOCK_FRAMES)
         self._cos_fade_in = (
             0.5 - 0.5 * np.cos(np.linspace(0.0, math.pi, self.BLOCK_FRAMES, dtype=np.float64))
         )[np.newaxis, :]
         self._cos_fade_out = 1.0 - self._cos_fade_in
+        self._cos_fade_out_80ms = (
+            0.5 + 0.5 * np.cos(np.linspace(0.0, math.pi, self.FADEOUT_FRAMES, dtype=np.float64))
+        )[np.newaxis, :]
         self._silence_stereo = bytes(self.BLOCK_FRAMES * 4)
         self._silence_mono = bytes(self.BLOCK_FRAMES * 2)
         self._fft_edges = np.unique(
@@ -483,9 +741,9 @@ class ContinuousDspStreamDevice(QIODevice):
         self._out_fifo.clear()
         self._crossfade_on_next_block = True
 
-    def render_smooth_fadeout_block(self) -> Optional[bytes]:
+    def render_smooth_fadeout_block(self, is_pause_brake: bool = False) -> Optional[bytes]:
+        """渲染 80ms 余弦微淡出块，或在开启黑胶物理起停时渲染 B&O 唱盘断电降调降速制动块"""
         eng = self.engine
-        n_frames = self.BLOCK_FRAMES
         if self._env_gain <= 0.001 and float(np.max(np.abs(self._last_tail_frame))) <= 1e-4:
             self._env_gain = 0.0
             self._last_tail_frame.fill(0.0)
@@ -495,6 +753,43 @@ class ContinuousDspStreamDevice(QIODevice):
         total_avail_frames = len(raw_buf) // 4
         cur_frame = eng._frame_cursor
 
+        if is_pause_brake and eng.turntable_physics_enabled and cur_frame + 64 < total_avail_frames:
+            n_brake = self.TURNTABLE_BRAKE_FRAMES
+            start_spd = max(0.25, float(self._tt_speed)) * eng.playback_rate
+            end_spd = 0.08 * eng.playback_rate
+            # 模拟真实唱盘断电后铝质转盘惯性阻尼：音高与转速耦合平滑下降
+            speed_curve = end_spd + (start_spd - end_spd) * (
+                np.linspace(1.0, 0.0, n_brake, dtype=np.float64) ** 1.32
+            )
+            rel_offsets = np.cumsum(speed_curve) - speed_curve[0]
+            float_indices = cur_frame + rel_offsets
+            clamped_idx = np.clip(float_indices, 0, max(0, total_avail_frames - 2))
+            idx0 = clamped_idx.astype(np.int32)
+            frac = clamped_idx - idx0
+
+            min_i = int(idx0[0])
+            max_i = min(total_avail_frames, int(idx0[-1]) + 2)
+            sub_raw = raw_buf[min_i * 4 : max_i * 4]
+            sub_arr = (np.frombuffer(sub_raw, dtype=np.int16).astype(np.float64) / 32768.0).reshape(-1, 2)
+            if len(sub_arr) >= 2:
+                rel0 = np.clip(idx0 - min_i, 0, len(sub_arr) - 2)
+                s0 = sub_arr[rel0]
+                s1 = sub_arr[rel0 + 1]
+                interp = s0 + (s1 - s0) * frac[:, np.newaxis]
+                stereo_block = interp.T.copy()
+                eng._frame_cursor = min(total_avail_frames, int(float_indices[-1]))
+                proc_stereo = eng.dsp.process_block(stereo_block, target_channels=eng._channels)
+                brake_env = (
+                    np.sin(np.linspace(math.pi * 0.5, 0.0, n_brake, dtype=np.float64)) ** 0.72
+                )[np.newaxis, :]
+                proc_stereo = proc_stereo * (self._env_gain * brake_env)
+                self._env_gain = 0.0
+                self._tt_speed = 0.22
+                self._last_tail_frame.fill(0.0)
+                self._crossfade_on_next_block = False
+                return self._pack_pcm_bytes(proc_stereo, n_brake, eng._channels)
+
+        n_frames = self.FADEOUT_FRAMES
         if cur_frame + 16 < total_avail_frames:
             end_frame = min(total_avail_frames, cur_frame + n_frames)
             actual = end_frame - cur_frame
@@ -508,9 +803,9 @@ class ContinuousDspStreamDevice(QIODevice):
                 stereo_block = arr
             eng._frame_cursor = end_frame
             proc_stereo = eng.dsp.process_block(stereo_block, target_channels=eng._channels)
-            proc_stereo = proc_stereo * (self._env_gain * self._cos_fade_out)
+            proc_stereo = proc_stereo * (self._env_gain * self._cos_fade_out_80ms)
         else:
-            proc_stereo = self._last_tail_frame * self._cos_fade_out
+            proc_stereo = self._last_tail_frame * self._cos_fade_out_80ms
 
         self._env_gain = 0.0
         self._last_tail_frame.fill(0.0)
@@ -611,9 +906,32 @@ class ContinuousDspStreamDevice(QIODevice):
 
         rate = eng.playback_rate
         cur_frame = eng._frame_cursor
+        target_end_frame = (
+            min(total_avail_frames, eng._track_end_frame)
+            if (eng._track_end_frame > 0 and total_avail_frames >= eng._track_end_frame)
+            else total_avail_frames
+        )
+        subtrack_end_ready = (eng._track_end_frame > 0 and total_avail_frames >= eng._track_end_frame) or eng._decoder_finished
 
-        if cur_frame >= total_avail_frames:
-            if eng._decoder_finished:
+        # 检查是否到达交叉淡入淡出 (Crossfade) 触发点
+        if (
+            eng.crossfade_sec > 0.05
+            and subtrack_end_ready
+            and not eng._eof_triggered
+            and eng.is_playing
+        ):
+            xfade_frames = int(eng.crossfade_sec * eng._sample_rate)
+            span_frames = target_end_frame - eng._track_start_frame
+            if span_frames > xfade_frames * 2 and cur_frame >= target_end_frame - xfade_frames:
+                rem_frames = target_end_frame - cur_frame
+                if rem_frames > 0:
+                    eng._crossfade_tail_pcm = bytearray(raw_buf[cur_frame * 4 : target_end_frame * 4])
+                    eng._crossfade_tail_cursor = 0
+                    eng._crossfade_tail_total_frames = rem_frames
+                eng._notify_eof_from_stream()
+
+        if cur_frame >= target_end_frame:
+            if subtrack_end_ready:
                 eng._notify_eof_from_stream()
             if float(np.max(np.abs(self._last_tail_frame))) > 1e-4:
                 decay = self._last_tail_frame * self._cos_fade_out
@@ -624,8 +942,18 @@ class ContinuousDspStreamDevice(QIODevice):
 
         advance_cursor = eng.is_playing or eng._preview_frames_remaining > 0
 
-        if abs(rate - 1.0) < 0.01:
-            end_frame = min(total_avail_frames, cur_frame + n_frames)
+        # 黑胶唱盘物理起动扭矩曲线：启动时从 0.22x 柔顺加速至 1.0x 正常转速（音高与转速同步爬升）
+        tt_start = self._tt_speed if (eng.turntable_physics_enabled and eng.is_playing) else 1.0
+        if tt_start < 0.995:
+            tt_end = min(1.0, tt_start + 0.16)
+            self._tt_speed = tt_end
+        else:
+            tt_start = 1.0
+            tt_end = 1.0
+            self._tt_speed = 1.0
+
+        if abs(rate - 1.0) < 0.01 and tt_start >= 0.995:
+            end_frame = min(target_end_frame, cur_frame + n_frames)
             actual = end_frame - cur_frame
             byte_slice = raw_buf[cur_frame * 4 : end_frame * 4]
             arr = np.frombuffer(byte_slice, dtype=np.int16).astype(np.float64) / 32768.0
@@ -638,15 +966,22 @@ class ContinuousDspStreamDevice(QIODevice):
             if advance_cursor:
                 eng._frame_cursor = end_frame
         else:
-            step = rate
-            float_indices = cur_frame + np.arange(n_frames, dtype=np.float64) * step
-            valid_mask = float_indices < (total_avail_frames - 1)
-            clamped_idx = np.clip(float_indices, 0, max(0, total_avail_frames - 2))
+            if tt_start < 0.995:
+                step_vec = rate * np.linspace(tt_start, tt_end, n_frames, dtype=np.float64)
+                float_indices = cur_frame + (np.cumsum(step_vec) - step_vec[0])
+                next_cursor = min(target_end_frame, int(float_indices[-1] + step_vec[-1]))
+            else:
+                step = rate
+                float_indices = cur_frame + np.arange(n_frames, dtype=np.float64) * step
+                next_cursor = min(target_end_frame, int(cur_frame + n_frames * step))
+
+            valid_mask = float_indices < (target_end_frame - 1)
+            clamped_idx = np.clip(float_indices, 0, max(0, target_end_frame - 2))
             idx0 = clamped_idx.astype(np.int32)
             frac = clamped_idx - idx0
 
             min_i = int(idx0[0])
-            max_i = min(total_avail_frames, int(idx0[-1]) + 2)
+            max_i = min(target_end_frame, int(idx0[-1]) + 2)
             sub_raw = raw_buf[min_i * 4 : max_i * 4]
             sub_arr = (np.frombuffer(sub_raw, dtype=np.int16).astype(np.float64) / 32768.0).reshape(-1, 2)
             if len(sub_arr) == 0:
@@ -662,18 +997,53 @@ class ContinuousDspStreamDevice(QIODevice):
                 interp = (s0 + (s1 - s0) * frac[:, np.newaxis]) * valid_mask[:, np.newaxis]
                 stereo_block = interp.T.copy()
             if advance_cursor:
-                eng._frame_cursor = min(total_avail_frames, int(cur_frame + n_frames * step))
+                eng._frame_cursor = next_cursor
+
+        # 若存在上一曲的 Crossfade 尾部缓冲，执行平滑余弦交叉混音
+        if (
+            eng._crossfade_tail_pcm is not None
+            and eng._crossfade_tail_total_frames > 0
+            and eng._crossfade_tail_cursor < eng._crossfade_tail_total_frames
+        ):
+            t_cur = eng._crossfade_tail_cursor
+            t_tot = eng._crossfade_tail_total_frames
+            t_end = min(t_tot, t_cur + n_frames)
+            t_actual = t_end - t_cur
+            t_bytes = eng._crossfade_tail_pcm[t_cur * 4 : t_end * 4]
+            t_arr = (np.frombuffer(t_bytes, dtype=np.int16).astype(np.float64) / 32768.0).reshape(-1, 2).T
+            if t_actual < n_frames:
+                tail_stereo = np.hstack((t_arr, np.zeros((2, n_frames - t_actual), dtype=np.float64)))
+            else:
+                tail_stereo = t_arr
+            progress = np.clip(
+                (t_cur + np.arange(n_frames, dtype=np.float64)) / float(max(1, t_tot)),
+                0.0,
+                1.0,
+            )
+            w_out = (0.5 + 0.5 * np.cos(math.pi * progress))[np.newaxis, :]
+            w_in = (0.5 - 0.5 * np.cos(math.pi * progress))[np.newaxis, :]
+            stereo_block = tail_stereo * w_out + stereo_block * w_in
+            if advance_cursor:
+                eng._crossfade_tail_cursor = t_end
+                if eng._crossfade_tail_cursor >= t_tot:
+                    eng._crossfade_tail_pcm = None
+                    eng._crossfade_tail_total_frames = 0
 
         if eng._preview_frames_remaining > 0:
             eng._preview_frames_remaining = max(0, eng._preview_frames_remaining - n_frames)
 
         proc_stereo = eng.dsp.process_block(stereo_block, target_channels=eng._channels)
 
+        # ~80ms 微淡入包络 (每 1024 帧块推进 0.28，约 3.5 个块 = 81ms 完成平滑淡入)
         target_env = 1.0 if (eng.is_playing or eng._preview_frames_remaining > 0) else 0.0
         if abs(target_env - self._env_gain) > 0.001:
-            env_curve = self._env_gain + (target_env - self._env_gain) * self._cos_fade_in
+            if target_env > self._env_gain:
+                next_env = min(target_env, self._env_gain + 0.28)
+            else:
+                next_env = max(target_env, self._env_gain - 0.28)
+            env_curve = self._env_gain + (next_env - self._env_gain) * self._cos_fade_in
             proc_stereo = proc_stereo * env_curve
-            self._env_gain = target_env
+            self._env_gain = next_env
         elif target_env < 0.001:
             proc_stereo = proc_stereo * 0.0
 
@@ -694,7 +1064,15 @@ class NordicAudioEngine(QObject):
     playbackRateChanged = pyqtSignal(float)
     soundProfileChanged = pyqtSignal(str, list, float)
     dolbyAtmosChanged = pyqtSignal(str, float, float)  # mode, width, height
+    vocalBalanceChanged = pyqtSignal(float)
+    vinylWarmthChanged = pyqtSignal(float)
+    turntablePhysicsChanged = pyqtSignal(bool)
+    headphoneProfileChanged = pyqtSignal(str)
+    acousticDnaReady = pyqtSignal(object)
     outputModeChanged = pyqtSignal(str, int, str)  # mode, actual_channels, device_name
+    outputDevicesUpdated = pyqtSignal(list, str)  # available_devices, selected_device_id
+    deviceHotplugNotification = pyqtSignal(str)
+    requestNextTrackPreload = pyqtSignal()
     sleepTimerUpdated = pyqtSignal(int)
     spectrumUpdated = pyqtSignal(list)
     trackEnded = pyqtSignal()
@@ -714,22 +1092,48 @@ class NordicAudioEngine(QObject):
         self.reverb_mix: float = 0.03
         self.current_spectrum_bands: List[float] = [0.0] * 24
 
+        # 无缝播放 / 交叉淡入淡出 (0.0 = Gapless 无缝切换, 1.0~5.0s = Crossfade)
+        self.crossfade_sec: float = 0.0
+        # ReplayGain 响度均衡开关
+        self.replay_gain_enabled: bool = False
+        self._rms_rg_computed: bool = False
+        self._dna_computed: bool = False
+
+        # Klang 三大独家听感控制
+        self.vocal_balance: float = 0.0
+        self.turntable_physics_enabled: bool = True
+        self.vinyl_warmth: float = 0.0
+        self.headphone_profile_id: str = "bypass"
+
         self._sample_rate = 44100
         self._channels = 2
         self.output_channel_mode: str = "binaural"  # "binaural" (2.0) | "surround_51" (5.1) | "surround_71" (7.1)
         self.output_channels_actual: int = 2
+        self.selected_device_id: str = "default"
         self.output_device_name: str = ""
         self.dsp = NordicDspProcessor(sample_rate=self._sample_rate)
 
         self._using_local_file: bool = False
         self._decoded_raw_bytes = bytearray()
+        self._decoded_source_path: str = ""
+        self._track_start_frame: int = 0
+        self._track_end_frame: int = 0
         self._crossfade_tail_pcm: Optional[bytearray] = None
+        self._crossfade_tail_cursor: int = 0
+        self._crossfade_tail_total_frames: int = 0
         self._decoder_started: bool = False
         self._decoder_finished: bool = False
         self._decoder_failed: bool = False
         self._frame_cursor: int = 0
         self._preview_frames_remaining: int = 0
         self._eof_triggered: bool = False
+
+        # 下一首曲目预解码缓冲队列 (Pre-buffering)
+        self._pre_decoder = QAudioDecoder(self)
+        self._pre_decoded_bytes = bytearray()
+        self._pre_decoded_track_id: Optional[str] = None
+        self._pre_decoder_finished: bool = False
+        self._ignoring_pre_decoder_signals: bool = False
 
         self.sleep_remaining_sec: int = 0
         self._sleep_timer = QTimer(self)
@@ -756,8 +1160,20 @@ class NordicAudioEngine(QObject):
         self._ignoring_decoder_signals: bool = False
         self._initial_sink_fed: bool = False
 
+        self._pre_decoder.setAudioFormat(dec_fmt)
+        self._pre_decoder.bufferReady.connect(self._on_pre_decoder_buffer_ready)
+        self._pre_decoder.finished.connect(self._on_pre_decoder_finished)
+
+        # 监听音频设备热插拔 (如拔出耳机/小尾巴 DAC 自动暂停播放)
+        self._media_devices = QMediaDevices(self)
+        self._cached_output_devices: List[Tuple[str, str]] = []
+        self._known_device_ids = set()
+        self._refresh_output_devices_cache()
+        self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
+
         self._tick_timer = QTimer(self)
-        self._tick_timer.setInterval(16)
+        self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._tick_timer.setInterval(10)
         self._tick_timer.timeout.connect(self._on_tick)
         self._pause_drain_ticks: int = 0
 
@@ -776,9 +1192,208 @@ class NordicAudioEngine(QObject):
         finally:
             self._ignoring_decoder_signals = False
 
+    def _stop_pre_decoder_safely(self) -> None:
+        self._ignoring_pre_decoder_signals = True
+        try:
+            self._pre_decoder.stop()
+        except Exception:
+            pass
+        finally:
+            self._ignoring_pre_decoder_signals = False
+
+    def preload_next_track(self, track: Optional[NordicTrack]) -> None:
+        """在后台预解码下一首曲目到内存缓冲队列，实现 0ms 无缝切歌与平滑 Crossfade"""
+        if track is None:
+            return
+        if self._pre_decoded_track_id == track.track_id and (
+            self._pre_decoder_finished or len(self._pre_decoded_bytes) > 0
+        ):
+            return
+        # 若下一首为同一整轨 CUE 文件的另一分轨，直接复用当前解码缓冲，无需重复解码
+        if (
+            track.file_path
+            and self._decoded_source_path == track.file_path
+            and (self._decoder_finished or len(self._decoded_raw_bytes) > 0)
+        ):
+            return
+        self._stop_pre_decoder_safely()
+        self._pre_decoded_bytes.clear()
+        self._pre_decoded_track_id = track.track_id
+        self._pre_decoder_finished = False
+
+        if track.file_path and Path(track.file_path).is_file():
+            try:
+                self._pre_decoder.setSource(QUrl.fromLocalFile(track.file_path))
+                self._pre_decoder.start()
+            except Exception:
+                self._pre_decoded_track_id = None
+        else:
+            self._pre_decoded_bytes = self._build_synth_track_pcm(track)
+            self._pre_decoder_finished = True
+
+    def _drain_pre_decoder_buffers(self, max_buffers: int = 100000) -> None:
+        try:
+            read_cnt = 0
+            while read_cnt < max_buffers and self._pre_decoder.bufferAvailable():
+                buf = self._pre_decoder.read()
+                cnt = buf.byteCount()
+                if cnt > 0:
+                    self._pre_decoded_bytes.extend(buf.constData().asstring(cnt))
+                read_cnt += 1
+        except Exception:
+            pass
+
+    def _on_pre_decoder_buffer_ready(self) -> None:
+        if self._ignoring_pre_decoder_signals:
+            return
+        self._drain_pre_decoder_buffers(max_buffers=6)
+
+    def _on_pre_decoder_finished(self) -> None:
+        if self._ignoring_pre_decoder_signals:
+            return
+        self._drain_pre_decoder_buffers(max_buffers=100000)
+        self._pre_decoder_finished = True
+
+    def set_vocal_balance(self, val: float) -> None:
+        """设置人声 ⟷ 伴奏无极天平 (-1.0 纯享伴奏 ~ 0.0 原声均衡 ~ +1.0 清唱聚焦)"""
+        self.vocal_balance = max(-1.0, min(1.0, float(val)))
+        self.dsp.set_vocal_balance(self.vocal_balance)
+        self.vocalBalanceChanged.emit(self.vocal_balance)
+
+    def set_vinyl_warmth(self, val: float) -> None:
+        """设置电子管偶次谐波温暖度与黑胶微底噪 (0.0 关闭 ~ 1.0 浓郁模拟味)"""
+        self.vinyl_warmth = max(0.0, min(1.0, float(val)))
+        self.dsp.set_vinyl_warmth(self.vinyl_warmth)
+        self.vinylWarmthChanged.emit(self.vinyl_warmth)
+
+    def set_turntable_physics_enabled(self, enabled: bool) -> None:
+        """开启或关闭 B&O 黑胶物理断电起停惯性曲线"""
+        self.turntable_physics_enabled = bool(enabled)
+        if not self.turntable_physics_enabled:
+            self._stream_device._tt_speed = 1.0
+        self.turntablePhysicsChanged.emit(self.turntable_physics_enabled)
+
+    def _update_track_acoustic_dna(self) -> None:
+        """离线提取当前曲目的声学 DNA 特征向量 (BPM / 能量密度 / 频谱明暗度 / 温暖度)"""
+        track = self.current_track
+        if track is None or self._dna_computed:
+            return
+        if track.acoustic_dna and isinstance(track.acoustic_dna, dict) and "bpm" in track.acoustic_dna:
+            self._dna_computed = True
+            return
+        total_bytes = len(self._decoded_raw_bytes)
+        start_byte = self._track_start_frame * 4
+        end_byte = self._track_end_frame * 4 if self._track_end_frame > self._track_start_frame else total_bytes
+        avail_span = min(total_bytes, end_byte) - start_byte
+        if avail_span >= self._sample_rate * 4 * 12 or (self._decoder_finished and avail_span >= self._sample_rate * 4 * 3):
+            slice_bytes = self._decoded_raw_bytes[start_byte : min(total_bytes, end_byte)]
+            dna = compute_pcm_acoustic_dna(slice_bytes, self._sample_rate)
+            if dna:
+                track.acoustic_dna = dna
+                self._dna_computed = True
+                self.acousticDnaReady.emit(track)
+
+    def _refresh_output_devices_cache(self) -> None:
+        default_dev = QMediaDevices.defaultAudioOutput()
+        default_desc = default_dev.description() if not default_dev.isNull() else "无可用设备"
+        result: List[Tuple[str, str]] = [("default", f"系统默认 ({default_desc})")]
+        seen_ids = set()
+        for dev in QMediaDevices.audioOutputs():
+            if dev.isNull():
+                continue
+            dev_id = bytes(dev.id()).decode("utf-8", errors="ignore")
+            if dev_id and dev_id not in seen_ids:
+                seen_ids.add(dev_id)
+                result.append((dev_id, dev.description()))
+        self._cached_output_devices = result
+        self._known_device_ids = seen_ids
+
+    def get_available_output_devices(self) -> List[Tuple[str, str]]:
+        """返回缓存的音频输出设备列表，避免主线程频繁查询 COM 导致卡顿"""
+        if not self._cached_output_devices:
+            self._refresh_output_devices_cache()
+        return list(self._cached_output_devices)
+
+    def set_output_device(self, device_id: str) -> None:
+        """切换音频输出设备"""
+        target_id = device_id or "default"
+        if self.selected_device_id == target_id and self._audio_sink is not None:
+            return
+        self.selected_device_id = target_id
+        self.reconfigure_sink()
+        self.outputDevicesUpdated.emit(self.get_available_output_devices(), self.selected_device_id)
+
+    def _on_audio_outputs_changed(self) -> None:
+        """监听音频设备热插拔事件：当耳机或外置声卡拔出时自动暂停播放"""
+        old_ids = set(self._known_device_ids)
+        self._refresh_output_devices_cache()
+        new_ids = self._known_device_ids
+        removed_ids = old_ids - new_ids
+        added_ids = new_ids - old_ids
+
+        if removed_ids and self.is_playing:
+            if self.selected_device_id == "default" or self.selected_device_id in removed_ids:
+                self.pause()
+                self.deviceHotplugNotification.emit("音频设备已断开，已暂停播放")
+
+        if self.selected_device_id != "default" and self.selected_device_id not in new_ids:
+            self.selected_device_id = "default"
+
+        self.reconfigure_sink()
+        self.outputDevicesUpdated.emit(self.get_available_output_devices(), self.selected_device_id)
+        if added_ids and not removed_ids:
+            self.deviceHotplugNotification.emit(f"已切换输出设备：{self.output_device_name}")
+
+    def set_crossfade_sec(self, sec: float) -> None:
+        """设置切歌过渡时长: 0.0 (无缝播放 Gapless) 或 1.0~5.0 秒 (平滑交叉淡入淡出 Crossfade)"""
+        self.crossfade_sec = max(0.0, min(6.0, float(sec)))
+
+    def set_replay_gain_enabled(self, enabled: bool) -> None:
+        """开启或关闭 ReplayGain 响度均衡"""
+        self.replay_gain_enabled = bool(enabled)
+        self._update_track_replay_gain()
+
+    def _update_track_replay_gain(self) -> None:
+        track = self.current_track
+        if not self.replay_gain_enabled or track is None:
+            self.dsp.set_replay_gain(False, None, None)
+            return
+
+        if track.replay_gain_db is not None:
+            self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
+            return
+
+        # 当音频标签内未写入 REPLAYGAIN_TRACK_GAIN 时，基于已解码 PCM 的 RMS 能量实时计算动态响度归一化 (目标 -16.5 dBFS)
+        total_bytes = len(self._decoded_raw_bytes)
+        if total_bytes >= self._sample_rate * 4 * 2:
+            # 取前 25 秒或中间段采样计算 RMS 与峰值，避免片头静音干扰
+            sample_slice = self._decoded_raw_bytes[: min(total_bytes, self._sample_rate * 4 * 25)]
+            pcm = np.frombuffer(sample_slice, dtype=np.int16).astype(np.float32) / 32768.0
+            abs_pcm = np.abs(pcm)
+            active = pcm[abs_pcm > 0.008]
+            if len(active) > 2048:
+                rms = float(np.sqrt(np.mean(active * active)))
+                peak = float(np.max(abs_pcm))
+                if rms > 1e-4:
+                    rms_db = 20.0 * math.log10(rms)
+                    est_gain_db = max(-10.0, min(7.5, -16.5 - rms_db))
+                    track.replay_gain_db = round(est_gain_db, 2)
+                    track.replay_peak = round(peak, 4)
+                    self._rms_rg_computed = True
+                    self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
+                    return
+
+        self.dsp.set_replay_gain(True, 0.0, None)
+
     def _init_continuous_sink(self) -> None:
         try:
             device = QMediaDevices.defaultAudioOutput()
+            if self.selected_device_id and self.selected_device_id != "default":
+                for dev in QMediaDevices.audioOutputs():
+                    dev_id = bytes(dev.id()).decode("utf-8", errors="ignore")
+                    if dev_id == self.selected_device_id:
+                        device = dev
+                        break
             if device.isNull():
                 self.output_device_name = "未检测到音频设备"
                 return
@@ -811,7 +1426,8 @@ class NordicAudioEngine(QObject):
             self._push_io = None
             self._audio_sink = QAudioSink(device, fmt, self)
             buf_multiplier = max(1, self._channels // 2)
-            self._audio_sink.setBufferSize(16384 * buf_multiplier)
+            # 64KB 硬件缓冲 (~371ms @ 44.1kHz)，保证窗口拖拽、弹窗或动画时永不欠载断音
+            self._audio_sink.setBufferSize(65536 * buf_multiplier)
             self._audio_sink.setVolume(self.volume)
             self._stream_device._reset_tail_frame()
             self._stream_device.start_stream()
@@ -841,12 +1457,12 @@ class NordicAudioEngine(QObject):
             self._stream_device.start_stream()
             self._push_io = self._audio_sink.start()
 
-    def _flush_fadeout_to_sink(self) -> None:
+    def _flush_fadeout_to_sink(self, is_pause_brake: bool = False) -> None:
         if self._audio_sink is None or self._push_io is None:
             self._stream_device._env_gain = 0.0
             self._stream_device._last_tail_frame.fill(0.0)
             return
-        fade_bytes = self._stream_device.render_smooth_fadeout_block()
+        fade_bytes = self._stream_device.render_smooth_fadeout_block(is_pause_brake=is_pause_brake)
         if fade_bytes and self._audio_sink.bytesFree() >= len(fade_bytes):
             self._push_io.write(fade_bytes)
 
@@ -854,6 +1470,8 @@ class NordicAudioEngine(QObject):
         if self._audio_sink is None or self._push_io is None:
             return
         block_bytes = ContinuousDspStreamDevice.BLOCK_FRAMES * 2 * self._channels
+        buf_multiplier = max(1, self._channels // 2)
+        fadeout_reserve = 28672 * buf_multiplier
         waiting_for_initial_decode = (
             self._using_local_file
             and not self._decoder_finished
@@ -868,7 +1486,8 @@ class NordicAudioEngine(QObject):
                     self._push_io.write(chunk)
             return
 
-        while self._audio_sink.bytesFree() >= block_bytes:
+        # 维持 ~208ms 充裕硬件缓冲防止任何 UI 卡顿，同时预留 28KB 空间供微淡出块与黑胶物理制动块即时写入
+        while self._audio_sink.bytesFree() >= fadeout_reserve + block_bytes:
             chunk = self._stream_device._render_next_dsp_block()
             if not chunk:
                 break
@@ -889,7 +1508,17 @@ class NordicAudioEngine(QObject):
     def _on_decoder_buffer_ready(self) -> None:
         if self._ignoring_decoder_signals:
             return
-        self._drain_decoder_buffers(max_buffers=100000)
+        self._drain_decoder_buffers(max_buffers=12)
+        if (
+            self.replay_gain_enabled
+            and not self._rms_rg_computed
+            and self.current_track is not None
+            and self.current_track.replay_gain_db is None
+            and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 3
+        ):
+            self._update_track_replay_gain()
+        if not self._dna_computed and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 14:
+            self._update_track_acoustic_dna()
         if (
             self.is_playing
             and not self._initial_sink_fed
@@ -906,11 +1535,25 @@ class NordicAudioEngine(QObject):
         total_frames = len(self._decoded_raw_bytes) // 4
         if total_frames > 0:
             decoded_dur = total_frames / float(self._sample_rate)
-            if decoded_dur >= 10.0 or self.duration < 10.0:
-                self.duration = decoded_dur
-                if self.current_track is not None:
-                    self.current_track.duration = self.duration
-                self.timeUpdated.emit(self.current_time, self.duration, "init")
+            if self._track_start_frame == 0 and self._track_end_frame == 0:
+                if decoded_dur >= 10.0 or self.duration < 10.0:
+                    self.duration = decoded_dur
+                    if self.current_track is not None:
+                        self.current_track.duration = self.duration
+                    self.timeUpdated.emit(self.current_time, self.duration, "init")
+            elif self._track_end_frame == 0 and self._track_start_frame > 0:
+                start_sec = self._track_start_frame / float(self._sample_rate)
+                if decoded_dur > start_sec + 1.0:
+                    self.duration = decoded_dur - start_sec
+                    if self.current_track is not None:
+                        self.current_track.duration = self.duration
+                    self.timeUpdated.emit(self.current_time, self.duration, "init")
+        if self.replay_gain_enabled and not self._rms_rg_computed:
+            self._update_track_replay_gain()
+        if not self._dna_computed:
+            self._update_track_acoustic_dna()
+        # 当前曲目解码完成后，自动通知主窗口在后台预解码下一首曲目 (Pre-buffering)
+        QTimer.singleShot(40, self.requestNextTrackPreload.emit)
 
     def _on_decoder_error(self, err) -> None:
         if self._ignoring_decoder_signals:
@@ -935,7 +1578,13 @@ class NordicAudioEngine(QObject):
                 self._media_player.play()
 
     def _on_media_duration_changed(self, duration_ms: int) -> None:
-        if self._using_local_file and duration_ms > 0 and not self._decoder_finished:
+        if (
+            self._using_local_file
+            and duration_ms > 0
+            and not self._decoder_finished
+            and self._track_start_frame == 0
+            and self._track_end_frame == 0
+        ):
             self.duration = duration_ms / 1000.0
             if self.current_track is not None:
                 self.current_track.duration = self.duration
@@ -994,52 +1643,115 @@ class NordicAudioEngine(QObject):
         max_bytes = int(dur * self._sample_rate) * 4
         return out_bytes[:max_bytes]
 
-    def load_track(self, track: NordicTrack, auto_play: bool = False) -> None:
+    def load_track(self, track: NordicTrack, auto_play: bool = False, is_auto_transition: bool = False) -> None:
         was_playing = self.is_playing
         should_play = bool(auto_play or was_playing)
 
-        if was_playing:
+        if was_playing and not is_auto_transition:
             self._flush_fadeout_to_sink()
             if self._using_local_file and self._decoder_failed:
                 self._media_player.stop()
         if not should_play and was_playing:
             self.pause()
 
-        self._stop_decoder_safely()
-        self._decoded_raw_bytes.clear()
+        start_sec = max(0.0, float(getattr(track, "start_time", 0.0) or 0.0))
+        end_sec = max(0.0, float(getattr(track, "end_time", 0.0) or 0.0))
+        self._track_start_frame = int(start_sec * self._sample_rate)
+        self._track_end_frame = int(end_sec * self._sample_rate) if end_sec > start_sec else 0
+
+        # 若切换的是同一整轨音频文件的不同 CUE 分轨且当前已解码完成，直接复用内存 PCM，实现 0ms 分轨切换
+        same_completed_file = bool(
+            track.file_path
+            and self._decoded_source_path == track.file_path
+            and self._decoder_finished
+            and len(self._decoded_raw_bytes) > 0
+        )
+        if not same_completed_file:
+            self._stop_decoder_safely()
+            self._decoded_raw_bytes.clear()
+            self._decoded_source_path = str(track.file_path or "")
+
         self.current_track = track
-        self.duration = max(1.0, track.duration)
+        if end_sec > start_sec:
+            self.duration = max(1.0, end_sec - start_sec)
+        else:
+            self.duration = max(1.0, track.duration)
         self.current_time = 0.0
-        self._frame_cursor = 0
+        self._frame_cursor = self._track_start_frame
         self._preview_frames_remaining = 0
         self._eof_triggered = False
-        self._decoder_started = False
-        self._decoder_finished = False
-        self._decoder_failed = False
-        self._initial_sink_fed = False
-        self._crossfade_tail_pcm = None
-
-        self.dsp.reset_state()
-        self._stream_device._out_fifo.clear()
-        self._stream_device._env_gain = 0.0
-        self._stream_device._last_tail_frame.fill(0.0)
-        self._stream_device._crossfade_on_next_block = False
-
-        if track.file_path and Path(track.file_path).is_file():
-            self._using_local_file = True
-            url = QUrl.fromLocalFile(track.file_path)
-            self._audio_output.setVolume(0.0)
-            self._decoder.setSource(url)
-            if should_play:
-                self._decoder_started = True
-                self._decoder.start()
+        if not same_completed_file:
+            self._decoder_started = False
+            self._decoder_finished = False
+            self._decoder_failed = False
+            self._initial_sink_fed = False
         else:
-            self._using_local_file = False
-            self._media_player.setSource(QUrl())
-            self._decoded_raw_bytes = self._build_synth_track_pcm(track)
+            self._initial_sink_fed = True
+        self._rms_rg_computed = False
+        self._dna_computed = False
+
+        if not is_auto_transition:
+            self._crossfade_tail_pcm = None
+            self._crossfade_tail_cursor = 0
+            self._crossfade_tail_total_frames = 0
+            self.dsp.reset_state()
+            self._stream_device._out_fifo.clear()
+            self._stream_device._env_gain = 0.0
+            self._stream_device._tt_speed = 1.0
+            self._stream_device._last_tail_frame.fill(0.0)
+            self._stream_device._crossfade_on_next_block = False
+        else:
+            # 自动连续切歌 (Gapless / Crossfade)：保持音频管线连续，不截断输出缓冲
+            self._stream_device._env_gain = 1.0
+            self._stream_device._tt_speed = 1.0
+            if self._crossfade_tail_pcm is None:
+                self._stream_device._crossfade_on_next_block = True
+
+        # 优先命中预解码缓冲队列 (Pre-buffering) 或同一整轨缓存，实现 0ms 无缝加载
+        used_prebuffer = same_completed_file
+        if (
+            not used_prebuffer
+            and self._pre_decoded_track_id == track.track_id
+            and self._pre_decoder_finished
+            and len(self._pre_decoded_bytes) > 0
+        ):
+            self._decoded_raw_bytes = bytearray(self._pre_decoded_bytes)
+            self._decoded_source_path = str(track.file_path or "")
+            self._pre_decoded_bytes.clear()
+            self._pre_decoded_track_id = None
+            self._pre_decoder_finished = False
+            self._using_local_file = bool(track.file_path and Path(track.file_path).is_file())
             self._decoder_started = True
             self._decoder_finished = True
+            self._initial_sink_fed = True
+            total_frames = len(self._decoded_raw_bytes) // 4
+            if total_frames > 0 and self._track_start_frame == 0 and self._track_end_frame == 0:
+                decoded_dur = total_frames / float(self._sample_rate)
+                if decoded_dur >= 10.0 or self.duration < 10.0:
+                    self.duration = decoded_dur
+                    track.duration = self.duration
+            used_prebuffer = True
+            QTimer.singleShot(40, self.requestNextTrackPreload.emit)
 
+        if not used_prebuffer:
+            if track.file_path and Path(track.file_path).is_file():
+                self._using_local_file = True
+                url = QUrl.fromLocalFile(track.file_path)
+                self._audio_output.setVolume(0.0)
+                self._decoder.setSource(url)
+                if should_play:
+                    self._decoder_started = True
+                    self._decoder.start()
+            else:
+                self._using_local_file = False
+                self._media_player.setSource(QUrl())
+                self._decoded_raw_bytes = self._build_synth_track_pcm(track)
+                self._decoder_started = True
+                self._decoder_finished = True
+                QTimer.singleShot(40, self.requestNextTrackPreload.emit)
+
+        self._update_track_replay_gain()
+        self._update_track_acoustic_dna()
         self.trackChanged.emit(track)
         self.timeUpdated.emit(0.0, self.duration, "init")
 
@@ -1058,11 +1770,12 @@ class NordicAudioEngine(QObject):
             return
         if self.current_time >= self.duration - 0.15:
             self.current_time = 0.0
-            self._frame_cursor = 0
+            self._frame_cursor = self._track_start_frame
             self._eof_triggered = False
 
         self._pause_drain_ticks = 0
         self._preview_frames_remaining = 0
+        self._stream_device._tt_speed = 0.22 if self.turntable_physics_enabled else 1.0
         self.is_playing = True
         self._ensure_sink_running()
         self._feed_audio_sink()
@@ -1076,8 +1789,11 @@ class NordicAudioEngine(QObject):
             return
         self.is_playing = False
         self._preview_frames_remaining = 0
-        self._flush_fadeout_to_sink()
-        self._pause_drain_ticks = 4
+        self._crossfade_tail_pcm = None
+        self._crossfade_tail_cursor = 0
+        self._crossfade_tail_total_frames = 0
+        self._flush_fadeout_to_sink(is_pause_brake=True)
+        self._pause_drain_ticks = 16 if self.turntable_physics_enabled else 6
         if not self._tick_timer.isActive():
             self._tick_timer.start()
         if self._using_local_file and self._decoder_failed:
@@ -1098,14 +1814,18 @@ class NordicAudioEngine(QObject):
             self._flush_fadeout_to_sink()
         self.current_time = clamped
         self._eof_triggered = False
-        self._frame_cursor = max(0, int(clamped * self._sample_rate))
+        self._crossfade_tail_pcm = None
+        self._crossfade_tail_cursor = 0
+        self._crossfade_tail_total_frames = 0
+        self._frame_cursor = self._track_start_frame + max(0, int(clamped * self._sample_rate))
         self.dsp.reset_state()
         self._stream_device._out_fifo.clear()
         self._stream_device._env_gain = 0.0
         self._stream_device._last_tail_frame.fill(0.0)
 
         if self._using_local_file and self._decoder_failed:
-            self._media_player.setPosition(int(clamped * 1000))
+            abs_sec = (self._track_start_frame / float(self._sample_rate)) + clamped
+            self._media_player.setPosition(int(abs_sec * 1000))
         elif self._using_local_file and not self._decoder_finished:
             self._drain_decoder_buffers(max_buffers=16)
 
@@ -1236,6 +1956,13 @@ class NordicAudioEngine(QObject):
         if trigger_preview and not self.is_playing:
             self.trigger_dsp_live_refresh(play_preview_if_paused=True)
 
+    def set_headphone_profile(self, profile_id: str, trigger_preview: bool = False) -> None:
+        self.headphone_profile_id = profile_id
+        self.dsp.set_headphone_profile(profile_id)
+        self.headphoneProfileChanged.emit(profile_id)
+        if trigger_preview and not self.is_playing:
+            self.trigger_dsp_live_refresh(play_preview_if_paused=True)
+
     def set_sleep_timer(self, minutes: int) -> None:
         if minutes <= 0:
             self.sleep_remaining_sec = 0
@@ -1290,6 +2017,7 @@ class NordicAudioEngine(QObject):
 
         self._feed_audio_sink()
         if self.is_playing:
-            self.current_time = min(self.duration, self._frame_cursor / float(self._sample_rate))
+            rel_frames = max(0, self._frame_cursor - self._track_start_frame)
+            self.current_time = min(self.duration, rel_frames / float(self._sample_rate))
             self.timeUpdated.emit(self.current_time, self.duration, "tick")
             self.spectrumUpdated.emit(self.current_spectrum_bands)

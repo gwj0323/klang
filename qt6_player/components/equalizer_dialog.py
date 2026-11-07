@@ -1,6 +1,6 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import re
-from PyQt6.QtCore import Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QSize, QVariantAnimation, QEasingCurve, pyqtSignal
 from PyQt6.QtGui import (
     QPainter,
     QPen,
@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QGraphicsOpacityEffect,
     QStackedLayout,
+    QScrollArea,
+    QFrame,
 )
 
 from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, get_nordic_font
@@ -24,10 +26,12 @@ from qt6_player.components.fluent_widgets import (
     WinUIModalDialog,
     WinUISegmentedControl,
     WinUIToggleSwitch,
+    WinUIFlyoutMenu,
 )
 from qt6_player.components.title_bar import WinUIChipButton
 from qt6_player.components.transport_bar import WinUISlider
 from qt6_player.services.audio_engine import SOUND_PROFILES, EQ_BAND_LABELS
+from qt6_player.services.headphone_eq import HEADPHONE_PROFILES, HeadphoneProfile
 
 
 class EqualizerRackWidget(QWidget):
@@ -43,7 +47,7 @@ class EqualizerRackWidget(QWidget):
         self.dragging_band: int = -1
         self.hovered_band: int = -1
 
-        self.setFixedHeight(150)
+        self.setFixedHeight(144)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
 
@@ -51,6 +55,12 @@ class EqualizerRackWidget(QWidget):
         self._anim.setDuration(280)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_anim_val)
+
+    def sizeHint(self) -> QSize:
+        return QSize(400, 144)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(280, 144)
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
@@ -83,14 +93,14 @@ class EqualizerRackWidget(QWidget):
         return pad_x + usable_w * (index / 4.0)
 
     def _gain_to_y(self, db: float) -> float:
-        top_y = 26.0
-        bot_y = self.height() - 32.0
+        top_y = 24.0
+        bot_y = self.height() - 28.0
         ratio = (12.0 - max(-12.0, min(12.0, db))) / 24.0
         return top_y + ratio * (bot_y - top_y)
 
     def _y_to_gain(self, y: float) -> float:
-        top_y = 26.0
-        bot_y = self.height() - 32.0
+        top_y = 24.0
+        bot_y = self.height() - 28.0
         ratio = max(0.0, min(1.0, (y - top_y) / max(1.0, bot_y - top_y)))
         return round(12.0 - ratio * 24.0, 1)
 
@@ -151,8 +161,8 @@ class EqualizerRackWidget(QWidget):
         painter.setPen(QPen(self.theme.stroke_outer, 1.0))
         painter.drawPath(card_path)
 
-        top_y = 26.0
-        bot_y = self.height() - 32.0
+        top_y = 24.0
+        bot_y = self.height() - 28.0
         mid_y = (top_y + bot_y) / 2.0
 
         n_spec = len(self._spectrum_bars)
@@ -236,7 +246,7 @@ class EqualizerRackWidget(QWidget):
             painter.setPen(self.theme.slate_muted)
             painter.setFont(get_nordic_font(10, QFont.Weight.Medium, mono=True))
             painter.drawText(
-                QRectF(bx - 24.0, self.height() - 24.0, 48.0, 18.0),
+                QRectF(bx - 24.0, self.height() - 22.0, 48.0, 16.0),
                 int(Qt.AlignmentFlag.AlignCenter),
                 EQ_BAND_LABELS[i],
             )
@@ -252,6 +262,13 @@ class AudioSettingsDialog(WinUIModalDialog):
     dolbyAtmosModeChanged = pyqtSignal(str)
     spatialParamsChanged = pyqtSignal(float, float)
     outputModeChanged = pyqtSignal(str)
+    outputDeviceChanged = pyqtSignal(str)
+    crossfadeChanged = pyqtSignal(float)
+    replayGainToggled = pyqtSignal(bool)
+    vocalBalanceChanged = pyqtSignal(float)
+    turntablePhysicsToggled = pyqtSignal(bool)
+    vinylWarmthChanged = pyqtSignal(float)
+    headphoneProfileChanged = pyqtSignal(str)
 
     # 界面与偏好设置信号
     themeChanged = pyqtSignal(str)
@@ -267,9 +284,11 @@ class AudioSettingsDialog(WinUIModalDialog):
     _PRESET_NAMES = ["默认原声", "流行人声", "低音增强", "清澈高音", "现场空间"]
     _RATE_VALUES = [0.75, 1.0, 1.25, 1.5, 2.0]
     _SLEEP_MINS = [0, 15, 30, 60]
+    _CROSSFADE_VALUES = [0.0, 1.0, 2.0, 3.0, 5.0]
+    _CROSSFADE_LABELS = ["无缝 (0s)", "1 秒", "2 秒", "3 秒", "5 秒"]
 
     _OUTPUT_MODES = ["binaural", "surround_51", "surround_71"]
-    _OUTPUT_LABELS = ["双耳渲染 (耳机)", "5.1 环绕声", "7.1 环绕声"]
+    _OUTPUT_LABELS = ["耳机双耳", "5.1 环绕", "7.1 环绕"]
 
     def __init__(
         self,
@@ -285,6 +304,14 @@ class AudioSettingsDialog(WinUIModalDialog):
         audio_output_mode: str = "binaural",
         actual_channels: int = 2,
         output_device_name: str = "",
+        selected_device_id: str = "default",
+        available_devices: Optional[List[Tuple[str, str]]] = None,
+        crossfade_sec: float = 0.0,
+        replay_gain_enabled: bool = False,
+        vocal_balance: float = 0.0,
+        turntable_physics: bool = True,
+        vinyl_warmth: float = 0.0,
+        headphone_profile_id: str = "bypass",
         # 新增偏好参数
         default_tab: int = 0,
         current_theme: str = "daylight",
@@ -297,7 +324,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         theme: NordicThemeColors = DAYLIGHT_THEME,
         parent: Optional[QWidget] = None,
     ):
-        super().__init__("设置", 560, 670, theme=theme, parent=parent)
+        super().__init__("设置", 560, 680, theme=theme, parent=parent)
         self.current_offset = current_offset
         self.current_reverb = current_reverb
         self.current_dolby_mode = dolby_mode
@@ -306,7 +333,17 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.current_output_mode = audio_output_mode
         self.actual_channels = actual_channels
         self.output_device_name = output_device_name
+        self.selected_device_id = selected_device_id or "default"
+        self.available_devices: List[Tuple[str, str]] = list(available_devices) if available_devices else [("default", f"系统默认 ({output_device_name or '默认设备'})")]
+        self.crossfade_sec = float(crossfade_sec)
+        self.replay_gain_enabled = bool(replay_gain_enabled)
+        self.vocal_balance = max(-1.0, min(1.0, float(vocal_balance)))
+        self.turntable_physics = bool(turntable_physics)
+        self.vinyl_warmth = max(0.0, min(1.0, float(vinyl_warmth)))
+        self.headphone_profile_id = headphone_profile_id or "bypass"
         self.current_font_size = current_font_size
+        self._device_flyout: Optional[WinUIFlyoutMenu] = None
+        self._headphone_flyout: Optional[WinUIFlyoutMenu] = None
 
         init_gains = list(current_gains) if current_gains else list(SOUND_PROFILES.get(current_profile, ([0.0] * 5, 0.03))[0])
         self._setup_unified_body(
@@ -330,6 +367,57 @@ class AudioSettingsDialog(WinUIModalDialog):
             vinyl_mode,
             backdrop_material,
         )
+
+    def _apply_scroll_style(self, scroll: QScrollArea) -> None:
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background: transparent;
+            }}
+            QScrollBar:vertical {{
+                border: none;
+                background: transparent;
+                width: 6px;
+                margin: 0px 1px 0px 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: rgba(140, 150, 145, 0.35);
+                min-height: 28px;
+                border-radius: 3px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(140, 150, 145, 0.65);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+                border: none;
+                background: transparent;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
+        """)
+
+    def _wrap_tab_in_scroll(self, content_widget: QWidget) -> QScrollArea:
+        content_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        content_widget.setStyleSheet("background: transparent;")
+
+        scroll = QScrollArea(self.tab_container)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if scroll.viewport():
+            scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            scroll.viewport().setStyleSheet("background: transparent;")
+
+        self._apply_scroll_style(scroll)
+        scroll.setWidget(content_widget)
+        return scroll
 
     def _clean_device_name(self, name: str) -> str:
         if not name:
@@ -361,10 +449,10 @@ class AudioSettingsDialog(WinUIModalDialog):
         backdrop_material: str = "mica",
     ) -> None:
         vbox = self._root_vbox
-        vbox.setSpacing(10)
+        vbox.setSpacing(14)
 
-        # 顶部设置大类导航分段胶囊
-        self.category_tabs = WinUISegmentedControl(["声音与音效", "界面与显示"], self)
+        # 顶部三栏分类切换：将音效、播放输出、界面外观拆分为独立标签页，告别拥挤
+        self.category_tabs = WinUISegmentedControl(["音效调节", "播放与输出", "外观与歌词"], self)
         self.category_tabs.set_theme(self.theme)
         vbox.addWidget(self.category_tabs)
 
@@ -372,21 +460,58 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.stacked_layout = QStackedLayout(self.tab_container)
         self.stacked_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ----------------- Tab 0: 音效与播放 -----------------
+        # ----------------- Tab 0: 音效调节 -----------------
         self.tab_audio = QWidget(self.tab_container)
         audio_vbox = QVBoxLayout(self.tab_audio)
-        audio_vbox.setContentsMargins(0, 0, 0, 0)
-        audio_vbox.setSpacing(6)
+        audio_vbox.setContentsMargins(4, 4, 10, 16)
+        audio_vbox.setSpacing(12)
 
-        # 1. 音效预设
+        # 0. 耳机硬件声学校准 (AutoEq 哈曼曲线目标补偿)
+        hp_vbox = QVBoxLayout()
+        hp_vbox.setSpacing(6)
+
+        hp_header = QHBoxLayout()
+        lbl_hp = QLabel("耳机声学校准 (AutoEq)", self.tab_audio)
+        lbl_hp.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_hp.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        hp_header.addWidget(lbl_hp)
+
+        self.lbl_hp_badge = QLabel("HARMAN TARGET", self.tab_audio)
+        self.lbl_hp_badge.setFont(get_nordic_font(9, QFont.Weight.Bold, mono=True))
+        self._update_hp_badge_state(self.headphone_profile_id != "bypass")
+        hp_header.addWidget(self.lbl_hp_badge)
+        hp_header.addStretch(1)
+        hp_vbox.addLayout(hp_header)
+
+        self.btn_headphone_profile = WinUIChipButton(
+            self._current_headphone_button_label(),
+            active=(self.headphone_profile_id != "bypass"),
+            icon_kind="speaker",
+            parent=self.tab_audio,
+        )
+        self.btn_headphone_profile.set_theme(self.theme)
+        self.btn_headphone_profile.clicked.connect(self._on_open_headphone_flyout)
+        hp_vbox.addWidget(self.btn_headphone_profile)
+
+        self.lbl_hp_desc = QLabel(self.tab_audio)
+        self.lbl_hp_desc.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_hp_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        self.lbl_hp_desc.setWordWrap(True)
+        self._update_hp_desc(self.headphone_profile_id)
+        hp_vbox.addWidget(self.lbl_hp_desc)
+        audio_vbox.addLayout(hp_vbox)
+
+        audio_vbox.addSpacing(2)
+
+        # 1. 均衡器预设
         header_eq = QHBoxLayout()
-        lbl_eq = QLabel("音效预设", self.tab_audio)
+        lbl_eq = QLabel("均衡器预设", self.tab_audio)
         lbl_eq.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
-        lbl_eq.setStyleSheet(f"color: {self.theme.slate_dark.name()}; background: transparent;")
+        lbl_eq.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         header_eq.addWidget(lbl_eq)
         header_eq.addStretch(1)
 
-        self.btn_preview = WinUIChipButton("试听效果", active=True, icon_kind="speaker", parent=self.tab_audio)
+        self.btn_preview = WinUIChipButton("试听", active=True, icon_kind="speaker", parent=self.tab_audio)
         self.btn_preview.set_theme(self.theme)
         self.btn_preview.clicked.connect(
             lambda: self.customEqChanged.emit(list(self.eq_rack.gains), self.reverb_slider.ratio, True)
@@ -413,10 +538,69 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.eq_rack.set_theme(self.theme)
         self.eq_rack.gainsChangedByUser.connect(self._on_eq_rack_dragged)
         audio_vbox.addWidget(self.eq_rack)
+        audio_vbox.addSpacing(6)
 
-        # 3. 空间音频与杜比全景声
+        # 3. 混响强度
+        rev_row = QHBoxLayout()
+        lbl_rev = QLabel("混响强度", self.tab_audio)
+        lbl_rev.setFixedWidth(68)
+        lbl_rev.setFont(get_nordic_font(12, QFont.Weight.Medium))
+        lbl_rev.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        rev_row.addWidget(lbl_rev)
+
+        self.reverb_slider = WinUISlider(max(0.0, min(1.0, current_reverb)), self.tab_audio)
+        self.reverb_slider.set_theme(self.theme)
+        self.reverb_slider.valueChangedByUser.connect(self._on_reverb_changed)
+        rev_row.addWidget(self.reverb_slider, 1)
+
+        self.lbl_rev_pct = QLabel(f"{int(round(current_reverb * 100))}%", self.tab_audio)
+        self.lbl_rev_pct.setFixedWidth(42)
+        self.lbl_rev_pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_rev_pct.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
+        self.lbl_rev_pct.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        rev_row.addWidget(self.lbl_rev_pct)
+        audio_vbox.addLayout(rev_row)
+        audio_vbox.addSpacing(6)
+
+        # 3.5 人声 ⟷ 伴奏无极天平 (向左消除人声保留伴奏 / 向右突出人声削弱伴奏)
+        vocal_box = QVBoxLayout()
+        vocal_box.setSpacing(4)
+        vocal_row = QHBoxLayout()
+        lbl_vocal = QLabel("人声天平", self.tab_audio)
+        lbl_vocal.setFixedWidth(68)
+        lbl_vocal.setFont(get_nordic_font(12, QFont.Weight.Medium))
+        lbl_vocal.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        vocal_row.addWidget(lbl_vocal)
+
+        init_vb_ratio = max(0.0, min(1.0, (self.vocal_balance + 1.0) * 0.5))
+        self.vocal_balance_slider = WinUISlider(init_vb_ratio, self.tab_audio)
+        self.vocal_balance_slider.set_theme(self.theme)
+        self.vocal_balance_slider.valueChangedByUser.connect(self._on_vocal_balance_slider_changed)
+        vocal_row.addWidget(self.vocal_balance_slider, 1)
+
+        self.lbl_vocal_balance = QLabel(self._format_vocal_balance_text(self.vocal_balance), self.tab_audio)
+        self.lbl_vocal_balance.setFixedWidth(74)
+        self.lbl_vocal_balance.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_vocal_balance.setFont(get_nordic_font(10, QFont.Weight.DemiBold, mono=True))
+        self.lbl_vocal_balance.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        vocal_row.addWidget(self.lbl_vocal_balance)
+
+        self.btn_vocal_reset = WinUIChipButton("归零", fixed_w=44, parent=self.tab_audio)
+        self.btn_vocal_reset.set_theme(self.theme)
+        self.btn_vocal_reset.clicked.connect(self._on_reset_vocal_balance)
+        vocal_row.addWidget(self.btn_vocal_reset)
+        vocal_box.addLayout(vocal_row)
+
+        lbl_vocal_hint = QLabel("向左隐去人声保留伴奏 · 向右突出人声削弱伴奏", self.tab_audio)
+        lbl_vocal_hint.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        lbl_vocal_hint.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent; padding-left: 72px;")
+        vocal_box.addWidget(lbl_vocal_hint)
+        audio_vbox.addLayout(vocal_box)
+        audio_vbox.addSpacing(6)
+
+        # 4. 空间音频
         dolby_box = QVBoxLayout()
-        dolby_box.setSpacing(6)
+        dolby_box.setSpacing(10)
 
         dolby_header = QHBoxLayout()
         lbl_dolby_title = QLabel("空间音频", self.tab_audio)
@@ -442,14 +626,14 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         sc_vbox = QVBoxLayout(self.spatial_controls_widget)
         sc_vbox.setContentsMargins(0, 0, 0, 0)
-        sc_vbox.setSpacing(6)
+        sc_vbox.setSpacing(10)
 
         mode_row = QHBoxLayout()
-        lbl_mode = QLabel("效果模式", self.tab_audio)
+        lbl_mode = QLabel("音效模式", self.spatial_controls_widget)
+        lbl_mode.setFixedWidth(68)
         lbl_mode.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_mode.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
         mode_row.addWidget(lbl_mode)
-        mode_row.addSpacing(6)
 
         self.dolby_mode_tabs = WinUISegmentedControl(["杜比全景声", "空间立体声"], self.spatial_controls_widget)
         self.dolby_mode_tabs.set_theme(self.theme)
@@ -459,52 +643,53 @@ class AudioSettingsDialog(WinUIModalDialog):
         mode_row.addWidget(self.dolby_mode_tabs, 1)
         sc_vbox.addLayout(mode_row)
 
-        params_row = QHBoxLayout()
-        params_row.setSpacing(10)
-
-        lbl_w = QLabel("声场宽度", self.tab_audio)
+        width_row = QHBoxLayout()
+        lbl_w = QLabel("声场宽度", self.spatial_controls_widget)
+        lbl_w.setFixedWidth(68)
         lbl_w.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_w.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        params_row.addWidget(lbl_w)
+        width_row.addWidget(lbl_w)
 
         init_w_ratio = max(0.0, min(1.0, (spatial_width - 0.8) / 1.0))
         self.spatial_width_slider = WinUISlider(init_w_ratio, self.spatial_controls_widget)
         self.spatial_width_slider.set_theme(self.theme)
         self.spatial_width_slider.valueChangedByUser.connect(self._on_spatial_slider_changed)
-        params_row.addWidget(self.spatial_width_slider, 1)
+        width_row.addWidget(self.spatial_width_slider, 1)
 
-        self.lbl_width_val = QLabel(f"{int(round(spatial_width * 100))}%", self.tab_audio)
-        self.lbl_width_val.setFixedWidth(38)
+        self.lbl_width_val = QLabel(f"{int(round(spatial_width * 100))}%", self.spatial_controls_widget)
+        self.lbl_width_val.setFixedWidth(42)
+        self.lbl_width_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.lbl_width_val.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
         self.lbl_width_val.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        params_row.addWidget(self.lbl_width_val)
+        width_row.addWidget(self.lbl_width_val)
+        sc_vbox.addLayout(width_row)
 
-        params_row.addSpacing(8)
-
-        lbl_h = QLabel("空间高度", self.tab_audio)
+        height_row = QHBoxLayout()
+        lbl_h = QLabel("空间高度", self.spatial_controls_widget)
+        lbl_h.setFixedWidth(68)
         lbl_h.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_h.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        params_row.addWidget(lbl_h)
+        height_row.addWidget(lbl_h)
 
         self.spatial_height_slider = WinUISlider(max(0.0, min(1.0, spatial_height)), self.spatial_controls_widget)
         self.spatial_height_slider.set_theme(self.theme)
         self.spatial_height_slider.valueChangedByUser.connect(self._on_spatial_slider_changed)
-        params_row.addWidget(self.spatial_height_slider, 1)
+        height_row.addWidget(self.spatial_height_slider, 1)
 
-        self.lbl_height_val = QLabel(f"{int(round(spatial_height * 100))}%", self.tab_audio)
-        self.lbl_height_val.setFixedWidth(38)
+        self.lbl_height_val = QLabel(f"{int(round(spatial_height * 100))}%", self.spatial_controls_widget)
+        self.lbl_height_val.setFixedWidth(42)
+        self.lbl_height_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.lbl_height_val.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
         self.lbl_height_val.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        params_row.addWidget(self.lbl_height_val)
-
-        sc_vbox.addLayout(params_row)
+        height_row.addWidget(self.lbl_height_val)
+        sc_vbox.addLayout(height_row)
 
         out_mode_row = QHBoxLayout()
-        lbl_out = QLabel("输出模式", self.tab_audio)
+        lbl_out = QLabel("输出声道", self.spatial_controls_widget)
+        lbl_out.setFixedWidth(68)
         lbl_out.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_out.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
         out_mode_row.addWidget(lbl_out)
-        out_mode_row.addSpacing(6)
 
         self.output_tabs = WinUISegmentedControl(self._OUTPUT_LABELS, self.spatial_controls_widget)
         self.output_tabs.set_theme(self.theme)
@@ -515,45 +700,154 @@ class AudioSettingsDialog(WinUIModalDialog):
         sc_vbox.addLayout(out_mode_row)
 
         dolby_box.addWidget(self.spatial_controls_widget)
-
-        self.lbl_output_tip = QLabel(self.tab_audio)
-        self.lbl_output_tip.setFont(get_nordic_font(10, QFont.Weight.Normal))
-        self.lbl_output_tip.setWordWrap(True)
-        dolby_box.addWidget(self.lbl_output_tip)
-
         audio_vbox.addLayout(dolby_box)
+        audio_vbox.addStretch(1)
 
         self._update_badge_state(is_dolby_on)
         self.spatial_controls_widget.setEnabled(is_dolby_on)
         self.spatial_controls_opacity.setOpacity(1.0 if is_dolby_on else 0.42)
+
+        self.scroll_audio = self._wrap_tab_in_scroll(self.tab_audio)
+        self.stacked_layout.addWidget(self.scroll_audio)
+
+        # ----------------- Tab 1: 播放与输出 -----------------
+        self.tab_playback = QWidget(self.tab_container)
+        play_vbox = QVBoxLayout(self.tab_playback)
+        play_vbox.setContentsMargins(4, 6, 10, 16)
+        play_vbox.setSpacing(16)
+
+        # 1. 输出设备选择
+        dev_box = QVBoxLayout()
+        dev_box.setSpacing(6)
+        lbl_dev = QLabel("音频输出设备", self.tab_playback)
+        lbl_dev.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_dev.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        dev_box.addWidget(lbl_dev)
+
+        self.btn_output_device = WinUIChipButton(
+            self._current_device_button_label(),
+            active=False,
+            icon_kind="speaker",
+            parent=self.tab_playback,
+        )
+        self.btn_output_device.set_theme(self.theme)
+        self.btn_output_device.clicked.connect(self._on_open_device_flyout)
+        dev_box.addWidget(self.btn_output_device)
+
+        self.lbl_output_tip = QLabel(self.tab_playback)
+        self.lbl_output_tip.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_output_tip.setWordWrap(True)
+        dev_box.addWidget(self.lbl_output_tip)
+        play_vbox.addLayout(dev_box)
         self._update_output_tip(audio_output_mode, actual_channels, output_device_name)
 
-        # 4. 空间混响
-        rev_row = QHBoxLayout()
-        lbl_rev = QLabel("空间混响", self.tab_audio)
-        lbl_rev.setFont(get_nordic_font(12, QFont.Weight.Medium))
-        lbl_rev.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
-        rev_row.addWidget(lbl_rev)
-        rev_row.addSpacing(16)
+        # 2. 切歌过渡 (Gapless / Crossfade)
+        xfade_box = QVBoxLayout()
+        xfade_box.setSpacing(6)
+        lbl_xfade = QLabel("切歌淡入淡出", self.tab_playback)
+        lbl_xfade.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_xfade.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        xfade_box.addWidget(lbl_xfade)
 
-        self.reverb_slider = WinUISlider(max(0.0, min(1.0, current_reverb)), self.tab_audio)
-        self.reverb_slider.set_theme(self.theme)
-        self.reverb_slider.valueChangedByUser.connect(self._on_reverb_changed)
-        rev_row.addWidget(self.reverb_slider, 1)
+        self.crossfade_tabs = WinUISegmentedControl(self._CROSSFADE_LABELS, self.tab_playback)
+        self.crossfade_tabs.set_theme(self.theme)
+        best_xf_idx = min(
+            range(len(self._CROSSFADE_VALUES)),
+            key=lambda i: abs(self.crossfade_sec - self._CROSSFADE_VALUES[i]),
+        )
+        self.crossfade_tabs.set_current_index(best_xf_idx, animate=False)
+        self.crossfade_tabs.currentIndexChanged.connect(
+            lambda idx: self.crossfadeChanged.emit(self._CROSSFADE_VALUES[idx])
+        )
+        xfade_box.addWidget(self.crossfade_tabs)
+        play_vbox.addLayout(xfade_box)
 
-        self.lbl_rev_pct = QLabel(f"{int(round(current_reverb * 100))}%", self.tab_audio)
-        self.lbl_rev_pct.setFixedWidth(38)
-        self.lbl_rev_pct.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
-        self.lbl_rev_pct.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        rev_row.addWidget(self.lbl_rev_pct)
-        audio_vbox.addLayout(rev_row)
+        # 3. 音量平衡 (ReplayGain)
+        rg_row = QHBoxLayout()
+        rg_text_col = QVBoxLayout()
+        rg_text_col.setSpacing(2)
+        lbl_rg = QLabel("音量平衡 (ReplayGain)", self.tab_playback)
+        lbl_rg.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_rg.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        rg_text_col.addWidget(lbl_rg)
 
-        # 5. 播放倍速
-        rate_row = QHBoxLayout()
-        lbl_rate = QLabel("播放倍速", self.tab_audio)
-        lbl_rate.setFont(get_nordic_font(12, QFont.Weight.Medium))
+        lbl_rg_desc = QLabel("自动平衡不同歌曲的音量差异，避免切歌时忽大忽小", self.tab_playback)
+        lbl_rg_desc.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        lbl_rg_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        rg_text_col.addWidget(lbl_rg_desc)
+        rg_row.addLayout(rg_text_col, 1)
+
+        self.switch_replay_gain = WinUIToggleSwitch(
+            checked=self.replay_gain_enabled,
+            text_on="开启",
+            text_off="关闭",
+            parent=self.tab_playback,
+        )
+        self.switch_replay_gain.set_theme(self.theme)
+        self.switch_replay_gain.toggled.connect(self.replayGainToggled.emit)
+        rg_row.addWidget(self.switch_replay_gain)
+        play_vbox.addLayout(rg_row)
+
+        # 3.5 黑胶物理起停与模拟味 (Turntable Physics & Analog Warmth)
+        tt_box = QVBoxLayout()
+        tt_box.setSpacing(8)
+        tt_header = QHBoxLayout()
+        tt_text_col = QVBoxLayout()
+        tt_text_col.setSpacing(2)
+        lbl_tt = QLabel("黑胶物理断电起停", self.tab_playback)
+        lbl_tt.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_tt.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        tt_text_col.addWidget(lbl_tt)
+
+        lbl_tt_desc = QLabel("模拟唱盘断电降速与启动加速效果，避免声音生硬切断", self.tab_playback)
+        lbl_tt_desc.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        lbl_tt_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        tt_text_col.addWidget(lbl_tt_desc)
+        tt_header.addLayout(tt_text_col, 1)
+
+        self.switch_turntable = WinUIToggleSwitch(
+            checked=self.turntable_physics,
+            text_on="开启",
+            text_off="关闭",
+            parent=self.tab_playback,
+        )
+        self.switch_turntable.set_theme(self.theme)
+        self.switch_turntable.toggled.connect(self.turntablePhysicsToggled.emit)
+        tt_header.addWidget(self.switch_turntable)
+        tt_box.addLayout(tt_header)
+
+        warmth_row = QHBoxLayout()
+        lbl_warm = QLabel("黑胶模拟质感 (微底噪与电子管温暖度)", self.tab_playback)
+        lbl_warm.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        lbl_warm.setStyleSheet(f"color: {self.theme.slate_dark.name()}; background: transparent;")
+        warmth_row.addWidget(lbl_warm)
+
+        self.vinyl_warmth_slider = WinUISlider(self.vinyl_warmth, self.tab_playback)
+        self.vinyl_warmth_slider.set_theme(self.theme)
+        self.vinyl_warmth_slider.valueChangedByUser.connect(self._on_vinyl_warmth_changed)
+        warmth_row.addWidget(self.vinyl_warmth_slider, 1)
+
+        self.lbl_warmth_pct = QLabel(
+            "关闭" if self.vinyl_warmth < 0.02 else f"{int(round(self.vinyl_warmth * 100))}%",
+            self.tab_playback,
+        )
+        self.lbl_warmth_pct.setFixedWidth(44)
+        self.lbl_warmth_pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_warmth_pct.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
+        self.lbl_warmth_pct.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        warmth_row.addWidget(self.lbl_warmth_pct)
+        tt_box.addLayout(warmth_row)
+        play_vbox.addLayout(tt_box)
+
+        # 4. 播放倍速
+        rate_box = QVBoxLayout()
+        rate_box.setSpacing(6)
+        lbl_rate = QLabel("播放速度", self.tab_playback)
+        lbl_rate.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_rate.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
-        self.rate_tabs = WinUISegmentedControl(["0.75x", "1.0x", "1.25x", "1.5x", "2.0x"], self.tab_audio)
+        rate_box.addWidget(lbl_rate)
+
+        self.rate_tabs = WinUISegmentedControl(["0.75x", "1.0x", "1.25x", "1.5x", "2.0x"], self.tab_playback)
         self.rate_tabs.set_theme(self.theme)
         for i, r in enumerate(self._RATE_VALUES):
             if abs(r - current_rate) < 0.05:
@@ -562,34 +856,18 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.rate_tabs.currentIndexChanged.connect(
             lambda idx: self.playbackRateChanged.emit(self._RATE_VALUES[idx])
         )
-        rate_row.addWidget(lbl_rate)
-        rate_row.addSpacing(16)
-        rate_row.addWidget(self.rate_tabs, 1)
-        audio_vbox.addLayout(rate_row)
+        rate_box.addWidget(self.rate_tabs)
+        play_vbox.addLayout(rate_box)
 
-        # 6. 歌词微调 & 定时关闭
-        bottom_row = QHBoxLayout()
-        self.lbl_offset = QLabel(f"歌词微调 ({self.current_offset:+.1f}s)", self.tab_audio)
-        self.lbl_offset.setFont(get_nordic_font(12, QFont.Weight.Medium))
-        self.lbl_offset.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
-        bottom_row.addWidget(self.lbl_offset)
-        bottom_row.addSpacing(6)
-
-        for label, delta in (("-0.5s", -0.5), ("重置", 0.0), ("+0.5s", 0.5)):
-            btn = WinUIChipButton(label, parent=self.tab_audio)
-            btn.set_theme(self.theme)
-            btn.clicked.connect(lambda checked=False, d=delta: self._on_offset_btn(d))
-            bottom_row.addWidget(btn)
-
-        bottom_row.addStretch(1)
-
-        lbl_sleep = QLabel("定时关闭", self.tab_audio)
-        lbl_sleep.setFont(get_nordic_font(12, QFont.Weight.Medium))
+        # 5. 定时关闭
+        sleep_box = QVBoxLayout()
+        sleep_box.setSpacing(6)
+        lbl_sleep = QLabel("定时停止播放", self.tab_playback)
+        lbl_sleep.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_sleep.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
-        bottom_row.addWidget(lbl_sleep)
+        sleep_box.addWidget(lbl_sleep)
 
-        self.sleep_tabs = WinUISegmentedControl(["关闭", "15分", "30分", "60分"], self.tab_audio)
-        self.sleep_tabs.setFixedWidth(186)
+        self.sleep_tabs = WinUISegmentedControl(["关闭", "15 分钟", "30 分钟", "60 分钟"], self.tab_playback)
         self.sleep_tabs.set_theme(self.theme)
         if sleep_remaining_sec > 0:
             rem_m = sleep_remaining_sec / 60.0
@@ -601,26 +879,43 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.sleep_tabs.currentIndexChanged.connect(
             lambda idx: self.sleepTimerRequested.emit(self._SLEEP_MINS[idx])
         )
-        bottom_row.addWidget(self.sleep_tabs)
-        audio_vbox.addLayout(bottom_row)
+        sleep_box.addWidget(self.sleep_tabs)
+        play_vbox.addLayout(sleep_box)
 
-        self.stacked_layout.addWidget(self.tab_audio)
+        # 6. 歌词时间微调
+        offset_row = QHBoxLayout()
+        self.lbl_offset = QLabel(f"歌词时间偏移 ({self.current_offset:+.1f}s)", self.tab_playback)
+        self.lbl_offset.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.lbl_offset.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        offset_row.addWidget(self.lbl_offset)
+        offset_row.addStretch(1)
 
-        # ----------------- Tab 1: 界面与视效 -----------------
+        for label, delta in (("-0.5s", -0.5), ("重置", 0.0), ("+0.5s", 0.5)):
+            btn = WinUIChipButton(label, parent=self.tab_playback)
+            btn.set_theme(self.theme)
+            btn.clicked.connect(lambda checked=False, d=delta: self._on_offset_btn(d))
+            offset_row.addWidget(btn)
+        play_vbox.addLayout(offset_row)
+        play_vbox.addStretch(1)
+
+        self.scroll_playback = self._wrap_tab_in_scroll(self.tab_playback)
+        self.stacked_layout.addWidget(self.scroll_playback)
+
+        # ----------------- Tab 2: 外观与歌词 -----------------
         self.tab_ui = QWidget(self.tab_container)
         ui_vbox = QVBoxLayout(self.tab_ui)
-        ui_vbox.setContentsMargins(0, 4, 0, 0)
-        ui_vbox.setSpacing(14)
+        ui_vbox.setContentsMargins(4, 6, 10, 16)
+        ui_vbox.setSpacing(15)
 
         # 1. 外观主题
         theme_box = QVBoxLayout()
         theme_box.setSpacing(6)
-        lbl_th = QLabel("外观主题", self.tab_ui)
+        lbl_th = QLabel("颜色主题", self.tab_ui)
         lbl_th.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_th.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         theme_box.addWidget(lbl_th)
 
-        self.theme_tabs = WinUISegmentedControl(["浅色模式", "深色模式"], self.tab_ui)
+        self.theme_tabs = WinUISegmentedControl(["浅色", "深色"], self.tab_ui)
         self.theme_tabs.set_theme(self.theme)
         self.theme_tabs.set_current_index(1 if current_theme == "dusk" else 0, animate=False)
         self.theme_tabs.currentIndexChanged.connect(
@@ -629,15 +924,15 @@ class AudioSettingsDialog(WinUIModalDialog):
         theme_box.addWidget(self.theme_tabs)
         ui_vbox.addLayout(theme_box)
 
-        # 窗口材质 (Windows 11 Mica / Acrylic / Solid)
+        # 2. 窗口背景效果
         mat_box = QVBoxLayout()
         mat_box.setSpacing(6)
-        lbl_mat = QLabel("窗口材质 (Windows 11)", self.tab_ui)
+        lbl_mat = QLabel("窗口背景效果 (Windows 11)", self.tab_ui)
         lbl_mat.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_mat.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         mat_box.addWidget(lbl_mat)
 
-        self.backdrop_tabs = WinUISegmentedControl(["标准纯色", "Win11 云母 (Mica)", "亚克力 (Acrylic)"], self.tab_ui)
+        self.backdrop_tabs = WinUISegmentedControl(["纯色", "云母 (Mica)", "亚克力 (Acrylic)"], self.tab_ui)
         self.backdrop_tabs.set_theme(self.theme)
         mat_idx = 0 if backdrop_material == "solid" else (2 if backdrop_material == "acrylic" else 1)
         self.backdrop_tabs.set_current_index(mat_idx, animate=False)
@@ -645,18 +940,13 @@ class AudioSettingsDialog(WinUIModalDialog):
             lambda idx: self.backdropMaterialChanged.emit(["solid", "mica", "acrylic"][idx])
         )
         mat_box.addWidget(self.backdrop_tabs)
-
-        lbl_mat_tip = QLabel("保留北欧原色温润质感的同时，透现系统桌面壁纸毛玻璃与云母光影", self.tab_ui)
-        lbl_mat_tip.setFont(get_nordic_font(10, QFont.Weight.Normal))
-        lbl_mat_tip.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        mat_box.addWidget(lbl_mat_tip)
         ui_vbox.addLayout(mat_box)
 
-        # 2. 歌词显示设置 (字号、双语翻译、逐字光效)
+        # 3. 歌词设置
         lyrics_box = QVBoxLayout()
         lyrics_box.setSpacing(8)
 
-        lbl_lyr = QLabel("歌词设置", self.tab_ui)
+        lbl_lyr = QLabel("歌词显示", self.tab_ui)
         lbl_lyr.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_lyr.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         lyrics_box.addWidget(lbl_lyr)
@@ -687,7 +977,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         lyrics_box.addLayout(font_row)
 
         trans_row = QHBoxLayout()
-        lbl_tr = QLabel("双语翻译", self.tab_ui)
+        lbl_tr = QLabel("显示歌词翻译", self.tab_ui)
         lbl_tr.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_tr.setStyleSheet(f"color: {self.theme.slate_dark.name()}; background: transparent;")
         trans_row.addWidget(lbl_tr)
@@ -699,7 +989,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         lyrics_box.addLayout(trans_row)
 
         syl_row = QHBoxLayout()
-        lbl_sy = QLabel("逐字动效", self.tab_ui)
+        lbl_sy = QLabel("逐字高亮动画", self.tab_ui)
         lbl_sy.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_sy.setStyleSheet(f"color: {self.theme.slate_dark.name()}; background: transparent;")
         syl_row.addWidget(lbl_sy)
@@ -712,21 +1002,21 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         ui_vbox.addLayout(lyrics_box)
 
-        # 3. 沉浸全屏视界设置
+        # 4. 全屏模式
         imm_box = QVBoxLayout()
         imm_box.setSpacing(8)
 
-        lbl_imm = QLabel("全屏沉浸", self.tab_ui)
+        lbl_imm = QLabel("全屏模式", self.tab_ui)
         lbl_imm.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_imm.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         imm_box.addWidget(lbl_imm)
 
         fps_row = QHBoxLayout()
-        lbl_fps = QLabel("刷新率", self.tab_ui)
+        lbl_fps = QLabel("动画帧率", self.tab_ui)
+        lbl_fps.setFixedWidth(68)
         lbl_fps.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_fps.setStyleSheet(f"color: {self.theme.slate_dark.name()}; background: transparent;")
         fps_row.addWidget(lbl_fps)
-        fps_row.addSpacing(12)
 
         self.fps_tabs = WinUISegmentedControl(["60 FPS", "120 FPS"], self.tab_ui)
         self.fps_tabs.set_theme(self.theme)
@@ -739,12 +1029,12 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         cover_row = QHBoxLayout()
         lbl_cv = QLabel("封面样式", self.tab_ui)
+        lbl_cv.setFixedWidth(68)
         lbl_cv.setFont(get_nordic_font(11, QFont.Weight.Medium))
         lbl_cv.setStyleSheet(f"color: {self.theme.slate_dark.name()}; background: transparent;")
         cover_row.addWidget(lbl_cv)
-        cover_row.addSpacing(12)
 
-        self.cover_mode_tabs = WinUISegmentedControl(["现代封面", "纯净黑胶", "极简唱机"], self.tab_ui)
+        self.cover_mode_tabs = WinUISegmentedControl(["方形封面", "黑胶唱片", "黑胶唱机"], self.tab_ui)
         self.cover_mode_tabs.set_theme(self.theme)
         if vinyl_mode in ("arm", "vinyl_arm", 2):
             cur_cv_idx = 2
@@ -764,23 +1054,23 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         ui_vbox.addLayout(imm_box)
 
-        # 4. 在线词图刮削
+        # 5. 在线歌词与封面
         scrape_box = QVBoxLayout()
         scrape_box.setSpacing(6)
 
-        lbl_sc = QLabel("歌词与封面", self.tab_ui)
+        lbl_sc = QLabel("歌词与封面匹配", self.tab_ui)
         lbl_sc.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
         lbl_sc.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         scrape_box.addWidget(lbl_sc)
 
         sc_row = QHBoxLayout()
-        lbl_sc_desc = QLabel("联网匹配当前歌曲的封面与双语歌词", self.tab_ui)
+        lbl_sc_desc = QLabel("在线搜索当前歌曲的歌词和专辑封面", self.tab_ui)
         lbl_sc_desc.setFont(get_nordic_font(11, QFont.Weight.Normal))
         lbl_sc_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
         sc_row.addWidget(lbl_sc_desc)
         sc_row.addStretch(1)
 
-        self.btn_scrape_action = WinUIChipButton("在线匹配", icon_kind="search", parent=self.tab_ui)
+        self.btn_scrape_action = WinUIChipButton("搜索词图", icon_kind="search", parent=self.tab_ui)
         self.btn_scrape_action.set_theme(self.theme)
         self.btn_scrape_action.clicked.connect(self._on_scrape_clicked)
         sc_row.addWidget(self.btn_scrape_action)
@@ -789,13 +1079,15 @@ class AudioSettingsDialog(WinUIModalDialog):
         ui_vbox.addLayout(scrape_box)
         ui_vbox.addStretch(1)
 
-        self.stacked_layout.addWidget(self.tab_ui)
+        self.scroll_ui = self._wrap_tab_in_scroll(self.tab_ui)
+        self.stacked_layout.addWidget(self.scroll_ui)
 
         vbox.addWidget(self.tab_container, 1)
 
         # 切换到默认 Tab
-        self.category_tabs.set_current_index(default_tab, animate=False)
-        self.stacked_layout.setCurrentIndex(default_tab)
+        safe_tab = max(0, min(2, int(default_tab)))
+        self.category_tabs.set_current_index(safe_tab, animate=False)
+        self.stacked_layout.setCurrentIndex(safe_tab)
         self.category_tabs.currentIndexChanged.connect(self._on_category_changed)
 
     def _on_category_changed(self, idx: int) -> None:
@@ -830,12 +1122,42 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.lbl_rev_pct.setText(f"{int(round(ratio * 100))}%")
         self.customEqChanged.emit(list(self.eq_rack.gains), ratio, False)
 
+    def _format_vocal_balance_text(self, val: float) -> str:
+        if abs(val) < 0.04:
+            return "均衡 0%"
+        pct = int(round(abs(val) * 100))
+        if val < 0:
+            return f"伴奏 -{pct}%"
+        return f"人声 +{pct}%"
+
+    def _on_vocal_balance_slider_changed(self, ratio: float) -> None:
+        val = round((ratio - 0.5) * 2.0, 2)
+        if abs(val) < 0.04:
+            val = 0.0
+        self.vocal_balance = val
+        self.lbl_vocal_balance.setText(self._format_vocal_balance_text(val))
+        self.vocalBalanceChanged.emit(val)
+
+    def _on_reset_vocal_balance(self) -> None:
+        self.vocal_balance = 0.0
+        self.vocal_balance_slider.set_ratio(0.5)
+        self.lbl_vocal_balance.setText("均衡 0%")
+        self.vocalBalanceChanged.emit(0.0)
+
+    def _on_vinyl_warmth_changed(self, ratio: float) -> None:
+        val = round(max(0.0, min(1.0, ratio)), 2)
+        if val < 0.02:
+            val = 0.0
+        self.vinyl_warmth = val
+        self.lbl_warmth_pct.setText("关闭" if val < 0.02 else f"{int(round(val * 100))}%")
+        self.vinylWarmthChanged.emit(val)
+
     def _on_offset_btn(self, delta: float) -> None:
         if delta == 0.0:
             self.current_offset = 0.0
         else:
             self.current_offset = round(self.current_offset + delta, 1)
-        self.lbl_offset.setText(f"歌词微调 ({self.current_offset:+.1f}s)")
+        self.lbl_offset.setText(f"歌词时间偏移 ({self.current_offset:+.1f}s)")
         self.lyricOffsetDeltaRequested.emit(delta)
 
     def _on_dolby_switch_toggled(self, checked: bool) -> None:
@@ -884,6 +1206,43 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.lbl_height_val.setText(f"{int(round(height * 100))}%")
         self.spatialParamsChanged.emit(width, height)
 
+    def _current_device_button_label(self) -> str:
+        for dev_id, desc in self.available_devices:
+            if dev_id == self.selected_device_id:
+                return f"{desc}  ▾"
+        clean_dev = self._clean_device_name(self.output_device_name) or "系统默认设备"
+        return f"系统默认 ({clean_dev})  ▾"
+
+    def _on_open_device_flyout(self) -> None:
+        items: List[Tuple[str, str, str]] = []
+        for dev_id, desc in self.available_devices:
+            icon_kind = "check" if dev_id == self.selected_device_id else "speaker"
+            items.append((dev_id, icon_kind, desc))
+        if not items:
+            items.append(("default", "check", "系统默认输出设备"))
+
+        self._device_flyout = WinUIFlyoutMenu(items, theme=self.theme, parent=self)
+        self._device_flyout.actionTriggered.connect(self._on_device_selected)
+        global_pos = self.btn_output_device.mapToGlobal(QPoint(0, self.btn_output_device.height() + 4))
+        self._device_flyout.popup_animated(global_pos)
+
+    def _on_device_selected(self, dev_id: str) -> None:
+        self.selected_device_id = dev_id
+        self.btn_output_device.setText(self._current_device_button_label())
+        self.outputDeviceChanged.emit(dev_id)
+
+    def update_output_devices(
+        self,
+        available_devices: List[Tuple[str, str]],
+        selected_device_id: str,
+        output_device_name: str,
+    ) -> None:
+        self.available_devices = list(available_devices)
+        self.selected_device_id = selected_device_id
+        self.output_device_name = output_device_name
+        self.btn_output_device.setText(self._current_device_button_label())
+        self._update_output_tip(self.current_output_mode, self.actual_channels, self.output_device_name)
+
     def _on_output_tab_changed(self, idx: int) -> None:
         if 0 <= idx < len(self._OUTPUT_MODES):
             mode = self._OUTPUT_MODES[idx]
@@ -893,31 +1252,109 @@ class AudioSettingsDialog(WinUIModalDialog):
 
     def _update_output_tip(self, mode: str, actual_channels: int, dev_name: str) -> None:
         clean_dev = self._clean_device_name(dev_name)
-        dev_tag = f"[{clean_dev}] " if clean_dev else ""
+        dev_tag = f"当前输出：{clean_dev} · " if clean_dev else ""
+        hotplug_note = "拔出耳机或外置声卡时自动暂停播放"
 
-        if not self.switch_dolby.isChecked():
-            self.lbl_output_tip.setText(f"{dev_tag}空间音频已关闭，当前输出立体声直通")
-            self.lbl_output_tip.setStyleSheet(
-                f"color: {self.theme.slate_muted.name()}; background: transparent; padding-top: 2px;"
-            )
-            return
-
-        if actual_channels > 2:
-            self.lbl_output_tip.setText(
-                f"{dev_tag}已激活物理 {actual_channels} 声道直通输出"
-            )
+        if actual_channels > 2 and self.switch_dolby.isChecked():
+            self.lbl_output_tip.setText(f"{dev_tag}{actual_channels} 声道输出 · {hotplug_note}")
             self.lbl_output_tip.setStyleSheet("color: #5B9E83; background: transparent; padding-top: 2px;")
-        elif mode != "binaural":
-            self.lbl_output_tip.setText(
-                f"{dev_tag}当前设备为双声道，已通过双耳算法模拟环绕空间感"
-            )
+        else:
+            self.lbl_output_tip.setText(f"{dev_tag}{hotplug_note}")
             self.lbl_output_tip.setStyleSheet(
                 f"color: {self.theme.slate_muted.name()}; background: transparent; padding-top: 2px;"
+            )
+
+    def _current_headphone_button_label(self) -> str:
+        prof = HEADPHONE_PROFILES.get(self.headphone_profile_id)
+        name = prof.name if prof else "关闭 / 原声监听 (Bypass)"
+        return f"{name}  ▾"
+
+    def _update_hp_desc(self, profile_id: str) -> None:
+        prof = HEADPHONE_PROFILES.get(profile_id)
+        if prof and profile_id != "bypass":
+            self.lbl_hp_desc.setText(f"已匹配哈曼目标曲线：{prof.description}")
+        else:
+            self.lbl_hp_desc.setText("未开启硬件校准，音频直通输出。")
+
+    def _update_hp_badge_state(self, is_active: bool) -> None:
+        if is_active:
+            self.lbl_hp_badge.setText("HARMAN TARGET")
+            self.lbl_hp_badge.setStyleSheet(
+                "background: rgba(110, 130, 119, 0.16); color: #5B9E83; "
+                "border: 1px solid rgba(110, 130, 119, 0.35); border-radius: 4px; padding: 1px 6px;"
             )
         else:
-            self.lbl_output_tip.setText(
-                f"{dev_tag}已开启双耳空间音频渲染 (推荐佩戴耳机使用)"
+            self.lbl_hp_badge.setText("已关闭")
+            self.lbl_hp_badge.setStyleSheet(
+                f"background: rgba(150, 150, 150, 0.12); color: {self.theme.slate_muted.name()}; "
+                "border: 1px solid rgba(150, 150, 150, 0.25); border-radius: 4px; padding: 1px 6px;"
             )
-            self.lbl_output_tip.setStyleSheet(
-                f"color: {self.theme.slate_muted.name()}; background: transparent; padding-top: 2px;"
-            )
+
+    def _on_open_headphone_flyout(self) -> None:
+        items: List[Tuple[str, str, str]] = []
+        for pid, p in HEADPHONE_PROFILES.items():
+            icon_kind = "check" if pid == self.headphone_profile_id else "speaker"
+            label = f"{p.name} ({p.category})" if p.category != "直通" else p.name
+            items.append((pid, icon_kind, label))
+
+        self._headphone_flyout = WinUIFlyoutMenu(items, theme=self.theme, parent=self)
+        self._headphone_flyout.actionTriggered.connect(self._on_headphone_selected)
+        global_pos = self.btn_headphone_profile.mapToGlobal(QPoint(0, self.btn_headphone_profile.height() + 4))
+        self._headphone_flyout.popup_animated(global_pos)
+
+    def _on_headphone_selected(self, profile_id: str) -> None:
+        self.headphone_profile_id = profile_id
+        self.btn_headphone_profile.setText(self._current_headphone_button_label())
+        self.btn_headphone_profile.set_active(profile_id != "bypass")
+        self._update_hp_badge_state(profile_id != "bypass")
+        self._update_hp_desc(profile_id)
+        self.headphoneProfileChanged.emit(profile_id)
+
+    def set_theme(self, theme: NordicThemeColors) -> None:
+        self.theme = theme
+        self.title_label.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        self.category_tabs.set_theme(theme)
+
+        # Tab 0
+        self.btn_headphone_profile.set_theme(theme)
+        self.btn_preview.set_theme(theme)
+        self.preset_tabs.set_theme(theme)
+        self.eq_rack.set_theme(theme)
+        self.reverb_slider.set_theme(theme)
+        self.vocal_balance_slider.set_theme(theme)
+        self.btn_vocal_reset.set_theme(theme)
+        self.switch_dolby.set_theme(theme)
+        self.dolby_mode_tabs.set_theme(theme)
+        self.spatial_width_slider.set_theme(theme)
+        self.spatial_height_slider.set_theme(theme)
+        self.output_tabs.set_theme(theme)
+        self._update_hp_badge_state(self.headphone_profile_id != "bypass")
+        self._update_hp_desc(self.headphone_profile_id)
+
+        # Tab 1
+        self.btn_output_device.set_theme(theme)
+        self.crossfade_tabs.set_theme(theme)
+        self.switch_replay_gain.set_theme(theme)
+        self.switch_turntable.set_theme(theme)
+        self.vinyl_warmth_slider.set_theme(theme)
+        self.rate_tabs.set_theme(theme)
+        self.sleep_tabs.set_theme(theme)
+
+        # Tab 2
+        self.theme_tabs.set_theme(theme)
+        self.backdrop_tabs.set_theme(theme)
+        self.switch_trans.set_theme(theme)
+        self.switch_syl.set_theme(theme)
+        self.fps_tabs.set_theme(theme)
+        self.cover_mode_tabs.set_theme(theme)
+        self.btn_scrape_action.set_theme(theme)
+
+        # Scrollbars
+        if hasattr(self, "scroll_audio"):
+            self._apply_scroll_style(self.scroll_audio)
+        if hasattr(self, "scroll_playback"):
+            self._apply_scroll_style(self.scroll_playback)
+        if hasattr(self, "scroll_ui"):
+            self._apply_scroll_style(self.scroll_ui)
+
+        self.update()

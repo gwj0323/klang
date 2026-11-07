@@ -61,6 +61,8 @@ class LyricsStage(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self.lyrics: List[LyricLine] = []
         self.visual_states: List[LineVisualState] = []
 
@@ -186,6 +188,11 @@ class LyricsStage(QWidget):
 
     def _clear_toast(self) -> None:
         self._toast_text = ""
+        self.update()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
@@ -579,11 +586,21 @@ class LyricsStage(QWidget):
                 bg_path = QPainterPath()
                 bg_path.addRoundedRect(row_rect, 10.0, 10.0)
 
-                bg_col = QColor(self.theme.sage_soft if idx == self.active_index else self.theme.subtle_hover)
+                is_dusk = self.theme.name == "dusk"
+                if self.is_translucent_backdrop:
+                    if idx == self.active_index:
+                        bg_col = QColor(255, 255, 255, 22 if is_dusk else 135)
+                        stroke_col = QColor(255, 255, 255, 38 if is_dusk else 175)
+                    else:
+                        bg_col = QColor(255, 255, 255, 12 if is_dusk else 65)
+                        stroke_col = QColor(255, 255, 255, 20 if is_dusk else 110)
+                else:
+                    bg_col = QColor(self.theme.sage_soft if idx == self.active_index else self.theme.subtle_hover)
+                    stroke_col = QColor(self.theme.stroke_outer)
+
                 bg_col.setAlphaF(bg_col.alphaF() * st.current_bg_alpha)
                 bp.fillPath(bg_path, bg_col)
 
-                stroke_col = QColor(self.theme.stroke_outer)
                 stroke_col.setAlphaF(stroke_col.alphaF() * st.current_bg_alpha)
                 bp.setPen(QPen(stroke_col, 1.0))
                 bp.setBrush(Qt.BrushStyle.NoBrush)
@@ -696,13 +713,20 @@ class LyricsStage(QWidget):
             bx = 12.0
             by = h - 34.0
             main_painter.setFont(get_nordic_font(11, QFont.Weight.Medium))
+            is_dusk = self.theme.name == "dusk"
             for text, act in hud_items:
                 bw = 46.0
                 r = QRectF(bx, by, bw, 24.0)
                 p = QPainterPath()
                 p.addRoundedRect(r, 6.0, 6.0)
-                main_painter.fillPath(p, self.theme.oat_surface)
-                main_painter.setPen(QPen(self.theme.stroke_outer, 1.0))
+                if self.is_translucent_backdrop:
+                    hud_bg = QColor(255, 255, 255, 20 if is_dusk else 125)
+                    hud_bd = QColor(255, 255, 255, 35 if is_dusk else 165)
+                else:
+                    hud_bg = self.theme.oat_surface
+                    hud_bd = self.theme.stroke_outer
+                main_painter.fillPath(p, hud_bg)
+                main_painter.setPen(QPen(hud_bd, 1.0))
                 main_painter.drawPath(p)
                 main_painter.setPen(self.theme.slate_dark)
                 main_painter.drawText(r, int(Qt.AlignmentFlag.AlignCenter), text)

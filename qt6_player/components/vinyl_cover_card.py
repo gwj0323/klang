@@ -84,6 +84,8 @@ class NordicArtworkCanvas(QWidget):
         self.transition_prog: float = 1.0
         self.vinyl_angle: float = 0.0
         self.angular_vel: float = 0.0  # deg/s，带启停阻尼惯性
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self._cached_disc_pixmap: Optional[QPixmap] = None
         self._cached_card_pixmap: Optional[QPixmap] = None
         self._cached_dpr: float = 0.0
@@ -172,6 +174,12 @@ class NordicArtworkCanvas(QWidget):
 
     def reload_cover_pixmap(self) -> None:
         self.cover_pixmap = self.track.get_cover_pixmap() if self.track is not None else None
+        self._rebuild_caches()
+        self.update()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self._rebuild_caches()
         self.update()
 
@@ -272,8 +280,17 @@ class NordicArtworkCanvas(QWidget):
 
         card_path = QPainterPath()
         card_path.addRoundedRect(card_rect, 10.0, 10.0)
-        cp.fillPath(card_path, self.theme.card_elevated)
-        cp.setPen(QPen(self.theme.stroke_outer, 1.0))
+
+        is_dusk = self.theme.name == "dusk"
+        if getattr(self, "is_translucent_backdrop", True):
+            card_fill = QColor(36, 40, 46, 190) if is_dusk else QColor(255, 255, 255, 185)
+            card_bd = QColor(255, 255, 255, 35 if is_dusk else 220)
+        else:
+            card_fill = self.theme.card_elevated
+            card_bd = self.theme.stroke_outer
+
+        cp.fillPath(card_path, card_fill)
+        cp.setPen(QPen(card_bd, 1.0))
         cp.setBrush(Qt.BrushStyle.NoBrush)
         cp.drawPath(card_path)
 
@@ -691,6 +708,12 @@ class VinylCoverCard(QWidget):
                 is_atmos=self._is_atmos,
                 actual_channels=self._actual_channels,
             )
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        if hasattr(self, "artwork") and hasattr(self.artwork, "set_backdrop_material"):
+            self.artwork.set_backdrop_material(material)
+        self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme

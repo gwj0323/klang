@@ -1,7 +1,19 @@
 import random
+import threading
 from pathlib import Path
-from typing import List, Optional
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QRectF, QPointF, QVariantAnimation, QEasingCurve, QTimer, QEvent
+from typing import List, Optional, Dict
+from PyQt6.QtCore import (
+    QThread,
+    pyqtSignal,
+    Qt,
+    QRectF,
+    QPointF,
+    QVariantAnimation,
+    QEasingCurve,
+    QTimer,
+    QEvent,
+    QFileSystemWatcher,
+)
 from PyQt6.QtGui import (
     QFont,
     QPainter,
@@ -33,8 +45,11 @@ from qt6_player.theme.nordic_palette import DAYLIGHT_THEME, DUSK_THEME, NordicTh
 from qt6_player.services.audio_engine import NordicAudioEngine
 from qt6_player.services.metadata_service import (
     SUPPORTED_AUDIO_EXTS,
+    SUPPORTED_IMPORT_EXTS,
     create_track_from_file,
+    parse_cue_file,
     scan_folder_for_audio,
+    write_metadata_to_audio_file,
 )
 from qt6_player.services.scraper_service import AutoScrapeWorker, OnlineScraperDialog
 from qt6_player.services.storage_service import (
@@ -43,11 +58,16 @@ from qt6_player.services.storage_service import (
     restore_tracks_from_state,
 )
 from qt6_player.components.title_bar import WinUITitleBar
-from qt6_player.components.navigation_pane import NavigationPane, TrackMetadataDialog
+from qt6_player.components.navigation_pane import (
+    NavigationPane,
+    TrackMetadataDialog,
+    WatchedFoldersDialog,
+)
 from qt6_player.components.vinyl_cover_card import VinylCoverCard
 from qt6_player.components.lyrics_stage import LyricsStage
 from qt6_player.components.transport_bar import TransportBar
 from qt6_player.components.desktop_lyric_overlay import DesktopLyricOverlay
+from qt6_player.services.headphone_eq import HEADPHONE_PROFILES
 from qt6_player.components.equalizer_dialog import AudioSettingsDialog
 from qt6_player.components.lyric_poster_dialog import LyricPosterDialog
 from qt6_player.components.mini_player_window import MiniPlayerWindow
@@ -106,6 +126,21 @@ class AutoTranslationWorker(QThread):
             self.translationReady.emit(self.track_id, "")
 
 
+class FolderWatchScanWorker(QThread):
+    scanFinished = pyqtSignal(list)
+
+    def __init__(self, folders: List[str], parent=None):
+        super().__init__(parent)
+        self.folders = list(folders)
+
+    def run(self) -> None:
+        found: List[str] = []
+        for f in self.folders:
+            if f and Path(f).is_dir():
+                found.extend(scan_folder_for_audio(f))
+        self.scanFinished.emit(found)
+
+
 class NordicWinUI3Window(AcrylicWindow):
     def __init__(self):
         super().__init__()
@@ -148,6 +183,7 @@ class NordicWinUI3Window(AcrylicWindow):
             init_idx = 0
         self.current_track_index: int = init_idx
         self.play_mode: str = self._saved_state.get("play_mode", "loop_list")
+        self._flow_history: List[str] = []
         self.dolby_atmos_mode: str = str(self._saved_state.get("dolby_atmos_mode", "dolby_atmos"))
         self.spatial_width: float = float(self._saved_state.get("spatial_width", 1.35))
         self.spatial_height: float = float(self._saved_state.get("spatial_height", 0.65))
@@ -190,19 +226,33 @@ class NordicWinUI3Window(AcrylicWindow):
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
-        self._autosave_timer.setInterval(300)
+        self._autosave_timer.setInterval(1200)
         self._autosave_timer.timeout.connect(self._save_current_state)
+
+        self.watched_folders: List[str] = [
+            str(p) for p in (self._saved_state.get("watched_folders") or []) if str(p).strip()
+        ]
+        self._fs_watcher = QFileSystemWatcher(self)
+        self._fs_watcher.directoryChanged.connect(self._on_watched_dir_changed)
+        self._watch_scan_timer = QTimer(self)
+        self._watch_scan_timer.setSingleShot(True)
+        self._watch_scan_timer.setInterval(1500)
+        self._watch_scan_timer.timeout.connect(self._scan_watched_folders_async)
+        self._watch_worker: Optional[FolderWatchScanWorker] = None
 
         self._setup_ui()
         self._setup_system_tray(icon_path)
         self._bind_signals()
         self._apply_restored_settings()
+        self._sync_fs_watcher_paths()
         if self.tracks:
             self.select_track(init_idx, auto_play=False)
         else:
             self._clear_now_playing_ui()
         self._initializing = False
         self._save_current_state()
+        if self.watched_folders:
+            QTimer.singleShot(800, self._scan_watched_folders_async)
 
     def _on_ambient_anim_val(self, val: float) -> None:
         p = float(val)
@@ -322,6 +372,8 @@ class NordicWinUI3Window(AcrylicWindow):
             self.hide()
 
     def _on_immersive_closed(self) -> None:
+        self.transport_bar.update_progress(self.audio.current_time, self.audio.duration)
+        self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
         self.showNormal() if not self._saved_state.get("is_maximized") else self.showMaximized()
         self.raise_()
         self.activateWindow()
@@ -476,8 +528,29 @@ class NordicWinUI3Window(AcrylicWindow):
         saved_gains = st.get("eq_gains_db")
         saved_reverb = st.get("reverb_mix")
         saved_out_mode = st.get("audio_output_mode", "binaural")
+        saved_dev_id = str(st.get("selected_device_id", "default"))
+        saved_xfade = float(st.get("crossfade_sec", 0.0))
+        saved_rg = bool(st.get("replay_gain_enabled", False))
+        saved_vb = float(st.get("vocal_balance", 0.0))
+        saved_tt = bool(st.get("turntable_physics", True))
+        saved_vw = float(st.get("vinyl_warmth", 0.0))
+        saved_hp = str(st.get("headphone_profile", "bypass"))
+        if hasattr(self.audio, "set_output_device"):
+            self.audio.selected_device_id = saved_dev_id
         if hasattr(self.audio, "set_output_channel_mode"):
             self.audio.set_output_channel_mode(saved_out_mode)
+        if hasattr(self.audio, "set_crossfade_sec"):
+            self.audio.set_crossfade_sec(saved_xfade)
+        if hasattr(self.audio, "set_replay_gain_enabled"):
+            self.audio.set_replay_gain_enabled(saved_rg)
+        if hasattr(self.audio, "set_vocal_balance"):
+            self.audio.set_vocal_balance(saved_vb)
+        if hasattr(self.audio, "set_turntable_physics_enabled"):
+            self.audio.set_turntable_physics_enabled(saved_tt)
+        if hasattr(self.audio, "set_vinyl_warmth"):
+            self.audio.set_vinyl_warmth(saved_vw)
+        if hasattr(self.audio, "set_headphone_profile"):
+            self.audio.set_headphone_profile(saved_hp)
 
         self.audio.set_volume(vol)
         if muted:
@@ -517,6 +590,18 @@ class NordicWinUI3Window(AcrylicWindow):
         self.nav_pane.setVisible(init_w > 0)
         self.title_bar.set_sidebar_expanded(self._sidebar_expanded)
 
+        # 恢复自定义歌单与排序/分类偏好
+        saved_playlists = st.get("custom_playlists")
+        if isinstance(saved_playlists, dict):
+            self.nav_pane.set_custom_playlists(saved_playlists)
+        saved_sort = str(st.get("nav_sort_mode", "default"))
+        if saved_sort in NavigationPane._SORT_LABELS:
+            self.nav_pane.sort_mode = saved_sort
+        saved_grp = str(st.get("nav_group_mode", "artist"))
+        if saved_grp in NavigationPane._GROUP_LABELS:
+            self.nav_pane.group_mode = saved_grp
+        self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+
         # 桌面歌词设置恢复
         dt_font = int(st.get("desktop_lyric_font_size", 22))
         self.desktop_lyric.font_size = dt_font
@@ -538,7 +623,7 @@ class NordicWinUI3Window(AcrylicWindow):
 
         self._on_theme_toggled(self.theme.name)
 
-    def _save_current_state(self) -> None:
+    def _save_current_state(self, sync: bool = False) -> None:
         if hasattr(self, "_autosave_timer"):
             self._autosave_timer.stop()
 
@@ -572,22 +657,35 @@ class NordicWinUI3Window(AcrylicWindow):
             "spatial_width": float(self.audio.spatial_width),
             "spatial_height": float(self.audio.spatial_height),
             "audio_output_mode": str(getattr(self.audio, "output_channel_mode", "binaural")),
+            "selected_device_id": str(getattr(self.audio, "selected_device_id", "default")),
+            "crossfade_sec": float(getattr(self.audio, "crossfade_sec", 0.0)),
+            "replay_gain_enabled": bool(getattr(self.audio, "replay_gain_enabled", False)),
+            "vocal_balance": float(getattr(self.audio, "vocal_balance", 0.0)),
+            "turntable_physics": bool(getattr(self.audio, "turntable_physics_enabled", True)),
+            "vinyl_warmth": float(getattr(self.audio, "vinyl_warmth", 0.0)),
+            "headphone_profile": str(getattr(self.audio, "headphone_profile_id", "bypass")),
             "desktop_lyric_open": bool(hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible()),
             "desktop_lyric_pos": dt_pos,
             "desktop_lyric_font_size": int(self.desktop_lyric.font_size) if hasattr(self, "desktop_lyric") else 22,
-            "immersive_fps": int(getattr(self.immersive_window, "target_fps", 60)),
+            "immersive_fps": int(getattr(self.immersive_window, "target_fps", 120)),
             "backdrop_material": str(getattr(self, "backdrop_material", "mica")),
             "vinyl_mode": str(getattr(self.immersive_window.artwork_view, "vinyl_mode", "pure")),
             "window_geometry": geom,
             "is_maximized": bool(self.isMaximized()),
             "last_track_index": int(self.current_track_index),
+            "custom_playlists": dict(getattr(self.nav_pane, "custom_playlists", {})),
+            "watched_folders": list(getattr(self, "watched_folders", [])),
+            "nav_sort_mode": str(getattr(self.nav_pane, "sort_mode", "default")),
+            "nav_group_mode": str(getattr(self.nav_pane, "group_mode", "artist")),
         }
         self._saved_state.update(settings)
-        save_player_state(self.tracks, settings)
+        save_player_state(self.tracks, settings, sync=sync)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.audio.pause()
         self.audio._decoder.stop()
+        if hasattr(self.audio, "_pre_decoder"):
+            self.audio._pre_decoder.stop()
         for w in list(self._active_workers):
             try:
                 w.scrapeCompleted.disconnect(self._on_auto_scrape_completed)
@@ -602,7 +700,7 @@ class NordicWinUI3Window(AcrylicWindow):
         if hasattr(self, "media_control") and self.media_control:
             self.media_control.cleanup()
         self.desktop_lyric.close()
-        self._save_current_state()
+        self._save_current_state(sync=True)
         super().closeEvent(event)
 
     def _bind_signals(self) -> None:
@@ -621,11 +719,11 @@ class NordicWinUI3Window(AcrylicWindow):
         self.title_bar.miniPlayerClicked.connect(self._toggle_mini_player_mode)
         self.title_bar.immersiveClicked.connect(self._toggle_immersive_mode)
         self.title_bar.themeToggled.connect(self._on_theme_toggled)
-        self.title_bar.settingsClicked.connect(lambda: self._open_audio_settings_dialog(default_tab=1))
-        self.immersive_window.settingsRequested.connect(lambda: self._open_audio_settings_dialog(default_tab=1))
+        self.title_bar.settingsClicked.connect(lambda: self._open_audio_settings_dialog(default_tab=2))
+        self.immersive_window.settingsRequested.connect(lambda: self._open_audio_settings_dialog(default_tab=2))
 
         # 沉浸视界信号
-        self.immersive_window.set_target_fps(int(self._saved_state.get("immersive_fps", 60)))
+        self.immersive_window.set_target_fps(int(self._saved_state.get("immersive_fps", 120)))
         self.immersive_window.fpsChanged.connect(lambda fps: (self._saved_state.update({"immersive_fps": fps}), self.schedule_save()))
         self.immersive_window.playToggled.connect(self.audio.toggle_play)
         self.immersive_window.prevRequested.connect(self._on_prev_track)
@@ -655,6 +753,8 @@ class NordicWinUI3Window(AcrylicWindow):
         self.nav_pane.importFilesRequested.connect(self._on_import_files)
         self.nav_pane.importFolderRequested.connect(self._on_import_folder)
         self.nav_pane.importLrcRequested.connect(self._on_import_lrc_file)
+        self.nav_pane.watchFoldersRequested.connect(self._open_watched_folders_dialog)
+        self.nav_pane.playlistsChanged.connect(self.schedule_save)
 
         # 封面点击快捷匹配词图 & 环境流光主色通知
         self.cover_card.scrapeRequested.connect(self._open_online_scraper_dialog)
@@ -718,6 +818,10 @@ class NordicWinUI3Window(AcrylicWindow):
         )
         self.audio.spectrumUpdated.connect(self._on_spectrum_updated)
         self.audio.trackEnded.connect(self._on_track_naturally_ended)
+        self.audio.requestNextTrackPreload.connect(self._on_request_next_track_preload)
+        self.audio.deviceHotplugNotification.connect(self.lyrics_stage._show_toast)
+        self.audio.outputDevicesUpdated.connect(self._on_output_devices_updated)
+        self.audio.acousticDnaReady.connect(self._on_acoustic_dna_ready)
 
         # Windows 系统级媒体控制 (SMTC) 与全局多媒体按键集成
         self.media_control = WindowsMediaControlService(self, parent=self)
@@ -784,13 +888,21 @@ class NordicWinUI3Window(AcrylicWindow):
         self.lyrics_stage._show_toast("已调整曲目播放顺序")
         self.schedule_save()
 
+    def _write_tags_in_background(self, track: NordicTrack, show_toast: bool = True) -> None:
+        def _worker():
+            ok, msg = write_metadata_to_audio_file(track, write_cover=True, write_lyrics=True)
+            if show_toast and hasattr(self, "lyrics_stage"):
+                QTimer.singleShot(0, lambda: self.lyrics_stage._show_toast(msg))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _open_edit_metadata_dialog(self, index: int) -> None:
         if not (0 <= index < len(self.tracks)):
             return
         target = self.tracks[index]
         dlg = TrackMetadataDialog(target, theme=self.theme, parent=self)
 
-        def _apply_meta(new_title: str, new_artist: str, new_album: str) -> None:
+        def _apply_meta(new_title: str, new_artist: str, new_album: str, write_to_file: bool = True) -> None:
             target.title = new_title
             target.artist = new_artist
             target.album = new_album
@@ -799,7 +911,10 @@ class NordicWinUI3Window(AcrylicWindow):
                 self.cover_card.update_track(target)
                 self.transport_bar.set_track_info(target)
                 self.mini_player.set_track(target)
-            self.lyrics_stage._show_toast("已保存曲目信息")
+            if write_to_file and target.file_path:
+                self._write_tags_in_background(target, show_toast=True)
+            else:
+                self.lyrics_stage._show_toast("已保存曲目信息")
             self.schedule_save()
 
         dlg.metadataSaved.connect(_apply_meta)
@@ -813,7 +928,16 @@ class NordicWinUI3Window(AcrylicWindow):
     def _on_play_mode_changed(self, mode: str) -> None:
         self.play_mode = mode
         mode_label = TransportBar._MODE_NAMES.get(mode, "列表循环")
-        self.lyrics_stage._show_toast(f"播放模式: {mode_label}")
+        if mode == "smart_flow" and 0 <= self.current_track_index < len(self.tracks):
+            badge = self.tracks[self.current_track_index].format_dna_badge()
+            if badge:
+                self.lyrics_stage._show_toast(f"情绪漫游已开启 · 当前声学指纹: {badge}")
+            else:
+                self.lyrics_stage._show_toast(f"播放模式: {mode_label}")
+        else:
+            self.lyrics_stage._show_toast(f"播放模式: {mode_label}")
+        self._next_preloaded_index = None
+        QTimer.singleShot(30, self._on_request_next_track_preload)
         if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
             self.immersive_window.update_play_mode(mode)
         self.schedule_save()
@@ -843,23 +967,74 @@ class NordicWinUI3Window(AcrylicWindow):
             return
         if action == "play":
             self.select_track(index, auto_play=True)
+        elif action == "play_next":
+            if index == self.current_track_index:
+                self.lyrics_stage._show_toast("当前已在播放该曲目")
+                return
+            cur_track_obj = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+            target = self.tracks.pop(index)
+            if cur_track_obj is not None and cur_track_obj in self.tracks:
+                cur_idx = self.tracks.index(cur_track_obj)
+                insert_pos = cur_idx + 1
+                self.tracks.insert(insert_pos, target)
+                self.current_track_index = cur_idx
+            else:
+                insert_pos = 0
+                self.tracks.insert(0, target)
+            self._next_preloaded_index = insert_pos
+            self.audio.preload_next_track(target)
+            self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+            self.lyrics_stage._show_toast(f"已设为下一首播放：{target.title}")
+            self.schedule_save()
+        elif action == "add_to_playlist":
+            from PyQt6.QtGui import QCursor
+            target = self.tracks[index]
+            items = [
+                (f"pl:{name}", "music_file", f"添加到「{name}」")
+                for name in self.nav_pane.custom_playlists.keys()
+            ]
+            items.append(("new_pl", "plus", "＋ 新建歌单并添加…"))
+            menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self)
+
+            def _on_pl_act(act: str) -> None:
+                if act == "new_pl":
+                    self.nav_pane.prompt_create_playlist(initial_track_id=target.track_id)
+                    self.lyrics_stage._show_toast(f"已将「{target.title}」加入新歌单")
+                elif act.startswith("pl:"):
+                    pl_name = act[3:]
+                    added = self.nav_pane.add_track_to_playlist(pl_name, target.track_id)
+                    self.lyrics_stage._show_toast(
+                        f"已添加到歌单「{pl_name}」" if added else f"「{target.title}」已在该歌单中"
+                    )
+
+            menu.actionTriggered.connect(_on_pl_act)
+            menu.popup_animated(QCursor.pos())
+        elif action == "remove_from_playlist":
+            target = self.tracks[index]
+            if self.nav_pane.remove_track_from_active_playlist(target.track_id):
+                self.lyrics_stage._show_toast(f"已从歌单移除：{target.title}")
         elif action == "scrape":
             self._open_online_scraper_dialog(index)
         elif action == "import_lrc":
             self._on_import_lrc_file(index)
         elif action == "edit_tags":
             self._open_edit_metadata_dialog(index)
+        elif action == "write_tags":
+            self._write_tags_in_background(self.tracks[index], show_toast=True)
         elif action == "remove":
             was_playing = self.audio.is_playing
             is_removing_current = (index == self.current_track_index)
 
-            self.tracks.pop(index)
+            removed_track = self.tracks.pop(index)
+            for plist in self.nav_pane.custom_playlists.values():
+                if removed_track.track_id in plist:
+                    plist.remove(removed_track.track_id)
 
             if not self.tracks:
                 self.current_track_index = 0
                 self.nav_pane.rebuild_list(self.tracks, active_index=-1)
                 self._clear_now_playing_ui()
-                self.lyrics_stage._show_toast("已清空播放列表")
+                self.lyrics_stage._show_toast("已清空曲库列表")
             elif is_removing_current:
                 if self.current_track_index >= len(self.tracks):
                     self.current_track_index = max(0, len(self.tracks) - 1)
@@ -870,17 +1045,30 @@ class NordicWinUI3Window(AcrylicWindow):
                 if index < self.current_track_index:
                     self.current_track_index -= 1
                 self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
-                self.lyrics_stage._show_toast("已从播放列表移除")
+                self.lyrics_stage._show_toast("已从列表移除")
             self.schedule_save()
+
+    def _propagate_backdrop_material(self) -> None:
+        mat = getattr(self, "backdrop_material", "mica")
+        for comp in (
+            getattr(self, "title_bar", None),
+            getattr(self, "nav_pane", None),
+            getattr(self, "cover_card", None),
+            getattr(self, "lyrics_stage", None),
+            getattr(self, "transport_bar", None),
+        ):
+            if comp and hasattr(comp, "set_backdrop_material"):
+                comp.set_backdrop_material(mat)
 
     def set_backdrop_material(self, mode: str) -> None:
         self.backdrop_material = mode
         self._apply_backdrop_to_window()
+        self._propagate_backdrop_material()
         self._bg_dirty = True
         self.update()
         mat_labels = {
-            "solid": "标准纯色",
-            "mica": "Win11 云母 (Mica)",
+            "solid": "纯色",
+            "mica": "云母 (Mica)",
             "acrylic": "亚克力 (Acrylic)",
         }
         if hasattr(self, "lyrics_stage") and hasattr(self.lyrics_stage, "_show_toast"):
@@ -920,12 +1108,20 @@ class NordicWinUI3Window(AcrylicWindow):
             audio_output_mode=getattr(self.audio, "output_channel_mode", "binaural"),
             actual_channels=getattr(self.audio, "output_channels_actual", 2),
             output_device_name=getattr(self.audio, "output_device_name", ""),
+            selected_device_id=getattr(self.audio, "selected_device_id", "default"),
+            available_devices=self.audio.get_available_output_devices(),
+            crossfade_sec=getattr(self.audio, "crossfade_sec", 0.0),
+            replay_gain_enabled=getattr(self.audio, "replay_gain_enabled", False),
+            vocal_balance=getattr(self.audio, "vocal_balance", 0.0),
+            turntable_physics=getattr(self.audio, "turntable_physics_enabled", True),
+            vinyl_warmth=getattr(self.audio, "vinyl_warmth", 0.0),
+            headphone_profile_id=getattr(self.audio, "headphone_profile_id", "bypass"),
             default_tab=default_tab,
             current_theme=self.theme.name,
             current_font_size=getattr(self.lyrics_stage, "lyric_font_size", 20),
             show_translation=getattr(self.lyrics_stage, "show_translation", True),
             syllable_mode=getattr(self.lyrics_stage, "syllable_mode", True),
-            immersive_fps=getattr(self.immersive_window, "target_fps", 60),
+            immersive_fps=getattr(self.immersive_window, "target_fps", 120),
             vinyl_mode=getattr(self.immersive_window.artwork_view, "vinyl_mode", "pure"),
             backdrop_material=getattr(self, "backdrop_material", "mica"),
             theme=self.theme,
@@ -934,6 +1130,13 @@ class NordicWinUI3Window(AcrylicWindow):
         dlg.dolbyAtmosModeChanged.connect(self._on_dolby_mode_changed)
         dlg.spatialParamsChanged.connect(self._on_spatial_params_changed)
         dlg.outputModeChanged.connect(self._on_output_mode_changed)
+        dlg.outputDeviceChanged.connect(self._on_output_device_selected)
+        dlg.crossfadeChanged.connect(self._on_crossfade_changed)
+        dlg.replayGainToggled.connect(self._on_replay_gain_toggled)
+        dlg.vocalBalanceChanged.connect(self._on_vocal_balance_changed)
+        dlg.turntablePhysicsToggled.connect(self._on_turntable_physics_toggled)
+        dlg.vinylWarmthChanged.connect(self._on_vinyl_warmth_changed)
+        dlg.headphoneProfileChanged.connect(self._on_headphone_profile_changed)
         dlg.soundProfileChanged.connect(
             lambda prof: (
                 self.audio.set_sound_profile(prof, trigger_preview=True),
@@ -976,9 +1179,9 @@ class NordicWinUI3Window(AcrylicWindow):
     def _on_import_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
             self,
-            "选择要导入的音乐文件",
+            "选择要导入的音乐或 CUE 分轨文件",
             "",
-            "音频文件 (*.mp3 *.flac *.wav *.m4a *.ogg *.aac *.wma);;所有文件 (*.*)",
+            "音乐与 CUE 索引 (*.mp3 *.flac *.wav *.m4a *.ogg *.aac *.wma *.cue);;CUE 分轨文件 (*.cue);;音频文件 (*.mp3 *.flac *.wav *.m4a *.ogg *.aac *.wma);;所有文件 (*.*)",
         )
         if files:
             self._append_audio_files(files, auto_play_first=True)
@@ -989,6 +1192,46 @@ class NordicWinUI3Window(AcrylicWindow):
             audio_files = scan_folder_for_audio(folder)
             if audio_files:
                 self._append_audio_files(audio_files, auto_play_first=True)
+
+    def _open_watched_folders_dialog(self) -> None:
+        dlg = WatchedFoldersDialog(self.watched_folders, theme=self.theme, parent=self)
+
+        def _on_changed(new_folders: list) -> None:
+            self.watched_folders = [str(f) for f in new_folders if str(f).strip()]
+            self._sync_fs_watcher_paths()
+            self.schedule_save()
+
+        dlg.watchedFoldersChanged.connect(_on_changed)
+        dlg.rescanRequested.connect(self._scan_watched_folders_async)
+        dlg.exec()
+        if self.watched_folders:
+            self._scan_watched_folders_async()
+
+    def _sync_fs_watcher_paths(self) -> None:
+        cur_dirs = self._fs_watcher.directories()
+        if cur_dirs:
+            self._fs_watcher.removePaths(cur_dirs)
+        valid_dirs = [f for f in self.watched_folders if Path(f).is_dir()]
+        if valid_dirs:
+            self._fs_watcher.addPaths(valid_dirs)
+
+    def _on_watched_dir_changed(self, _path: str) -> None:
+        self._watch_scan_timer.start()
+
+    def _scan_watched_folders_async(self) -> None:
+        if not self.watched_folders:
+            return
+        if self._watch_worker is not None and self._watch_worker.isRunning():
+            return
+        self._watch_worker = FolderWatchScanWorker(self.watched_folders, self)
+        self._watch_worker.scanFinished.connect(self._on_watch_scan_finished)
+        self._watch_worker.start()
+
+    def _on_watch_scan_finished(self, file_paths: list) -> None:
+        if file_paths:
+            added_cnt = self._append_audio_files(file_paths, auto_play_first=(len(self.tracks) == 0))
+            if added_cnt > 0 and hasattr(self, "lyrics_stage"):
+                self.lyrics_stage._show_toast(f"监控目录自动新增 {added_cnt} 首曲目")
 
     def _on_import_lrc_file(self, target_index: Optional[int] = None) -> None:
         if not self.tracks:
@@ -1022,28 +1265,70 @@ class NordicWinUI3Window(AcrylicWindow):
             except Exception:
                 continue
 
-    def _append_audio_files(self, file_paths: List[str], auto_play_first: bool = True) -> None:
-        existing_paths = {t.file_path for t in self.tracks if t.file_path}
+    def _append_audio_files(self, file_paths: List[str], auto_play_first: bool = True) -> int:
+        existing_ids = {t.track_id for t in self.tracks}
+        existing_whole_files = {
+            t.file_path for t in self.tracks if t.file_path and not t.cue_path
+        }
+        existing_cues = {t.cue_path for t in self.tracks if t.cue_path}
+        cue_covered_files = {t.file_path for t in self.tracks if t.file_path and t.cue_path}
         first_new_index: Optional[int] = None
+        added_count = 0
 
-        for fp in file_paths:
+        # 先处理所有的 .cue 分轨索引文件，再处理普通单曲文件
+        sorted_inputs = sorted(file_paths, key=lambda x: (0 if Path(x).suffix.lower() == ".cue" else 1, x))
+
+        for fp in sorted_inputs:
             p = Path(fp)
-            if p.suffix.lower() not in SUPPORTED_AUDIO_EXTS:
+            suf = p.suffix.lower()
+            if suf not in SUPPORTED_IMPORT_EXTS:
                 continue
             norm_p = str(p.resolve())
-            if norm_p in existing_paths:
-                continue
-            new_track = create_track_from_file(norm_p, index_hint=len(self.tracks))
-            if first_new_index is None:
-                first_new_index = len(self.tracks)
-            self.tracks.append(new_track)
-            existing_paths.add(norm_p)
-            self._trigger_auto_scrape_if_needed(new_track)
+
+            if suf == ".cue":
+                if norm_p in existing_cues:
+                    continue
+                cue_tracks = parse_cue_file(norm_p, base_index_hint=len(self.tracks))
+                if not cue_tracks:
+                    continue
+                # 如果此前已经把整轨大文件当单曲导入过，自动替换为拆好分轨的 CUE 曲目列表
+                ref_audio_paths = {ct.file_path for ct in cue_tracks if ct.file_path}
+                for ref_ap in ref_audio_paths:
+                    cue_covered_files.add(ref_ap)
+                self.tracks[:] = [
+                    t for t in self.tracks
+                    if not (t.file_path in ref_audio_paths and not t.cue_path)
+                ]
+                for ct in cue_tracks:
+                    if ct.track_id in existing_ids:
+                        continue
+                    if first_new_index is None:
+                        first_new_index = len(self.tracks)
+                    self.tracks.append(ct)
+                    existing_ids.add(ct.track_id)
+                    added_count += 1
+                    self._trigger_auto_scrape_if_needed(ct)
+                existing_cues.add(norm_p)
+            else:
+                if norm_p in existing_whole_files or norm_p in cue_covered_files:
+                    continue
+                new_track = create_track_from_file(norm_p, index_hint=len(self.tracks))
+                if new_track.track_id in existing_ids:
+                    continue
+                if first_new_index is None:
+                    first_new_index = len(self.tracks)
+                self.tracks.append(new_track)
+                existing_whole_files.add(norm_p)
+                existing_ids.add(new_track.track_id)
+                added_count += 1
+                self._trigger_auto_scrape_if_needed(new_track)
 
         if first_new_index is not None:
-            self.nav_pane.rebuild_list(self.tracks, active_index=first_new_index)
-            self.select_track(first_new_index, auto_play=auto_play_first)
+            self.nav_pane.rebuild_list(self.tracks, active_index=first_new_index if auto_play_first else self.current_track_index)
+            if auto_play_first:
+                self.select_track(first_new_index, auto_play=True)
             self._save_current_state()
+        return added_count
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -1065,7 +1350,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 audio_files.extend(scan_folder_for_audio(str(p)))
             elif p.is_file():
                 suf = p.suffix.lower()
-                if suf in SUPPORTED_AUDIO_EXTS:
+                if suf in SUPPORTED_IMPORT_EXTS:
                     audio_files.append(str(p.resolve()))
                 elif suf == ".lrc":
                     lrc_files.append(str(p.resolve()))
@@ -1173,7 +1458,11 @@ class NordicWinUI3Window(AcrylicWindow):
             self.cover_card.update_track(target_track)
             self.transport_bar.set_track_info(target_track)
         self.nav_pane.refresh_item(index)
-        self.transport_bar.set_status_message("已更新在线歌词与封面")
+        if target_track.file_path:
+            self._write_tags_in_background(target_track, show_toast=False)
+            self.transport_bar.set_status_message("已更新歌词与封面并写入音频文件")
+        else:
+            self.transport_bar.set_status_message("已更新在线歌词与封面")
         self.schedule_save()
 
     def _clear_now_playing_ui(self) -> None:
@@ -1191,15 +1480,91 @@ class NordicWinUI3Window(AcrylicWindow):
         if hasattr(self, "tray_icon"):
             self.tray_icon.setToolTip("Klang — Nordic Minimalist Audio Player")
 
-    def select_track(self, index: int, auto_play: bool = False) -> None:
+    def select_track(self, index: int, auto_play: bool = False, is_auto_transition: bool = False) -> None:
         if not self.tracks:
             self._clear_now_playing_ui()
             return
+        self._next_preloaded_index = None
         self.current_track_index = index % len(self.tracks)
         track = self.tracks[self.current_track_index]
+        if track.track_id in self._flow_history:
+            self._flow_history.remove(track.track_id)
+        self._flow_history.append(track.track_id)
+        max_hist = max(2, min(12, len(self.tracks) - 1))
+        if len(self._flow_history) > max_hist:
+            self._flow_history = self._flow_history[-max_hist:]
         self.nav_pane.set_active_index(self.current_track_index)
-        self.audio.load_track(track, auto_play=auto_play)
+        self.audio.load_track(track, auto_play=auto_play, is_auto_transition=is_auto_transition)
         self.schedule_save()
+
+    def _pick_smart_flow_next_index(self) -> int:
+        """离线声学 DNA 情绪漫游算法：挑选 BPM、能量密度、频谱明暗度与冷暖色调最接近的下一首曲目"""
+        n = len(self.tracks)
+        if n <= 1:
+            return 0
+        cur_track = self.tracks[self.current_track_index]
+        v_cur = cur_track.get_acoustic_vector()
+
+        recent_set = set(self._flow_history[-max(1, min(6, n - 1)):])
+        scored: List[Tuple[float, int]] = []
+        for idx, cand in enumerate(self.tracks):
+            if idx == self.current_track_index:
+                continue
+            v_cand = cand.get_acoustic_vector()
+            # 4D 加权声学距离：能量密度 (1.35) + BPM 节拍 (1.15) + 频谱明暗 (1.0) + 温暖度 (0.9)
+            # 同时支持半速/倍速谐波节拍亲和度 (如 70 BPM 与 140 BPM 具备节奏律动相容性)
+            bpm_diff = abs(v_cur[0] - v_cand[0])
+            bpm_cur_raw = 60.0 + v_cur[0] * 120.0
+            bpm_cand_raw = 60.0 + v_cand[0] * 120.0
+            harmonic_bpm_diff = min(
+                bpm_diff,
+                abs(bpm_cur_raw * 2.0 - bpm_cand_raw) / 120.0,
+                abs(bpm_cur_raw * 0.5 - bpm_cand_raw) / 120.0,
+            )
+            dist_sq = (
+                1.15 * (harmonic_bpm_diff ** 2)
+                + 1.35 * ((v_cur[1] - v_cand[1]) ** 2)
+                + 1.00 * ((v_cur[2] - v_cand[2]) ** 2)
+                + 0.90 * ((v_cur[3] - v_cand[3]) ** 2)
+            )
+            dist = dist_sq ** 0.5
+            # 对近期已播放过的曲目施加防重复惩罚，确保漫游不死循环
+            if cand.track_id in recent_set:
+                rec_pos = self._flow_history.index(cand.track_id) if cand.track_id in self._flow_history else 0
+                rec_weight = (rec_pos + 1) / max(1, len(self._flow_history))
+                dist += 0.65 * rec_weight
+            scored.append((dist, idx))
+
+        scored.sort(key=lambda x: x[0])
+        # 在声学最相近的前 2 首候选曲目中优中选优，兼顾情绪连贯性与漫游新鲜感
+        if len(scored) >= 2 and (scored[1][0] - scored[0][0]) < 0.08:
+            return random.choice([scored[0][1], scored[1][1]])
+        return scored[0][1]
+
+    def _compute_next_track_index(self) -> Optional[int]:
+        if not self.tracks:
+            return None
+        if self.play_mode == "loop_one":
+            return self.current_track_index
+        if self.play_mode == "sequential":
+            if self.current_track_index + 1 < len(self.tracks):
+                return self.current_track_index + 1
+            return None
+        if self.play_mode == "smart_flow" and len(self.tracks) > 1:
+            return self._pick_smart_flow_next_index()
+        if self.play_mode == "shuffle" and len(self.tracks) > 1:
+            choices = [i for i in range(len(self.tracks)) if i != self.current_track_index]
+            return random.choice(choices)
+        return (self.current_track_index + 1) % len(self.tracks)
+
+    def _on_request_next_track_preload(self) -> None:
+        """在后台预解码下一首曲目到内存缓冲，实现 0ms 无缝切歌与平滑 Crossfade"""
+        if not self.tracks:
+            return
+        next_idx = self._compute_next_track_index()
+        self._next_preloaded_index = next_idx
+        if next_idx is not None and 0 <= next_idx < len(self.tracks):
+            self.audio.preload_next_track(self.tracks[next_idx])
 
     def _on_prev_track(self) -> None:
         if not self.tracks:
@@ -1209,28 +1574,38 @@ class NordicWinUI3Window(AcrylicWindow):
             next_idx = random.choice(choices)
         else:
             next_idx = (self.current_track_index - 1) % len(self.tracks)
-        self.select_track(next_idx, auto_play=True)
+        self.select_track(next_idx, auto_play=True, is_auto_transition=False)
 
-    def _on_next_track(self) -> None:
+    def _on_next_track(self, is_auto_transition: bool = False) -> None:
         if not self.tracks:
             return
-        if self.play_mode == "shuffle" and len(self.tracks) > 1:
+        pre_idx = getattr(self, "_next_preloaded_index", None)
+        if is_auto_transition and pre_idx is not None and 0 <= pre_idx < len(self.tracks):
+            next_idx = pre_idx
+        elif self.play_mode == "smart_flow" and len(self.tracks) > 1:
+            next_idx = self._pick_smart_flow_next_index()
+        elif self.play_mode == "shuffle" and len(self.tracks) > 1:
             choices = [i for i in range(len(self.tracks)) if i != self.current_track_index]
             next_idx = random.choice(choices)
         else:
             next_idx = (self.current_track_index + 1) % len(self.tracks)
-        self.select_track(next_idx, auto_play=True)
+        self.select_track(next_idx, auto_play=True, is_auto_transition=is_auto_transition)
+        if self.play_mode == "smart_flow" and 0 <= next_idx < len(self.tracks) and hasattr(self.lyrics_stage, "_show_toast"):
+            nxt = self.tracks[next_idx]
+            badge = nxt.format_dna_badge()
+            if badge:
+                self.lyrics_stage._show_toast(f"情绪漫游匹配：{nxt.title} ({badge})")
 
     def _on_track_naturally_ended(self) -> None:
         if not self.tracks:
             return
         if self.play_mode == "loop_one":
-            self.audio.seek(0.0, auto_play_on_seek=True, source="init")
+            self.select_track(self.current_track_index, auto_play=True, is_auto_transition=True)
         elif self.play_mode == "sequential":
             if self.current_track_index + 1 < len(self.tracks):
-                self.select_track(self.current_track_index + 1, auto_play=True)
+                self.select_track(self.current_track_index + 1, auto_play=True, is_auto_transition=True)
         else:
-            self._on_next_track()
+            self._on_next_track(is_auto_transition=True)
 
     def _on_track_changed(self, track: NordicTrack) -> None:
         self.cover_card.update_track(track)
@@ -1297,7 +1672,10 @@ class NordicWinUI3Window(AcrylicWindow):
         self.desktop_lyric.set_theme(self.theme)
         self.mini_player.set_theme(self.theme)
         self.frame_overlay.set_theme(self.theme)
+        if self._active_eq_dialog:
+            self._active_eq_dialog.set_theme(self.theme)
         self._apply_backdrop_to_window()
+        self._propagate_backdrop_material()
         self.update()
         self.schedule_save()
 
@@ -1514,7 +1892,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self._active_trans_track_id = track.track_id
 
         if not silent and hasattr(self.lyrics_stage, "_show_toast"):
-            self.lyrics_stage._show_toast("正在自动检索在线歌词译文…")
+            self.lyrics_stage._show_toast("正在查找歌词翻译…")
 
         worker = AutoTranslationWorker(track, self)
         self._trans_worker = worker
@@ -1558,7 +1936,7 @@ class NordicWinUI3Window(AcrylicWindow):
 
             self.schedule_save()
             if hasattr(self.lyrics_stage, "_show_toast"):
-                self.lyrics_stage._show_toast("已自动匹配并同步中文译文")
+                self.lyrics_stage._show_toast("已加载中文翻译")
 
     def _update_dolby_badges(self) -> None:
         is_active = self.audio.is_dolby_atmos_active
@@ -1586,19 +1964,85 @@ class NordicWinUI3Window(AcrylicWindow):
                 self.audio.output_device_name,
             )
         mode_names = {
-            "binaural": "双耳渲染 (耳机)",
+            "binaural": "双耳立体声",
             "surround_51": "5.1 环绕声",
             "surround_71": "7.1 环绕声",
         }
         msg = mode_names.get(mode, mode)
         if self.audio.output_channels_actual > 2:
-            msg += f" (物理 {self.audio.output_channels_actual} 声道)"
+            msg += f" ({self.audio.output_channels_actual} 声道)"
         elif mode != "binaural":
-            msg += " (已适配双耳渲染)"
+            msg += " (双耳虚拟环绕)"
         if hasattr(self.lyrics_stage, "_show_toast"):
             self.lyrics_stage._show_toast(msg)
         self.schedule_save()
 
     def _on_spatial_params_changed(self, width: float, height: float) -> None:
         self.audio.set_spatial_parameters(width, height)
+        self.schedule_save()
+
+    def _on_output_devices_updated(self, available_devices: list, selected_device_id: str) -> None:
+        self._update_dolby_badges()
+        if self._active_eq_dialog is not None and self._active_eq_dialog.isVisible():
+            self._active_eq_dialog.update_output_devices(
+                available_devices,
+                selected_device_id,
+                self.audio.output_device_name,
+            )
+
+    def _on_output_device_selected(self, dev_id: str) -> None:
+        self.audio.set_output_device(dev_id)
+        self._update_dolby_badges()
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast(f"输出设备: {self.audio.output_device_name}")
+        self.schedule_save()
+
+    def _on_crossfade_changed(self, sec: float) -> None:
+        self.audio.set_crossfade_sec(sec)
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            if sec <= 0.05:
+                self.lyrics_stage._show_toast("切歌过渡: 无缝播放")
+            else:
+                self.lyrics_stage._show_toast(f"切歌过渡: {sec:g} 秒淡入淡出")
+        self.schedule_save()
+
+    def _on_replay_gain_toggled(self, enabled: bool) -> None:
+        self.audio.set_replay_gain_enabled(enabled)
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast(
+                "已开启音量均衡" if enabled else "已关闭音量均衡"
+            )
+        self.schedule_save()
+
+    def _on_vocal_balance_changed(self, val: float) -> None:
+        self.audio.set_vocal_balance(val)
+        self.schedule_save()
+
+    def _on_turntable_physics_toggled(self, enabled: bool) -> None:
+        self.audio.set_turntable_physics_enabled(enabled)
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            self.lyrics_stage._show_toast(
+                "已开启黑胶物理断电起停" if enabled else "已关闭黑胶物理起停"
+            )
+        self.schedule_save()
+
+    def _on_vinyl_warmth_changed(self, val: float) -> None:
+        self.audio.set_vinyl_warmth(val)
+        self.schedule_save()
+
+    def _on_headphone_profile_changed(self, profile_id: str) -> None:
+        self.audio.set_headphone_profile(profile_id, trigger_preview=True)
+        prof = HEADPHONE_PROFILES.get(profile_id)
+        name = prof.name if prof else "原声监听"
+        if hasattr(self.lyrics_stage, "_show_toast"):
+            if profile_id == "bypass":
+                self.lyrics_stage._show_toast("已关闭耳机硬件校准")
+            else:
+                self.lyrics_stage._show_toast(f"已加载耳机校准：{name}")
+        self.schedule_save()
+
+    def _on_acoustic_dna_ready(self, _track: NordicTrack) -> None:
+        if self.play_mode == "smart_flow":
+            self._next_preloaded_index = None
+            QTimer.singleShot(20, self._on_request_next_track_preload)
         self.schedule_save()

@@ -39,6 +39,14 @@ class NordicTrack:
     bitrate_kbps: int = 0
     channels: int = 2
     audio_format: str = ""
+    replay_gain_db: Optional[float] = None
+    replay_peak: Optional[float] = None
+    start_time: float = 0.0
+    end_time: float = 0.0
+    cue_path: str = ""
+    cue_track_num: int = 0
+    added_timestamp: float = 0.0
+    acoustic_dna: Optional[Dict[str, float]] = None  # 离线声学指纹: {"bpm": 108.0, "energy": 0.55, "brightness": 0.48, "warmth": 0.62}
     palette: dict = field(
         default_factory=lambda: {
             "bg_primary": "#E7EAE6",
@@ -99,6 +107,44 @@ class NordicTrack:
             return f"{ext} · {sr_txt}"
 
         return f"{ext} · {sr_txt}"
+
+    def get_acoustic_vector(self) -> Tuple[float, float, float, float]:
+        """
+        返回归一化 4 维声学指纹向量 (bpm_norm, energy, brightness, warmth)，均在 0.0 ~ 1.0。
+        优先使用已从 PCM 提取的真实声学 DNA；若尚未解码，则根据歌词密度、时长与色彩特征智能估算。
+        """
+        if isinstance(self.acoustic_dna, dict) and "bpm" in self.acoustic_dna:
+            bpm = float(self.acoustic_dna.get("bpm", 105.0))
+            bpm_norm = max(0.0, min(1.0, (bpm - 60.0) / 120.0))
+            energy = max(0.0, min(1.0, float(self.acoustic_dna.get("energy", 0.5))))
+            brightness = max(0.0, min(1.0, float(self.acoustic_dna.get("brightness", 0.5))))
+            warmth = max(0.0, min(1.0, float(self.acoustic_dna.get("warmth", 0.5))))
+            return (bpm_norm, energy, brightness, warmth)
+
+        # 未解码曲目的启发式先验估算（结合歌词行频密度、曲目时长与色调）
+        dur = max(30.0, float(self.duration or 180.0))
+        lyr_count = len([l for l in (self.lyrics or []) if not l.is_interlude])
+        lines_per_min = (lyr_count / (dur / 60.0)) if lyr_count > 2 else 12.0
+        est_bpm = max(68.0, min(168.0, 72.0 + lines_per_min * 2.6))
+        bpm_norm = max(0.0, min(1.0, (est_bpm - 60.0) / 120.0))
+        energy = max(0.15, min(0.88, 0.28 + (lines_per_min / 35.0) * 0.55))
+        h_seed = sum(ord(c) for c in (self.artist + self.title)) % 100 / 100.0
+        brightness = 0.30 + 0.45 * h_seed
+        warmth = 1.0 - brightness * 0.65
+        return (bpm_norm, energy, brightness, warmth)
+
+    def format_dna_badge(self) -> str:
+        """生成可读的声学 DNA 情绪标签（如 '104 BPM · 暖调舒缓'）"""
+        bpm_norm, energy, brightness, warmth = self.get_acoustic_vector()
+        bpm = int(round(60.0 + bpm_norm * 120.0))
+        tone_str = "暖调" if warmth >= brightness else "清亮"
+        if energy >= 0.62:
+            mood_str = "律动"
+        elif energy <= 0.36:
+            mood_str = "静谧"
+        else:
+            mood_str = "舒缓"
+        return f"{bpm} BPM · {tone_str}{mood_str}"
 
     def invalidate_cover_cache(self) -> None:
         self._cached_cover_pix = None
@@ -338,6 +384,28 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "") -> List[LyricLine]:
 
 
 NORDIC_TRACKS: List[NordicTrack] = []
+
+
+def format_lyrics_to_lrc(lyrics: List[LyricLine]) -> str:
+    """将 LyricLine 列表序列化为标准 LRC 文本，用于写入音频文件内嵌歌词标签"""
+    if not lyrics:
+        return ""
+    # 若仅包含默认的占位歌词（如“暂无歌词”），不导出为内嵌歌词
+    if len(lyrics) <= 2 and any("暂无歌词" in (l.text or "") for l in lyrics):
+        return ""
+    lines: List[str] = []
+    for l in lyrics:
+        t = max(0.0, float(l.time))
+        mins = int(t // 60)
+        secs = t - mins * 60
+        tag = f"[{mins:02d}:{secs:05.2f}]"
+        txt = (l.text or "").strip()
+        sub = (l.sub or "").strip()
+        if sub and sub != txt:
+            lines.append(f"{tag}{txt} // {sub}")
+        else:
+            lines.append(f"{tag}{txt}")
+    return "\n".join(lines)
 
 
 def format_timecode(seconds: float) -> str:

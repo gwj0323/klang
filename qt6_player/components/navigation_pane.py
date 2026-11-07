@@ -2,7 +2,7 @@ import math
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Set
 from PyQt6.QtCore import (
     Qt,
     pyqtSignal,
@@ -32,6 +32,8 @@ from PyQt6.QtWidgets import (
     QFrame,
     QLabel,
     QLineEdit,
+    QCheckBox,
+    QFileDialog,
 )
 
 from qt6_player.data.tracks import NordicTrack, format_timecode
@@ -46,7 +48,7 @@ from qt6_player.components.fluent_widgets import (
 
 
 class TrackMetadataDialog(WinUIModalDialog):
-    metadataSaved = pyqtSignal(str, str, str)
+    metadataSaved = pyqtSignal(str, str, str, bool)
 
     def __init__(
         self,
@@ -54,7 +56,7 @@ class TrackMetadataDialog(WinUIModalDialog):
         theme: NordicThemeColors = DAYLIGHT_THEME,
         parent: Optional[QWidget] = None,
     ):
-        super().__init__("编辑曲目信息", 420, 296, theme=theme, parent=parent)
+        super().__init__("编辑曲目信息", 420, 336, theme=theme, parent=parent)
         self.track = track
         self._setup_body()
 
@@ -85,9 +87,21 @@ class TrackMetadataDialog(WinUIModalDialog):
             vbox.addLayout(row)
             return edit
 
-        self.edit_title = _make_field("歌曲标题", self.track.title)
-        self.edit_artist = _make_field("歌手 / 艺术家", self.track.artist)
-        self.edit_album = _make_field("所属专辑", self.track.album or "")
+        self.edit_title = _make_field("歌曲名称", self.track.title)
+        self.edit_artist = _make_field("歌手", self.track.artist)
+        self.edit_album = _make_field("专辑", self.track.album or "")
+
+        self.cb_write_file = QCheckBox("同时写入音频文件内嵌标签与封面", self)
+        has_local_file = bool(self.track.file_path and Path(self.track.file_path).is_file())
+        self.cb_write_file.setChecked(has_local_file)
+        self.cb_write_file.setEnabled(has_local_file)
+        self.cb_write_file.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.cb_write_file.setStyleSheet(
+            f"QCheckBox {{ color: {t.slate_dark.name()}; padding-top: 4px; background: transparent; }} "
+            f"QCheckBox::indicator {{ width: 15px; height: 15px; border-radius: 4px; border: 1px solid {t.sage_border.name()}; }} "
+            f"QCheckBox::indicator:checked {{ background: {t.sage_accent.name()}; border-color: {t.sage_accent.name()}; }}"
+        )
+        vbox.addWidget(self.cb_write_file)
 
         vbox.addStretch(1)
         btn_row = QHBoxLayout()
@@ -102,7 +116,7 @@ class TrackMetadataDialog(WinUIModalDialog):
         )
         btn_cancel.clicked.connect(self.reject)
 
-        btn_save = QPushButton("保存修改", self)
+        btn_save = QPushButton("保存", self)
         btn_save.setFixedSize(88, 30)
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
@@ -120,8 +134,264 @@ class TrackMetadataDialog(WinUIModalDialog):
         new_title = self.edit_title.text().strip() or self.track.title
         new_artist = self.edit_artist.text().strip() or "未知歌手"
         new_album = self.edit_album.text().strip()
-        self.metadataSaved.emit(new_title, new_artist, new_album)
+        self.metadataSaved.emit(new_title, new_artist, new_album, self.cb_write_file.isChecked())
         self.accept()
+
+
+class CreatePlaylistDialog(WinUIModalDialog):
+    playlistCreated = pyqtSignal(str)
+
+    def __init__(
+        self,
+        title_text: str = "新建歌单",
+        initial_name: str = "",
+        theme: NordicThemeColors = DAYLIGHT_THEME,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(title_text, 360, 185, theme=theme, parent=parent)
+        t = self.theme
+        vbox = self._root_vbox
+
+        lbl = QLabel("歌单名称", self)
+        lbl.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        lbl.setStyleSheet(f"color: {t.slate_muted.name()}; background: transparent;")
+        vbox.addWidget(lbl)
+
+        self.edit_name = QLineEdit(initial_name, self)
+        self.edit_name.setPlaceholderText("例如：常听无损、古典现场…")
+        self.edit_name.setFont(get_nordic_font(12))
+        self.edit_name.setStyleSheet(
+            f"QLineEdit {{ background-color: {t.card_elevated.name()}; color: {t.charcoal.name()}; "
+            f"border: 1px solid {t.sage_border.name()}; border-radius: 6px; padding: 6px 10px; }}"
+        )
+        self.edit_name.returnPressed.connect(self._on_confirm)
+        vbox.addWidget(self.edit_name)
+
+        vbox.addStretch(1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        btn_cancel = QPushButton("取消", self)
+        btn_cancel.setFixedSize(72, 30)
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setFont(get_nordic_font(12, QFont.Weight.Medium))
+        btn_cancel.setStyleSheet(
+            f"QPushButton {{ background: {t.oat_surface.name()}; color: {t.slate_dark.name()}; border-radius: 6px; border: 1px solid {t.stroke_outer.name()}; }}"
+        )
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_ok = QPushButton("确定", self)
+        btn_ok.setFixedSize(78, 30)
+        btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ok.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        btn_ok.setStyleSheet(
+            f"QPushButton {{ background: {t.sage_accent.name()}; color: #FAF9F6; border-radius: 6px; border: none; }}"
+        )
+        btn_ok.clicked.connect(self._on_confirm)
+
+        btn_row.addWidget(btn_cancel)
+        btn_row.addSpacing(8)
+        btn_row.addWidget(btn_ok)
+        vbox.addLayout(btn_row)
+
+    def _on_confirm(self) -> None:
+        name = self.edit_name.text().strip()
+        if name:
+            self.playlistCreated.emit(name)
+            self.accept()
+
+
+class WatchedFoldersDialog(WinUIModalDialog):
+    watchedFoldersChanged = pyqtSignal(list)
+    rescanRequested = pyqtSignal()
+
+    def __init__(
+        self,
+        folders: List[str],
+        theme: NordicThemeColors = DAYLIGHT_THEME,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__("自动监控音乐文件夹", 460, 340, theme=theme, parent=parent)
+        self.folders: List[str] = list(folders)
+        self._setup_body()
+
+    def _setup_body(self) -> None:
+        vbox = self._root_vbox
+        t = self.theme
+
+        tip = QLabel("添加常用目录（如 Music 或 Downloads）后，启动时或目录内新增无损音频与 CUE 文件时将自动导入曲库。", self)
+        tip.setWordWrap(True)
+        tip.setFont(get_nordic_font(11, QFont.Weight.Normal))
+        tip.setStyleSheet(f"color: {t.slate_muted.name()}; background: transparent;")
+        vbox.addWidget(tip)
+
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet(
+            f"QScrollArea {{ border: 1px solid {t.stroke_outer.name()}; border-radius: 7px; background: {t.card_elevated.name()}; }}"
+        )
+        self.list_widget = QWidget()
+        self.list_widget.setStyleSheet("background: transparent;")
+        self.list_vbox = QVBoxLayout(self.list_widget)
+        self.list_vbox.setContentsMargins(8, 8, 8, 8)
+        self.list_vbox.setSpacing(6)
+        self.scroll.setWidget(self.list_widget)
+        vbox.addWidget(self.scroll, 1)
+
+        self._rebuild_folder_rows()
+
+        btn_row = QHBoxLayout()
+        btn_add = QPushButton("＋ 添加文件夹", self)
+        btn_add.setFixedHeight(30)
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.setFont(get_nordic_font(11, QFont.Weight.DemiBold))
+        btn_add.setStyleSheet(
+            f"QPushButton {{ background: {t.oat_surface.name()}; color: {t.charcoal.name()}; border-radius: 6px; border: 1px solid {t.sage_border.name()}; padding: 0 12px; }}"
+        )
+        btn_add.clicked.connect(self._on_add_folder)
+        btn_row.addWidget(btn_add)
+
+        btn_scan = QPushButton("立即扫描", self)
+        btn_scan.setFixedHeight(30)
+        btn_scan.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_scan.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        btn_scan.setStyleSheet(
+            f"QPushButton {{ background: {t.oat_surface.name()}; color: {t.slate_dark.name()}; border-radius: 6px; border: 1px solid {t.stroke_outer.name()}; padding: 0 12px; }}"
+        )
+        btn_scan.clicked.connect(lambda: (self.watchedFoldersChanged.emit(list(self.folders)), self.rescanRequested.emit()))
+        btn_row.addWidget(btn_scan)
+
+        btn_row.addStretch(1)
+
+        btn_done = QPushButton("完成", self)
+        btn_done.setFixedSize(76, 30)
+        btn_done.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_done.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        btn_done.setStyleSheet(
+            f"QPushButton {{ background: {t.sage_accent.name()}; color: #FAF9F6; border-radius: 6px; border: none; }}"
+        )
+        btn_done.clicked.connect(self.accept)
+        btn_row.addWidget(btn_done)
+        vbox.addLayout(btn_row)
+
+    def _rebuild_folder_rows(self) -> None:
+        while self.list_vbox.count():
+            item = self.list_vbox.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        t = self.theme
+        if not self.folders:
+            empty_lbl = QLabel("暂未绑定监控文件夹", self.list_widget)
+            empty_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet(f"color: {t.slate_faint.name()}; padding: 28px;")
+            self.list_vbox.addWidget(empty_lbl)
+        else:
+            for folder_path in self.folders:
+                row_w = QWidget(self.list_widget)
+                row_w.setStyleSheet(
+                    f"background: {t.oat_surface.name()}; border-radius: 5px;"
+                )
+                row_h = QHBoxLayout(row_w)
+                row_h.setContentsMargins(10, 6, 8, 6)
+                row_h.setSpacing(8)
+
+                lbl_p = QLabel(folder_path, row_w)
+                lbl_p.setFont(get_nordic_font(11, QFont.Weight.Normal))
+                lbl_p.setStyleSheet(f"color: {t.charcoal.name()}; background: transparent;")
+                row_h.addWidget(lbl_p, 1)
+
+                btn_rm = QPushButton("移除", row_w)
+                btn_rm.setFixedSize(46, 22)
+                btn_rm.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_rm.setFont(get_nordic_font(10, QFont.Weight.Medium))
+                btn_rm.setStyleSheet(
+                    f"QPushButton {{ background: transparent; color: {t.slate_muted.name()}; border: 1px solid {t.stroke_outer.name()}; border-radius: 4px; }}"
+                    f"QPushButton:hover {{ color: {t.charcoal.name()}; border-color: {t.sage_border.name()}; }}"
+                )
+                btn_rm.clicked.connect(lambda _=False, fp=folder_path: self._on_remove_folder(fp))
+                row_h.addWidget(btn_rm)
+                self.list_vbox.addWidget(row_w)
+        self.list_vbox.addStretch(1)
+
+    def _on_add_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择要自动监控的音乐文件夹")
+        if folder:
+            norm = str(Path(folder).resolve())
+            if norm not in self.folders:
+                self.folders.append(norm)
+                self._rebuild_folder_rows()
+                self.watchedFoldersChanged.emit(list(self.folders))
+
+    def _on_remove_folder(self, fp: str) -> None:
+        if fp in self.folders:
+            self.folders.remove(fp)
+            self._rebuild_folder_rows()
+            self.watchedFoldersChanged.emit(list(self.folders))
+
+
+class NavGroupHeaderButton(QPushButton):
+    """分类视图下的可折叠分组标题栏（如：▾ 王菲 · 3 首）"""
+
+    def __init__(
+        self,
+        group_name: str,
+        count: int,
+        expanded: bool = True,
+        theme: NordicThemeColors = DAYLIGHT_THEME,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self.group_name = group_name
+        self.count = count
+        self.expanded = expanded
+        self.theme = theme
+        self.setFixedHeight(32)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_theme(self, theme: NordicThemeColors) -> None:
+        self.theme = theme
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(2.0, 2.0, -2.0, -2.0)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 6.0, 6.0)
+        painter.fillPath(path, self.theme.oat_surface)
+
+        arrow = "▾" if self.expanded else "▸"
+        painter.setPen(self.theme.sage_accent)
+        painter.setFont(get_nordic_font(11, QFont.Weight.Bold))
+        painter.drawText(
+            QRectF(10.0, 0.0, 16.0, self.height()),
+            int(Qt.AlignmentFlag.AlignCenter),
+            arrow,
+        )
+
+        painter.setPen(self.theme.charcoal)
+        painter.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        avail_w = max(40.0, self.width() - 78.0)
+        elided = painter.fontMetrics().elidedText(
+            self.group_name, Qt.TextElideMode.ElideRight, int(avail_w)
+        )
+        painter.drawText(
+            QRectF(28.0, 0.0, avail_w, self.height()),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            elided,
+        )
+
+        painter.setPen(self.theme.slate_muted)
+        painter.setFont(get_nordic_font(10, QFont.Weight.Medium, mono=True))
+        painter.drawText(
+            QRectF(self.width() - 52.0, 0.0, 42.0, self.height()),
+            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+            f"{self.count} 首",
+        )
 
 
 class NavTrackItemButton(QPushButton):
@@ -134,15 +404,19 @@ class NavTrackItemButton(QPushButton):
         index: int,
         track: NordicTrack,
         selected: bool = False,
+        in_custom_playlist: bool = False,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.index = index
         self.track = track
         self.is_selected = selected
+        self.in_custom_playlist = in_custom_playlist
         self.is_playing = False
         self.eq_phase: float = 0.0
         self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self._thumb_pixmap: Optional[QPixmap] = None
         self._hover_alpha: float = 0.0
         self._reveal_progress: float = 1.0
@@ -167,6 +441,11 @@ class NavTrackItemButton(QPushButton):
         self._fav_anim.valueChanged.connect(self._on_fav_scale)
 
         self.refresh_thumbnail()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def _on_hover_val(self, val: float) -> None:
         self._hover_alpha = float(val)
@@ -262,18 +541,27 @@ class NavTrackItemButton(QPushButton):
         super().mouseReleaseEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
-        fav_label = "取消喜欢收藏" if self.track.is_favorite else "添加到「我喜欢」"
+        fav_label = "取消喜欢" if self.track.is_favorite else "添加到「我喜欢」"
         fav_icon = "heart_filled" if self.track.is_favorite else "heart_outline"
         items = [
-            ("play", "music_file", "播放此曲目"),
+            ("play", "music_file", "立即播放"),
+            ("play_next", "music_file", "下一首播放"),
             ("fav", fav_icon, fav_label),
-            ("scrape", "sparkle", "在线匹配歌词与封面"),
-            ("import_lrc", "lrc", "加载本地 LRC 歌词"),
-            ("edit_tags", "edit", "编辑曲目信息"),
+            ("add_to_playlist", "plus", "添加到歌单…"),
         ]
+        if self.in_custom_playlist:
+            items.append(("remove_from_playlist", "close", "从当前歌单移除"))
+        items.extend(
+            [
+                ("scrape", "sparkle", "在线匹配词图"),
+                ("import_lrc", "lrc", "加载本地 LRC 歌词"),
+                ("edit_tags", "edit", "编辑曲目信息"),
+            ]
+        )
         if self.track.file_path and Path(self.track.file_path).exists():
-            items.append(("open_dir", "folder", "在文件夹中显示"))
-        items.append(("remove", "trash", "从列表中移除"))
+            items.append(("write_tags", "sparkle", "写入标签与封面到文件"))
+            items.append(("open_dir", "folder", "打开文件所在位置"))
+        items.append(("remove", "trash", "从曲库移除"))
 
         self._ctx_menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
         self._ctx_menu.actionTriggered.connect(self._on_ctx_action)
@@ -286,9 +574,10 @@ class NavTrackItemButton(QPushButton):
             self.favoriteToggled.emit(self.index)
             self.update()
         elif act == "open_dir":
-            if self.track.file_path:
+            target_path = self.track.cue_path if (self.track.cue_path and Path(self.track.cue_path).exists()) else self.track.file_path
+            if target_path:
                 try:
-                    subprocess.Popen(["explorer", "/select,", os.path.normpath(self.track.file_path)])
+                    subprocess.Popen(["explorer", "/select,", os.path.normpath(target_path)])
                 except Exception:
                     pass
         else:
@@ -309,9 +598,16 @@ class NavTrackItemButton(QPushButton):
         path = QPainterPath()
         path.addRoundedRect(rect, 7.0, 7.0)
 
+        is_dusk = self.theme.name == "dusk"
         if self.is_selected:
-            painter.fillPath(path, self.theme.oat_surface)
-            painter.setPen(QPen(self.theme.stroke_outer, 1.0))
+            if self.is_translucent_backdrop:
+                sel_bg = QColor(255, 255, 255, 22 if is_dusk else 140)
+                sel_bd = QColor(255, 255, 255, 38 if is_dusk else 180)
+            else:
+                sel_bg = self.theme.oat_surface
+                sel_bd = self.theme.stroke_outer
+            painter.fillPath(path, sel_bg)
+            painter.setPen(QPen(sel_bd, 1.0))
             painter.drawPath(path)
 
             pill_rect = QRectF(4.0, self.height() / 2.0 - 9.0, 3.2, 18.0)
@@ -319,8 +615,11 @@ class NavTrackItemButton(QPushButton):
             pill_path.addRoundedRect(pill_rect, 1.6, 1.6)
             painter.fillPath(pill_path, self.theme.sage_accent)
         elif self._hover_alpha > 0.01:
-            hov_col = QColor(self.theme.subtle_hover)
-            hov_col.setAlphaF(hov_col.alphaF() * self._hover_alpha)
+            if self.is_translucent_backdrop:
+                hov_col = QColor(255, 255, 255, int((18 if is_dusk else 85) * self._hover_alpha))
+            else:
+                hov_col = QColor(self.theme.subtle_hover)
+                hov_col.setAlphaF(hov_col.alphaF() * self._hover_alpha)
             painter.fillPath(path, hov_col)
 
         # 左侧缩略封面或色卡
@@ -346,9 +645,10 @@ class NavTrackItemButton(QPushButton):
             if not (self.is_selected and self.is_playing):
                 painter.setPen(QColor(self.track.palette["ink"]))
                 painter.setFont(get_nordic_font(11, QFont.Weight.DemiBold, mono=True))
-                painter.drawText(swatch_rect, int(Qt.AlignmentFlag.AlignCenter), f"{self.index + 1:02d}")
+                num_val = self.track.cue_track_num if self.track.cue_track_num > 0 else (self.index + 1)
+                painter.drawText(swatch_rect, int(Qt.AlignmentFlag.AlignCenter), f"{num_val:02d}")
 
-        # 正在播放曲目：绘制动态跳动三柱小音轨指示器 (Now Playing Equalizer Bars)
+        # 正在播放曲目：绘制动态跳动三柱小音轨指示器
         if self.is_selected and self.is_playing:
             painter.save()
             painter.setClipPath(swatch_path)
@@ -390,8 +690,9 @@ class NavTrackItemButton(QPushButton):
         painter.setPen(self.theme.slate_muted)
         artist_font = get_nordic_font(11, QFont.Weight.Normal)
         painter.setFont(artist_font)
+        sub_txt = f"{self.track.artist} · {self.track.album}" if self.track.album else self.track.artist
         elided_artist = painter.fontMetrics().elidedText(
-            self.track.artist, Qt.TextElideMode.ElideRight, int(text_width)
+            sub_txt, Qt.TextElideMode.ElideRight, int(text_width)
         )
         painter.drawText(
             QRectF(text_left, 27.0, text_width, 17.0),
@@ -399,7 +700,7 @@ class NavTrackItemButton(QPushButton):
             elided_artist,
         )
 
-        # 矢量心形收藏图标（带点击心跳缩放动效）
+        # 矢量心形收藏图标
         if self.track.is_favorite or self._hover_alpha > 0.1:
             fav_r = self._fav_rect()
             ic_col = self.theme.sage_accent if self.track.is_favorite else self.theme.slate_faint
@@ -429,9 +730,9 @@ class NavTrackItemButton(QPushButton):
 
 class UnifiedImportSplitButton(QPushButton):
     """
-    单一整洁的 WinUI 3 音乐导入分割按钮 (Split Button)
-    左侧主区域点击：直接添加本地音频文件
-    右侧下拉箭头点击：弹出平滑动画菜单（添加音乐文件 / 扫描音乐文件夹 / 导入本地 LRC 歌词）
+    音乐导入分割按钮 (Split Button)
+    左侧主区域点击：直接添加音频或 CUE 文件
+    右侧下拉箭头点击：弹出菜单（添加文件 / 扫描文件夹 / 自动监控目录 / 导入 LRC 歌词）
     """
 
     importFilesClicked = pyqtSignal()
@@ -441,15 +742,22 @@ class UnifiedImportSplitButton(QPushButton):
         super().__init__(parent)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self._hover_alpha: float = 0.0
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self.setFixedHeight(34)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
-        self.setToolTip("左侧点击直接导入音乐文件，右侧箭头展开导入文件夹 / LRC 歌词菜单")
+        self.setToolTip("左侧点击导入音频/CUE 文件，右侧箭头展开文件夹扫描与目录监控菜单")
 
         self._hover_anim = QVariantAnimation(self)
         self._hover_anim.setDuration(150)
         self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._hover_anim.valueChanged.connect(self._on_hover_val)
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def _on_hover_val(self, val: float) -> None:
         self._hover_alpha = float(val)
@@ -476,7 +784,7 @@ class UnifiedImportSplitButton(QPushButton):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             if event.position().x() >= self.width() - 36.0:
-                menu_pos = self.mapToGlobal(QPoint(0, -120))
+                menu_pos = self.mapToGlobal(QPoint(0, -155))
                 self.menuRequested.emit(menu_pos)
             else:
                 self.importFilesClicked.emit()
@@ -492,14 +800,27 @@ class UnifiedImportSplitButton(QPushButton):
         path = QPainterPath()
         path.addRoundedRect(rect, 7.0, 7.0)
 
-        bg = QColor(self.theme.sage_soft if self._hover_alpha > 0.3 else self.theme.oat_surface)
-        border = self.theme.sage_border if self._hover_alpha > 0.3 else self.theme.stroke_outer
+        is_dusk = self.theme.name == "dusk"
+        if self.is_translucent_backdrop:
+            if is_dusk:
+                bg = QColor(255, 255, 255, int(18 + 20 * self._hover_alpha))
+                border = QColor(255, 255, 255, int(32 + 25 * self._hover_alpha))
+                div_col = QColor(255, 255, 255, 20)
+            else:
+                bg = QColor(255, 255, 255, int(120 + 75 * self._hover_alpha))
+                border = QColor(255, 255, 255, int(160 + 70 * self._hover_alpha))
+                div_col = QColor(38, 41, 46, 20)
+        else:
+            bg = QColor(self.theme.sage_soft if self._hover_alpha > 0.3 else self.theme.oat_surface)
+            border = self.theme.sage_border if self._hover_alpha > 0.3 else self.theme.stroke_outer
+            div_col = self.theme.divider
+
         painter.fillPath(path, bg)
         painter.setPen(QPen(border, 1.0))
         painter.drawPath(path)
 
         split_x = self.width() - 34.0
-        painter.setPen(QPen(self.theme.divider, 1.0))
+        painter.setPen(QPen(div_col, 1.0))
         painter.drawLine(QPointF(split_x, 7.0), QPointF(split_x, self.height() - 7.0))
 
         fg = self.theme.charcoal if self._hover_alpha > 0.2 else self.theme.slate_dark
@@ -516,7 +837,7 @@ class UnifiedImportSplitButton(QPushButton):
         painter.drawText(
             QRectF(36.0, 0.0, split_x - 36.0, self.height()),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-            "导入本地音乐与歌词",
+            "导入音乐 / CUE / 歌词",
         )
 
         draw_nordic_icon(
@@ -536,8 +857,25 @@ class NavigationPane(QWidget):
     importFilesRequested = pyqtSignal()
     importFolderRequested = pyqtSignal()
     importLrcRequested = pyqtSignal()
+    watchFoldersRequested = pyqtSignal()
+    playlistsChanged = pyqtSignal()
 
-    EXPANDED_WIDTH = 252
+    EXPANDED_WIDTH = 264
+
+    _SORT_LABELS = {
+        "default": "默认排序",
+        "title": "按歌名",
+        "artist": "按歌手",
+        "album": "按专辑",
+        "duration": "按时长",
+        "recent": "最近添加",
+    }
+
+    _GROUP_LABELS = {
+        "artist": "按歌手分组",
+        "album": "按专辑分组",
+        "folder": "按文件夹分组",
+    }
 
     def __init__(self, tracks: List[NordicTrack], parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -545,9 +883,22 @@ class NavigationPane(QWidget):
         self.active_index: int = 0
         self.is_playing: bool = False
         self._eq_phase: float = 0.0
+
+        # 视图模式: 0="全部", 1="喜欢", 2="歌单", 3="分类"
+        self.view_mode: int = 0
         self.filter_favorites_only: bool = False
         self.search_keyword: str = ""
+        self.sort_mode: str = "default"
+        self.group_mode: str = "artist"  # "artist" | "album" | "folder"
+        self.collapsed_groups: Set[str] = set()
+
+        # 自定义歌单: {歌单名: [track_id, ...]}
+        self.custom_playlists: Dict[str, List[str]] = {}
+        self.active_playlist_name: str = ""
+
         self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
 
         self.setMinimumWidth(self.EXPANDED_WIDTH)
         self.setMaximumWidth(self.EXPANDED_WIDTH)
@@ -556,17 +907,63 @@ class NavigationPane(QWidget):
         layout.setContentsMargins(12, 12, 12, 14)
         layout.setSpacing(8)
 
-        # 1. 顶部滑动胶囊分段切换器 (全部 / 喜欢)
-        self.segmented_tabs = WinUISegmentedControl(["全部 (0)", "喜欢 (0)"], self)
+        # 1. 顶部四栏视图切换器 (全部 / 喜欢 / 歌单 / 分类)
+        self.segmented_tabs = WinUISegmentedControl(["全部", "喜欢", "歌单", "分类"], self)
         self.segmented_tabs.currentIndexChanged.connect(self._on_tab_index_changed)
         layout.addWidget(self.segmented_tabs)
 
-        # 2. 自定义矢量搜索框
+        # 2. 搜索框
         self.search_box = WinUISearchBox("搜索歌名 / 歌手 / 专辑…", self)
         self.search_box.textChanged.connect(self._on_search_changed)
         layout.addWidget(self.search_box)
 
-        # 3. 可滚动曲目容器
+        # 3. 辅助工具栏（排序 / 歌单选择与新建 / 分类切换）
+        self.sub_bar = QWidget(self)
+        self.sub_bar.setFixedHeight(26)
+        sub_hbox = QHBoxLayout(self.sub_bar)
+        sub_hbox.setContentsMargins(2, 0, 2, 0)
+        sub_hbox.setSpacing(6)
+
+        self.lbl_count = QLabel("共 0 首", self.sub_bar)
+        self.lbl_count.setFont(get_nordic_font(11, QFont.Weight.Normal))
+        sub_hbox.addWidget(self.lbl_count)
+
+        self.btn_sub_selector = QPushButton("", self.sub_bar)
+        self.btn_sub_selector.setFixedHeight(24)
+        self.btn_sub_selector.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_sub_selector.setFont(get_nordic_font(11, QFont.Weight.DemiBold))
+        self.btn_sub_selector.clicked.connect(self._on_sub_selector_clicked)
+        self.btn_sub_selector.hide()
+        sub_hbox.addWidget(self.btn_sub_selector)
+
+        sub_hbox.addStretch(1)
+
+        self.btn_new_playlist = QPushButton("＋新建", self.sub_bar)
+        self.btn_new_playlist.setFixedHeight(24)
+        self.btn_new_playlist.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_playlist.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.btn_new_playlist.clicked.connect(self.prompt_create_playlist)
+        self.btn_new_playlist.hide()
+        sub_hbox.addWidget(self.btn_new_playlist)
+
+        self.btn_del_playlist = QPushButton("删除", self.sub_bar)
+        self.btn_del_playlist.setFixedHeight(24)
+        self.btn_del_playlist.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_del_playlist.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.btn_del_playlist.clicked.connect(self._on_delete_current_playlist)
+        self.btn_del_playlist.hide()
+        sub_hbox.addWidget(self.btn_del_playlist)
+
+        self.btn_sort = QPushButton("默认排序 ▾", self.sub_bar)
+        self.btn_sort.setFixedHeight(24)
+        self.btn_sort.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_sort.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.btn_sort.clicked.connect(self._open_sort_menu)
+        sub_hbox.addWidget(self.btn_sort)
+
+        layout.addWidget(self.sub_bar)
+
+        # 4. 可滚动曲目容器
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
@@ -600,20 +997,19 @@ class NavigationPane(QWidget):
         layout.addWidget(self.scroll_area, 1)
 
         self.item_buttons: List[NavTrackItemButton] = []
+        self.group_buttons: List[NavGroupHeaderButton] = []
 
-        # 4. 底部单一整合式导入按钮 (Split Button + Animated Flyout)
+        # 5. 底部导入分割按钮
         self.btn_import_split = UnifiedImportSplitButton(self)
         self.btn_import_split.importFilesClicked.connect(self.importFilesRequested.emit)
         self.btn_import_split.menuRequested.connect(self._open_import_flyout)
         layout.addWidget(self.btn_import_split)
 
-        # 列表切换非线性动效驱动器 (错峰级联四次减速)
         self._list_reveal_anim = QVariantAnimation(self)
-        self._list_reveal_anim.setDuration(320)
+        self._list_reveal_anim.setDuration(280)
         self._list_reveal_anim.setEasingCurve(QEasingCurve.Type.OutQuint)
         self._list_reveal_anim.valueChanged.connect(self._on_list_reveal_val)
 
-        # 正在播放曲目小音轨跳动定时器
         self._eq_timer = QTimer(self)
         self._eq_timer.setInterval(55)
         self._eq_timer.timeout.connect(self._step_eq_bars)
@@ -621,20 +1017,183 @@ class NavigationPane(QWidget):
         self.rebuild_list(tracks, active_index=0)
         self.set_theme(DAYLIGHT_THEME)
 
+    def set_custom_playlists(self, playlists: Dict[str, List[str]]) -> None:
+        self.custom_playlists = {str(k): list(v) for k, v in (playlists or {}).items() if str(k).strip()}
+        if self.active_playlist_name not in self.custom_playlists:
+            self.active_playlist_name = next(iter(self.custom_playlists.keys()), "")
+        self._update_sub_bar_ui()
+        if self.view_mode == 2:
+            self.rebuild_list(self.tracks, active_index=self.active_index)
+
+    def prompt_create_playlist(self, initial_track_id: Optional[str] = None) -> None:
+        dlg = CreatePlaylistDialog("新建歌单", "", theme=self.theme, parent=self.window())
+
+        def _on_created(name: str) -> None:
+            if name not in self.custom_playlists:
+                self.custom_playlists[name] = []
+            if initial_track_id and initial_track_id not in self.custom_playlists[name]:
+                self.custom_playlists[name].append(initial_track_id)
+            self.active_playlist_name = name
+            self._update_sub_bar_ui()
+            if self.view_mode == 2:
+                self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.playlistsChanged.emit()
+
+        dlg.playlistCreated.connect(_on_created)
+        dlg.exec()
+
+    def add_track_to_playlist(self, playlist_name: str, track_id: str) -> bool:
+        if not playlist_name:
+            return False
+        if playlist_name not in self.custom_playlists:
+            self.custom_playlists[playlist_name] = []
+        if track_id not in self.custom_playlists[playlist_name]:
+            self.custom_playlists[playlist_name].append(track_id)
+            if self.view_mode == 2 and self.active_playlist_name == playlist_name:
+                self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.playlistsChanged.emit()
+            return True
+        return False
+
+    def remove_track_from_active_playlist(self, track_id: str) -> bool:
+        if self.active_playlist_name and self.active_playlist_name in self.custom_playlists:
+            plist = self.custom_playlists[self.active_playlist_name]
+            if track_id in plist:
+                plist.remove(track_id)
+                self.rebuild_list(self.tracks, active_index=self.active_index)
+                self.playlistsChanged.emit()
+                return True
+        return False
+
+    def _on_delete_current_playlist(self) -> None:
+        if self.active_playlist_name and self.active_playlist_name in self.custom_playlists:
+            del self.custom_playlists[self.active_playlist_name]
+            self.active_playlist_name = next(iter(self.custom_playlists.keys()), "")
+            self._update_sub_bar_ui()
+            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.playlistsChanged.emit()
+
+    def _on_sub_selector_clicked(self) -> None:
+        pos = self.btn_sub_selector.mapToGlobal(QPoint(0, self.btn_sub_selector.height() + 4))
+        if self.view_mode == 2:
+            if not self.custom_playlists:
+                self.prompt_create_playlist()
+                return
+            items = [(f"pl:{name}", "music_file", f"{name} ({len(ids)})") for name, ids in self.custom_playlists.items()]
+            menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+            menu.actionTriggered.connect(self._on_playlist_menu_selected)
+            menu.popup_animated(pos)
+        elif self.view_mode == 3:
+            items = [
+                ("grp:artist", "sparkle", "按歌手分组"),
+                ("grp:album", "music_file", "按专辑分组"),
+                ("grp:folder", "folder", "按文件夹分组"),
+            ]
+            menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+            menu.actionTriggered.connect(self._on_group_menu_selected)
+            menu.popup_animated(pos)
+
+    def _on_playlist_menu_selected(self, act: str) -> None:
+        if act.startswith("pl:"):
+            self.active_playlist_name = act[3:]
+            self._update_sub_bar_ui()
+            self.rebuild_list(self.tracks, active_index=self.active_index)
+
+    def _on_group_menu_selected(self, act: str) -> None:
+        if act.startswith("grp:"):
+            self.group_mode = act[4:]
+            self.collapsed_groups.clear()
+            self._update_sub_bar_ui()
+            self.rebuild_list(self.tracks, active_index=self.active_index)
+
+    def _open_sort_menu(self) -> None:
+        pos = self.btn_sort.mapToGlobal(QPoint(0, self.btn_sort.height() + 4))
+        items = [
+            ("default", "music_file", "默认顺序"),
+            ("title", "edit", "按歌名 (A-Z)"),
+            ("artist", "sparkle", "按歌手 (A-Z)"),
+            ("album", "music_file", "按专辑 (A-Z)"),
+            ("duration", "clock", "按时长"),
+            ("recent", "plus", "按最近添加"),
+        ]
+        menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+        menu.actionTriggered.connect(self._on_sort_selected)
+        menu.popup_animated(pos)
+
+    def _on_sort_selected(self, mode: str) -> None:
+        if mode in self._SORT_LABELS:
+            self.sort_mode = mode
+            self._update_sub_bar_ui()
+            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self._trigger_list_transition()
+
+    def _update_sub_bar_ui(self) -> None:
+        t = self.theme
+        is_trans = getattr(self, "is_translucent_backdrop", True)
+        is_dusk = t.name == "dusk"
+        if is_trans:
+            bg_val = "rgba(255, 255, 255, 0.08)" if is_dusk else "rgba(255, 255, 255, 0.48)"
+            bd_val = "rgba(255, 255, 255, 0.14)" if is_dusk else "rgba(255, 255, 255, 0.65)"
+            hov_bg = "rgba(255, 255, 255, 0.15)" if is_dusk else "rgba(255, 255, 255, 0.75)"
+            pill_style = (
+                f"QPushButton {{ background: {bg_val}; color: {t.charcoal.name()}; "
+                f"border: 1px solid {bd_val}; border-radius: 5px; padding: 0 8px; }}"
+                f"QPushButton:hover {{ border-color: {t.sage_border.name()}; background: {hov_bg}; }}"
+            )
+        else:
+            pill_style = (
+                f"QPushButton {{ background: {t.oat_surface.name()}; color: {t.charcoal.name()}; "
+                f"border: 1px solid {t.stroke_outer.name()}; border-radius: 5px; padding: 0 8px; }}"
+                f"QPushButton:hover {{ border-color: {t.sage_border.name()}; }}"
+            )
+        muted_btn_style = (
+            f"QPushButton {{ background: transparent; color: {t.slate_muted.name()}; "
+            f"border: none; padding: 0 4px; }}"
+            f"QPushButton:hover {{ color: {t.charcoal.name()}; }}"
+        )
+        self.lbl_count.setStyleSheet(f"color: {t.slate_muted.name()}; background: transparent;")
+        self.btn_sub_selector.setStyleSheet(pill_style)
+        self.btn_new_playlist.setStyleSheet(pill_style)
+        self.btn_del_playlist.setStyleSheet(muted_btn_style)
+        self.btn_sort.setStyleSheet(muted_btn_style)
+        self.btn_sort.setText(f"{self._SORT_LABELS.get(self.sort_mode, '默认排序')} ▾")
+
+        if self.view_mode in (0, 1):
+            self.lbl_count.show()
+            self.btn_sub_selector.hide()
+            self.btn_new_playlist.hide()
+            self.btn_del_playlist.hide()
+            self.btn_sort.show()
+        elif self.view_mode == 2:
+            self.lbl_count.hide()
+            self.btn_sub_selector.show()
+            pl_label = self.active_playlist_name if self.active_playlist_name else "未建歌单"
+            self.btn_sub_selector.setText(f"{pl_label} ▾")
+            self.btn_new_playlist.show()
+            self.btn_del_playlist.setVisible(bool(self.active_playlist_name))
+            self.btn_sort.hide()
+        elif self.view_mode == 3:
+            self.lbl_count.hide()
+            self.btn_sub_selector.show()
+            self.btn_sub_selector.setText(f"{self._GROUP_LABELS.get(self.group_mode, '按歌手分组')} ▾")
+            self.btn_new_playlist.hide()
+            self.btn_del_playlist.hide()
+            self.btn_sort.show()
+
     def _step_eq_bars(self) -> None:
         if not self.isVisible():
             return
         self._eq_phase = (self._eq_phase + 0.38) % (math.pi * 2.0)
-        if 0 <= self.active_index < len(self.item_buttons):
-            btn = self.item_buttons[self.active_index]
-            btn.eq_phase = self._eq_phase
-            if btn.isVisible():
-                btn.update(11, int(btn.height() / 2 - 18), 36, 36)
+        for btn in self.item_buttons:
+            if btn.index == self.active_index:
+                btn.eq_phase = self._eq_phase
+                if btn.isVisible():
+                    btn.update(11, int(btn.height() / 2 - 18), 36, 36)
 
     def set_playing_state(self, is_playing: bool) -> None:
         self.is_playing = bool(is_playing)
-        for i, btn in enumerate(self.item_buttons):
-            new_playing = self.is_playing and (i == self.active_index)
+        for btn in self.item_buttons:
+            new_playing = self.is_playing and (btn.index == self.active_index)
             if btn.is_playing != new_playing:
                 btn.is_playing = new_playing
                 btn.update()
@@ -646,8 +1205,9 @@ class NavigationPane(QWidget):
 
     def _open_import_flyout(self, global_pos: QPoint) -> None:
         items = [
-            ("add_files", "music_file", "添加音频文件 (.mp3/.flac/.wav)"),
+            ("add_files", "music_file", "添加音频或 CUE 分轨 (.flac/.mp3/.cue)"),
             ("add_folder", "folder", "扫描并导入音乐文件夹"),
+            ("watch_folders", "folder", "自动监控音乐文件夹…"),
             ("add_lrc", "lrc", "为当前歌曲导入 LRC 歌词"),
         ]
         self._import_flyout = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
@@ -659,6 +1219,8 @@ class NavigationPane(QWidget):
             self.importFilesRequested.emit()
         elif act == "add_folder":
             self.importFolderRequested.emit()
+        elif act == "watch_folders":
+            self.watchFoldersRequested.emit()
         elif act == "add_lrc":
             self.importLrcRequested.emit()
 
@@ -681,8 +1243,10 @@ class NavigationPane(QWidget):
         self._list_reveal_anim.start()
 
     def _on_tab_index_changed(self, idx: int) -> None:
-        self.filter_favorites_only = idx == 1
-        self._apply_visibility_filter()
+        self.view_mode = idx
+        self.filter_favorites_only = (idx == 1)
+        self._update_sub_bar_ui()
+        self.rebuild_list(self.tracks, active_index=self.active_index)
         self._trigger_list_transition()
 
     def _on_search_changed(self, text: str) -> None:
@@ -690,21 +1254,62 @@ class NavigationPane(QWidget):
         self._apply_visibility_filter()
         self._trigger_list_transition()
 
-    def _apply_visibility_filter(self) -> None:
-        fav_count = sum(1 for t in self.tracks if t.is_favorite)
-        self.segmented_tabs.set_item_text(0, f"全部 ({len(self.tracks)})")
-        self.segmented_tabs.set_item_text(1, f"喜欢 ({fav_count})")
+    def _matches_search(self, t: NordicTrack) -> bool:
+        if not self.search_keyword:
+            return True
+        kw = self.search_keyword
+        return (
+            kw in t.title.lower()
+            or kw in t.artist.lower()
+            or kw in (t.album or "").lower()
+        )
 
+    def _apply_visibility_filter(self) -> None:
+        visible_count = 0
         for btn in self.item_buttons:
             t = btn.track
             match_fav = (not self.filter_favorites_only) or t.is_favorite
-            match_kw = (
-                not self.search_keyword
-                or self.search_keyword in t.title.lower()
-                or self.search_keyword in t.artist.lower()
-                or self.search_keyword in (t.album or "").lower()
-            )
-            btn.setVisible(match_fav and match_kw)
+            match_kw = self._matches_search(t)
+            group_key = getattr(btn, "_group_key", None)
+            match_grp = (group_key is None) or (group_key not in self.collapsed_groups)
+            vis = match_fav and match_kw and match_grp
+            btn.setVisible(vis)
+            if vis:
+                visible_count += 1
+        self.lbl_count.setText(f"共 {visible_count} 首")
+
+    def _sorted_indexed_tracks(self, pairs: List[tuple]) -> List[tuple]:
+        if self.sort_mode == "title":
+            return sorted(pairs, key=lambda x: (x[1].title or "").lower())
+        if self.sort_mode == "artist":
+            return sorted(pairs, key=lambda x: ((x[1].artist or "").lower(), (x[1].title or "").lower()))
+        if self.sort_mode == "album":
+            return sorted(pairs, key=lambda x: ((x[1].album or "").lower(), x[1].cue_track_num, (x[1].title or "").lower()))
+        if self.sort_mode == "duration":
+            return sorted(pairs, key=lambda x: float(x[1].duration or 0.0), reverse=True)
+        if self.sort_mode == "recent":
+            return sorted(pairs, key=lambda x: float(getattr(x[1], "added_timestamp", 0.0) or 0.0), reverse=True)
+        return pairs
+
+    def _group_key_for_track(self, t: NordicTrack) -> str:
+        if self.group_mode == "album":
+            return (t.album or "").strip() or "未知专辑"
+        if self.group_mode == "folder":
+            if t.file_path:
+                return Path(t.file_path).parent.name or "根目录"
+            return "内置曲目"
+        return (t.artist or "").strip() or "未知歌手"
+
+    def _toggle_group_collapsed(self, group_name: str) -> None:
+        if group_name in self.collapsed_groups:
+            self.collapsed_groups.remove(group_name)
+        else:
+            self.collapsed_groups.add(group_name)
+        for gbtn in self.group_buttons:
+            if gbtn.group_name == group_name:
+                gbtn.expanded = (group_name not in self.collapsed_groups)
+                gbtn.update()
+        self._apply_visibility_filter()
 
     def rebuild_list(self, tracks: List[NordicTrack], active_index: int = 0) -> None:
         self.tracks = tracks
@@ -717,22 +1322,94 @@ class NavigationPane(QWidget):
                 w.deleteLater()
 
         self.item_buttons.clear()
-        for idx, track in enumerate(tracks):
-            btn = NavTrackItemButton(idx, track, selected=(idx == active_index), parent=self.list_container)
-            btn.is_playing = self.is_playing and (idx == active_index)
-            btn.set_theme(self.theme)
-            btn.clicked.connect(lambda checked=False, i=idx: self._on_item_clicked(i))
-            btn.favoriteToggled.connect(self._on_item_fav_toggled)
-            btn.contextActionRequested.connect(self.trackActionRequested.emit)
-            btn.dragReorderRequested.connect(self._on_drag_reorder)
-            self.list_vbox.addWidget(btn)
-            self.item_buttons.append(btn)
+        self.group_buttons.clear()
+
+        if self.view_mode == 2:
+            # 自定义歌单视图
+            if not self.custom_playlists:
+                empty_lbl = QLabel("暂无自定义歌单\n点击右上角「＋新建」创建歌单", self.list_container)
+                empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
+                empty_lbl.setStyleSheet(f"color: {self.theme.slate_muted.name()}; padding: 36px 12px;")
+                self.list_vbox.addWidget(empty_lbl)
+            else:
+                if self.active_playlist_name not in self.custom_playlists:
+                    self.active_playlist_name = next(iter(self.custom_playlists.keys()), "")
+                id_map = {t.track_id: (i, t) for i, t in enumerate(tracks)}
+                pl_ids = self.custom_playlists.get(self.active_playlist_name, [])
+                pairs = [id_map[tid] for tid in pl_ids if tid in id_map]
+                if not pairs:
+                    empty_lbl = QLabel("歌单内暂无曲目\n可在列表右键将歌曲「添加到歌单」", self.list_container)
+                    empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    empty_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
+                    empty_lbl.setStyleSheet(f"color: {self.theme.slate_muted.name()}; padding: 36px 12px;")
+                    self.list_vbox.addWidget(empty_lbl)
+                else:
+                    for idx, track in pairs:
+                        self._add_track_button(idx, track, in_custom_playlist=True)
+
+        elif self.view_mode == 3:
+            # 分类折叠视图 (按歌手 / 专辑 / 文件夹)
+            groups: Dict[str, List[tuple]] = {}
+            for idx, track in enumerate(tracks):
+                g_key = self._group_key_for_track(track)
+                groups.setdefault(g_key, []).append((idx, track))
+
+            for g_name in sorted(groups.keys(), key=lambda s: s.lower()):
+                g_pairs = self._sorted_indexed_tracks(groups[g_name])
+                is_exp = (g_name not in self.collapsed_groups)
+                g_btn = NavGroupHeaderButton(
+                    g_name,
+                    len(g_pairs),
+                    expanded=is_exp,
+                    theme=self.theme,
+                    parent=self.list_container,
+                )
+                g_btn.clicked.connect(lambda _=False, gn=g_name: self._toggle_group_collapsed(gn))
+                self.list_vbox.addWidget(g_btn)
+                self.group_buttons.append(g_btn)
+
+                for idx, track in g_pairs:
+                    btn = self._add_track_button(idx, track, in_custom_playlist=False)
+                    btn._group_key = g_name
+
+        else:
+            # 全部 (0) 或 喜欢 (1) 视图
+            all_pairs = list(enumerate(tracks))
+            sorted_pairs = self._sorted_indexed_tracks(all_pairs)
+            for idx, track in sorted_pairs:
+                self._add_track_button(idx, track, in_custom_playlist=False)
 
         self.list_vbox.addStretch(1)
+        self._update_sub_bar_ui()
         self._apply_visibility_filter()
 
+    def _add_track_button(
+        self,
+        idx: int,
+        track: NordicTrack,
+        in_custom_playlist: bool = False,
+    ) -> NavTrackItemButton:
+        btn = NavTrackItemButton(
+            idx,
+            track,
+            selected=(idx == self.active_index),
+            in_custom_playlist=in_custom_playlist,
+            parent=self.list_container,
+        )
+        btn.is_playing = self.is_playing and (idx == self.active_index)
+        btn.set_theme(self.theme)
+        btn.set_backdrop_material(getattr(self, "backdrop_material", "mica"))
+        btn.clicked.connect(lambda checked=False, i=idx: self._on_item_clicked(i))
+        btn.favoriteToggled.connect(self._on_item_fav_toggled)
+        btn.contextActionRequested.connect(self.trackActionRequested.emit)
+        btn.dragReorderRequested.connect(self._on_drag_reorder)
+        self.list_vbox.addWidget(btn)
+        self.item_buttons.append(btn)
+        return btn
+
     def _on_drag_reorder(self, from_idx: int, to_idx: int) -> None:
-        if self.filter_favorites_only or self.search_keyword:
+        if self.view_mode != 0 or self.sort_mode != "default" or self.search_keyword:
             return
         clamped_to = max(0, min(len(self.tracks) - 1, to_idx))
         if clamped_to != from_idx:
@@ -743,9 +1420,10 @@ class NavigationPane(QWidget):
         self.favoriteChanged.emit(index)
 
     def refresh_item(self, index: int) -> None:
-        if 0 <= index < len(self.item_buttons):
-            self.item_buttons[index].refresh_thumbnail()
-            self.item_buttons[index].update()
+        for btn in self.item_buttons:
+            if btn.index == index:
+                btn.refresh_thumbnail()
+                btn.update()
         self._apply_visibility_filter()
 
     def _on_item_clicked(self, index: int) -> None:
@@ -754,19 +1432,37 @@ class NavigationPane(QWidget):
 
     def set_active_index(self, index: int) -> None:
         self.active_index = index
-        for i, btn in enumerate(self.item_buttons):
-            new_sel = (i == index)
+        for btn in self.item_buttons:
+            new_sel = (btn.index == index)
             new_play = self.is_playing and new_sel
             if btn.is_selected != new_sel or btn.is_playing != new_play:
                 btn.is_selected = new_sel
                 btn.is_playing = new_play
                 btn.update()
 
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        if hasattr(self, "segmented_tabs"):
+            self.segmented_tabs.set_backdrop_material(material)
+        if hasattr(self, "search_box"):
+            self.search_box.set_backdrop_material(material)
+        if hasattr(self, "btn_import_split"):
+            self.btn_import_split.set_backdrop_material(material)
+        self._update_sub_bar_ui()
+        for btn in self.item_buttons:
+            if hasattr(btn, "set_backdrop_material"):
+                btn.set_backdrop_material(material)
+        self.update()
+
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
         self.segmented_tabs.set_theme(theme)
         self.search_box.set_theme(theme)
         self.btn_import_split.set_theme(theme)
+        self._update_sub_bar_ui()
+        for gbtn in self.group_buttons:
+            gbtn.set_theme(theme)
         for btn in self.item_buttons:
             btn.set_theme(theme)
         self.update()

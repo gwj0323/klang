@@ -298,6 +298,8 @@ class WinUISegmentedControl(QWidget):
         self.hovered_index: int = -1
         self.pill_pos: float = 0.0
         self.theme: NordicThemeColors = DAYLIGHT_THEME
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self.setFixedHeight(32)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
@@ -308,6 +310,11 @@ class WinUISegmentedControl(QWidget):
         seg_curve.setOvershoot(1.16)
         self._anim.setEasingCurve(seg_curve)
         self._anim.valueChanged.connect(self._on_anim_val)
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def _on_anim_val(self, val: float) -> None:
         self.pill_pos = float(val)
@@ -382,11 +389,20 @@ class WinUISegmentedControl(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        is_dusk = self.theme.name == "dusk"
         outer_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         outer_path = QPainterPath()
         outer_path.addRoundedRect(outer_rect, 7.0, 7.0)
-        painter.fillPath(outer_path, self.theme.oat_surface)
-        painter.setPen(QPen(self.theme.stroke_outer, 1.0))
+
+        if self.is_translucent_backdrop:
+            track_fill = QColor(255, 255, 255, 14 if is_dusk else 95)
+            track_border = QColor(255, 255, 255, 25 if is_dusk else 140)
+        else:
+            track_fill = self.theme.oat_surface
+            track_border = self.theme.stroke_outer
+
+        painter.fillPath(outer_path, track_fill)
+        painter.setPen(QPen(track_border, 1.0))
         painter.drawPath(outer_path)
 
         n = len(self.items)
@@ -394,14 +410,35 @@ class WinUISegmentedControl(QWidget):
         usable_w = self.width() - pad * 2.0
         seg_w = usable_w / n
 
+        # 悬浮未选中的段落微光提示
+        if 0 <= self.hovered_index < n and self.hovered_index != self.current_index:
+            hov_x = pad + self.hovered_index * seg_w
+            hov_rect = QRectF(hov_x, pad, seg_w, self.height() - pad * 2.0)
+            hov_path = QPainterPath()
+            hov_path.addRoundedRect(hov_rect, 5.0, 5.0)
+            hov_fill = (
+                (QColor(255, 255, 255, 20) if is_dusk else QColor(255, 255, 255, 75))
+                if self.is_translucent_backdrop
+                else self.theme.subtle_hover
+            )
+            painter.fillPath(hov_path, hov_fill)
+
         # 滑动胶囊选中背景
         if self.current_index >= 0:
             pill_x = pad + self.pill_pos * seg_w
             pill_rect = QRectF(pill_x, pad, seg_w, self.height() - pad * 2.0)
             pill_path = QPainterPath()
             pill_path.addRoundedRect(pill_rect, 5.0, 5.0)
-            painter.fillPath(pill_path, self.theme.card_elevated)
-            painter.setPen(QPen(self.theme.sage_border, 1.0))
+
+            if self.is_translucent_backdrop:
+                pill_fill = QColor(255, 255, 255, 38 if is_dusk else 205)
+                pill_border = QColor(255, 255, 255, 60 if is_dusk else 240)
+            else:
+                pill_fill = self.theme.card_elevated
+                pill_border = self.theme.sage_border
+
+            painter.fillPath(pill_path, pill_fill)
+            painter.setPen(QPen(pill_border, 1.0))
             painter.drawPath(pill_path)
 
             # 绘制底部鼠尾草绿短横线指示条
@@ -573,6 +610,8 @@ class WinUISearchBox(QWidget):
         super().__init__(parent)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self._focus_progress: float = 0.0
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self.setFixedHeight(32)
 
         self._focus_anim = QVariantAnimation(self)
@@ -592,6 +631,11 @@ class WinUISearchBox(QWidget):
         self.edit.returnPressed.connect(self.returnPressed.emit)
         self.edit.installEventFilter(self)
         layout.addWidget(self.edit)
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def _on_focus_anim(self, val: float) -> None:
         self._focus_progress = float(val)
@@ -661,10 +705,21 @@ class WinUISearchBox(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, 6.5, 6.5)
 
-        painter.fillPath(path, self.theme.card_elevated)
-        border_col = (
-            self.theme.sage_border if self._focus_progress > 0.3 else self.theme.stroke_outer
-        )
+        is_dusk = self.theme.name == "dusk"
+        if self.is_translucent_backdrop:
+            if is_dusk:
+                bg = QColor(255, 255, 255, int(16 + 22 * self._focus_progress))
+                border_col = self.theme.sage_border if self._focus_progress > 0.3 else QColor(255, 255, 255, 30)
+            else:
+                bg = QColor(255, 255, 255, int(115 + 75 * self._focus_progress))
+                border_col = self.theme.sage_border if self._focus_progress > 0.3 else QColor(255, 255, 255, 150)
+        else:
+            bg = self.theme.card_elevated
+            border_col = (
+                self.theme.sage_border if self._focus_progress > 0.3 else self.theme.stroke_outer
+            )
+
+        painter.fillPath(path, bg)
         painter.setPen(QPen(border_col, 1.0))
         painter.drawPath(path)
 
@@ -707,11 +762,18 @@ class WinUICheckChip(QPushButton):
         super().__init__(text, parent)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self._checked = checked
+        self.backdrop_material: str = "mica"
+        self.is_translucent_backdrop: bool = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(30)
         self.setFont(get_nordic_font(12, QFont.Weight.Medium))
         fm = self.fontMetrics()
         self.setFixedWidth(fm.horizontalAdvance(text) + 36)
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def isChecked(self) -> bool:
         return self._checked
@@ -741,17 +803,26 @@ class WinUICheckChip(QPushButton):
         path = QPainterPath()
         path.addRoundedRect(rect, 6.0, 6.0)
 
+        is_dusk = self.theme.name == "dusk"
         if self._checked:
-            bg = self.theme.sage_soft
-            border = self.theme.sage_border
+            bg = QColor(140, 161, 150, 60) if is_dusk else QColor(110, 130, 119, 52)
+            border = QColor(140, 161, 150, 130) if is_dusk else QColor(110, 130, 119, 120)
             fg = self.theme.charcoal
         elif self.underMouse():
-            bg = self.theme.subtle_hover
-            border = self.theme.stroke_outer
+            if self.is_translucent_backdrop:
+                bg = QColor(255, 255, 255, 36 if is_dusk else 180)
+                border = QColor(255, 255, 255, 55 if is_dusk else 220)
+            else:
+                bg = self.theme.subtle_hover
+                border = self.theme.stroke_outer
             fg = self.theme.charcoal
         else:
-            bg = self.theme.oat_surface
-            border = self.theme.stroke_outer
+            if self.is_translucent_backdrop:
+                bg = QColor(255, 255, 255, 18 if is_dusk else 115)
+                border = QColor(255, 255, 255, 32 if is_dusk else 150)
+            else:
+                bg = self.theme.oat_surface
+                border = self.theme.stroke_outer
             fg = self.theme.slate_muted
 
         painter.fillPath(path, bg)
@@ -808,7 +879,10 @@ class WinUIFlyoutMenu(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         row_h = 34
-        w = 216
+        from PyQt6.QtGui import QFontMetrics
+        metrics = QFontMetrics(get_nordic_font(12, QFont.Weight.Medium))
+        max_txt_w = max((metrics.horizontalAdvance(lbl) for _, _, lbl in items), default=150)
+        w = max(216, min(380, max_txt_w + 54))
         h = len(items) * row_h + 12
         self.setFixedSize(w, h)
 
