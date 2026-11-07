@@ -600,12 +600,12 @@ class NavTrackItemButton(QPushButton):
 
         is_dusk = self.theme.name == "dusk"
         if self.is_selected:
-            if self.is_translucent_backdrop:
-                sel_bg = QColor(255, 255, 255, 22 if is_dusk else 140)
-                sel_bd = QColor(255, 255, 255, 38 if is_dusk else 180)
+            if is_dusk:
+                sel_bg = QColor(255, 255, 255, 22 if self.is_translucent_backdrop else 32)
+                sel_bd = QColor(255, 255, 255, 38 if self.is_translucent_backdrop else 50)
             else:
-                sel_bg = self.theme.oat_surface
-                sel_bd = self.theme.stroke_outer
+                sel_bg = QColor(255, 255, 255, 220)
+                sel_bd = QColor(0, 0, 0, 30)
             painter.fillPath(path, sel_bg)
             painter.setPen(QPen(sel_bd, 1.0))
             painter.drawPath(path)
@@ -801,19 +801,26 @@ class UnifiedImportSplitButton(QPushButton):
         path.addRoundedRect(rect, 7.0, 7.0)
 
         is_dusk = self.theme.name == "dusk"
-        if self.is_translucent_backdrop:
-            if is_dusk:
+        if is_dusk:
+            if self.is_translucent_backdrop:
                 bg = QColor(255, 255, 255, int(18 + 20 * self._hover_alpha))
                 border = QColor(255, 255, 255, int(32 + 25 * self._hover_alpha))
                 div_col = QColor(255, 255, 255, 20)
             else:
-                bg = QColor(255, 255, 255, int(120 + 75 * self._hover_alpha))
-                border = QColor(255, 255, 255, int(160 + 70 * self._hover_alpha))
-                div_col = QColor(38, 41, 46, 20)
+                bg = QColor(self.theme.sage_soft if self._hover_alpha > 0.3 else self.theme.oat_surface)
+                border = self.theme.sage_border if self._hover_alpha > 0.3 else self.theme.stroke_outer
+                div_col = self.theme.divider
+            fg = self.theme.charcoal if self._hover_alpha > 0.2 else self.theme.slate_dark
         else:
-            bg = QColor(self.theme.sage_soft if self._hover_alpha > 0.3 else self.theme.oat_surface)
-            border = self.theme.sage_border if self._hover_alpha > 0.3 else self.theme.stroke_outer
-            div_col = self.theme.divider
+            # 浅色模式下：高白度底色配合清晰暗烟描边与高对比度文字
+            bg = QColor(255, 255, 255, int(195 + 60 * self._hover_alpha))
+            border = (
+                self.theme.sage_border
+                if self._hover_alpha > 0.4
+                else QColor(0, 0, 0, int(28 + 22 * self._hover_alpha))
+            )
+            div_col = QColor(0, 0, 0, 26)
+            fg = QColor("#181B1E") if self._hover_alpha > 0.2 else QColor("#282D34")
 
         painter.fillPath(path, bg)
         painter.setPen(QPen(border, 1.0))
@@ -823,7 +830,6 @@ class UnifiedImportSplitButton(QPushButton):
         painter.setPen(QPen(div_col, 1.0))
         painter.drawLine(QPointF(split_x, 7.0), QPointF(split_x, self.height() - 7.0))
 
-        fg = self.theme.charcoal if self._hover_alpha > 0.2 else self.theme.slate_dark
         draw_nordic_icon(
             painter,
             "plus",
@@ -1131,27 +1137,32 @@ class NavigationPane(QWidget):
         t = self.theme
         is_trans = getattr(self, "is_translucent_backdrop", True)
         is_dusk = t.name == "dusk"
-        if is_trans:
-            bg_val = "rgba(255, 255, 255, 0.08)" if is_dusk else "rgba(255, 255, 255, 0.48)"
-            bd_val = "rgba(255, 255, 255, 0.14)" if is_dusk else "rgba(255, 255, 255, 0.65)"
-            hov_bg = "rgba(255, 255, 255, 0.15)" if is_dusk else "rgba(255, 255, 255, 0.75)"
+        if is_dusk:
+            bg_val = "rgba(255, 255, 255, 0.08)"
+            bd_val = "rgba(255, 255, 255, 0.14)"
+            hov_bg = "rgba(255, 255, 255, 0.15)"
             pill_style = (
                 f"QPushButton {{ background: {bg_val}; color: {t.charcoal.name()}; "
                 f"border: 1px solid {bd_val}; border-radius: 5px; padding: 0 8px; }}"
                 f"QPushButton:hover {{ border-color: {t.sage_border.name()}; background: {hov_bg}; }}"
             )
+            btn_sort_color = t.slate_muted.name()
+            count_color = t.slate_muted.name()
         else:
             pill_style = (
-                f"QPushButton {{ background: {t.oat_surface.name()}; color: {t.charcoal.name()}; "
-                f"border: 1px solid {t.stroke_outer.name()}; border-radius: 5px; padding: 0 8px; }}"
-                f"QPushButton:hover {{ border-color: {t.sage_border.name()}; }}"
+                "QPushButton { background: rgba(255, 255, 255, 0.88); color: #22262B; "
+                "border: 1px solid rgba(0, 0, 0, 0.14); border-radius: 5px; padding: 0 8px; font-weight: 500; }"
+                f"QPushButton:hover {{ border-color: {t.sage_border.name()}; background: #FFFFFF; }}"
             )
+            btn_sort_color = "#3A4048"
+            count_color = "#424850"
+
         muted_btn_style = (
-            f"QPushButton {{ background: transparent; color: {t.slate_muted.name()}; "
-            f"border: none; padding: 0 4px; }}"
+            f"QPushButton {{ background: transparent; color: {btn_sort_color}; "
+            f"border: none; padding: 0 4px; font-weight: 500; }}"
             f"QPushButton:hover {{ color: {t.charcoal.name()}; }}"
         )
-        self.lbl_count.setStyleSheet(f"color: {t.slate_muted.name()}; background: transparent;")
+        self.lbl_count.setStyleSheet(f"color: {count_color}; background: transparent; font-weight: 500;")
         self.btn_sub_selector.setStyleSheet(pill_style)
         self.btn_new_playlist.setStyleSheet(pill_style)
         self.btn_del_playlist.setStyleSheet(muted_btn_style)

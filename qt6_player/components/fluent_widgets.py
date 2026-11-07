@@ -390,16 +390,22 @@ class WinUISegmentedControl(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         is_dusk = self.theme.name == "dusk"
+        is_enabled = self.isEnabled()
         outer_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         outer_path = QPainterPath()
         outer_path.addRoundedRect(outer_rect, 7.0, 7.0)
 
-        if self.is_translucent_backdrop:
-            track_fill = QColor(255, 255, 255, 14 if is_dusk else 95)
-            track_border = QColor(255, 255, 255, 25 if is_dusk else 140)
+        if is_dusk:
+            if self.is_translucent_backdrop:
+                track_fill = QColor(255, 255, 255, 14)
+                track_border = QColor(255, 255, 255, 25)
+            else:
+                track_fill = self.theme.oat_surface
+                track_border = self.theme.stroke_outer
         else:
-            track_fill = self.theme.oat_surface
-            track_border = self.theme.stroke_outer
+            # 浅色模式下：采用微凹陷槽位质感与暗烟色外描边，彻底解决在白色/云母底色上边界发虚不可读问题
+            track_fill = QColor(0, 0, 0, 14 if is_enabled else 10)
+            track_border = QColor(0, 0, 0, 28 if is_enabled else 18)
 
         painter.fillPath(outer_path, track_fill)
         painter.setPen(QPen(track_border, 1.0))
@@ -411,16 +417,19 @@ class WinUISegmentedControl(QWidget):
         seg_w = usable_w / n
 
         # 悬浮未选中的段落微光提示
-        if 0 <= self.hovered_index < n and self.hovered_index != self.current_index:
+        if is_enabled and 0 <= self.hovered_index < n and self.hovered_index != self.current_index:
             hov_x = pad + self.hovered_index * seg_w
             hov_rect = QRectF(hov_x, pad, seg_w, self.height() - pad * 2.0)
             hov_path = QPainterPath()
             hov_path.addRoundedRect(hov_rect, 5.0, 5.0)
-            hov_fill = (
-                (QColor(255, 255, 255, 20) if is_dusk else QColor(255, 255, 255, 75))
-                if self.is_translucent_backdrop
-                else self.theme.subtle_hover
-            )
+            if is_dusk:
+                hov_fill = (
+                    QColor(255, 255, 255, 20)
+                    if self.is_translucent_backdrop
+                    else self.theme.subtle_hover
+                )
+            else:
+                hov_fill = QColor(0, 0, 0, 12)
             painter.fillPath(hov_path, hov_fill)
 
         # 滑动胶囊选中背景
@@ -430,12 +439,22 @@ class WinUISegmentedControl(QWidget):
             pill_path = QPainterPath()
             pill_path.addRoundedRect(pill_rect, 5.0, 5.0)
 
-            if self.is_translucent_backdrop:
-                pill_fill = QColor(255, 255, 255, 38 if is_dusk else 205)
-                pill_border = QColor(255, 255, 255, 60 if is_dusk else 240)
+            if is_dusk:
+                if self.is_translucent_backdrop:
+                    pill_fill = QColor(255, 255, 255, 38)
+                    pill_border = QColor(255, 255, 255, 60)
+                else:
+                    pill_fill = self.theme.card_elevated
+                    pill_border = self.theme.sage_border
             else:
-                pill_fill = self.theme.card_elevated
-                pill_border = self.theme.sage_border
+                # 浅色模式下：带有细腻漫反射下沉投影与清晰边界的实体白底胶囊
+                shadow_rect = pill_rect.translated(0.0, 0.8)
+                shadow_path = QPainterPath()
+                shadow_path.addRoundedRect(shadow_rect, 5.0, 5.0)
+                painter.fillPath(shadow_path, QColor(0, 0, 0, 14 if is_enabled else 8))
+
+                pill_fill = QColor(255, 255, 255, 250 if is_enabled else 210)
+                pill_border = QColor(0, 0, 0, 32 if is_enabled else 20)
 
             painter.fillPath(pill_path, pill_fill)
             painter.setPen(QPen(pill_border, 1.0))
@@ -446,7 +465,8 @@ class WinUISegmentedControl(QWidget):
             bar_rect = QRectF(pill_rect.center().x() - bar_w / 2.0, pill_rect.bottom() - 2.5, bar_w, 2.0)
             bar_path = QPainterPath()
             bar_path.addRoundedRect(bar_rect, 1.0, 1.0)
-            painter.fillPath(bar_path, self.theme.sage_accent)
+            bar_color = self.theme.sage_accent if is_enabled else self.theme.slate_faint
+            painter.fillPath(bar_path, bar_color)
 
         # 绘制各分段文本
         for i, label in enumerate(self.items):
@@ -455,12 +475,24 @@ class WinUISegmentedControl(QWidget):
             painter.setFont(
                 get_nordic_font(12, QFont.Weight.DemiBold if is_cur else QFont.Weight.Medium)
             )
-            if is_cur:
-                painter.setPen(self.theme.charcoal)
-            elif i == self.hovered_index:
-                painter.setPen(self.theme.slate_dark)
+            if not is_enabled:
+                text_col = self.theme.slate_dark if is_cur else self.theme.slate_faint
+            elif is_dusk:
+                if is_cur:
+                    text_col = self.theme.charcoal
+                elif i == self.hovered_index:
+                    text_col = self.theme.slate_dark
+                else:
+                    text_col = self.theme.slate_muted
             else:
-                painter.setPen(self.theme.slate_muted)
+                # 浅色模式下：未选中选项使用高对比度深石板灰，绝不发灰泛白
+                if is_cur:
+                    text_col = QColor("#14171A")
+                elif i == self.hovered_index:
+                    text_col = QColor("#181B1E")
+                else:
+                    text_col = QColor("#3A4048")
+            painter.setPen(text_col)
             painter.drawText(item_rect, int(Qt.AlignmentFlag.AlignCenter), label)
 
 
@@ -555,6 +587,7 @@ class WinUIToggleSwitch(QWidget):
         track_path.addRoundedRect(track_rect, 10.0, 10.0)
 
         t = self._thumb_pos
+        is_dusk = self.theme.name == "dusk"
         if self.isEnabled():
             if t > 0.01:
                 accent = QColor(self.theme.sage_accent)
@@ -565,8 +598,12 @@ class WinUIToggleSwitch(QWidget):
                 border_col.setAlpha(int(255 * t + 70 * (1.0 - t)))
                 painter.setPen(QPen(border_col, 1.2))
             else:
-                painter.fillPath(track_path, self.theme.oat_surface)
-                painter.setPen(QPen(self.theme.stroke_outer if not self._is_hovered else self.theme.slate_muted, 1.2))
+                if is_dusk:
+                    painter.fillPath(track_path, self.theme.oat_surface)
+                    painter.setPen(QPen(self.theme.stroke_outer if not self._is_hovered else self.theme.slate_muted, 1.2))
+                else:
+                    painter.fillPath(track_path, QColor(0, 0, 0, 14 if not self._is_hovered else 22))
+                    painter.setPen(QPen(QColor(0, 0, 0, 42 if not self._is_hovered else 65), 1.2))
         else:
             painter.fillPath(track_path, self.theme.oat_surface)
             painter.setPen(QPen(self.theme.stroke_inner, 1.0))
@@ -586,16 +623,23 @@ class WinUIToggleSwitch(QWidget):
 
         if self.isEnabled():
             if t > 0.5:
-                painter.fillPath(thumb_path, self.theme.mist_white)
+                painter.fillPath(thumb_path, self.theme.mist_white if is_dusk else QColor("#FFFFFF"))
             else:
-                painter.fillPath(thumb_path, self.theme.charcoal if self._is_hovered else self.theme.slate_dark)
+                painter.fillPath(
+                    thumb_path,
+                    self.theme.charcoal if self._is_hovered else (self.theme.slate_dark if is_dusk else QColor("#5A626E"))
+                )
         else:
             painter.fillPath(thumb_path, self.theme.slate_faint)
 
         label = self.text_on if self._checked else self.text_off
         if label:
             painter.setFont(get_nordic_font(11, QFont.Weight.Medium))
-            painter.setPen(self.theme.charcoal if self._checked else self.theme.slate_muted)
+            if is_dusk:
+                text_col = self.theme.charcoal if self._checked else self.theme.slate_muted
+            else:
+                text_col = QColor("#181B1E") if self._checked else QColor("#4A5058")
+            painter.setPen(text_col)
             text_rect = QRectF(track_w + 8.0, 0.0, self.width() - track_w - 8.0, self.height())
             painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), label)
 
@@ -668,7 +712,7 @@ class WinUISearchBox(QWidget):
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
         fg = theme.charcoal.name()
-        placeholder_col = theme.slate_faint.name()
+        placeholder_col = theme.slate_faint.name() if theme.name == "dusk" else "#68707B"
         self.edit.setStyleSheet(
             f"""
             QLineEdit {{
@@ -706,18 +750,19 @@ class WinUISearchBox(QWidget):
         path.addRoundedRect(rect, 6.5, 6.5)
 
         is_dusk = self.theme.name == "dusk"
-        if self.is_translucent_backdrop:
-            if is_dusk:
+        if is_dusk:
+            if self.is_translucent_backdrop:
                 bg = QColor(255, 255, 255, int(16 + 22 * self._focus_progress))
                 border_col = self.theme.sage_border if self._focus_progress > 0.3 else QColor(255, 255, 255, 30)
             else:
-                bg = QColor(255, 255, 255, int(115 + 75 * self._focus_progress))
-                border_col = self.theme.sage_border if self._focus_progress > 0.3 else QColor(255, 255, 255, 150)
+                bg = self.theme.card_elevated
+                border_col = (
+                    self.theme.sage_border if self._focus_progress > 0.3 else self.theme.stroke_outer
+                )
         else:
-            bg = self.theme.card_elevated
-            border_col = (
-                self.theme.sage_border if self._focus_progress > 0.3 else self.theme.stroke_outer
-            )
+            # 浅色模式下：高白度底色配合清晰暗烟色描边与聚焦鼠尾草绿动效
+            bg = QColor(255, 255, 255, int(195 + 60 * self._focus_progress))
+            border_col = self.theme.sage_accent if self._focus_progress > 0.3 else QColor(0, 0, 0, 28)
 
         painter.fillPath(path, bg)
         painter.setPen(QPen(border_col, 1.0))

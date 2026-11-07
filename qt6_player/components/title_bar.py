@@ -100,37 +100,48 @@ class WinUIChipButton(QPushButton):
         path.addRoundedRect(rect, 6.0, 6.0)
 
         is_dusk = self.theme.name == "dusk"
-        if self.is_translucent_backdrop:
-            if self.is_chip_active:
-                bg = QColor(140, 161, 150, 60) if is_dusk else QColor(110, 130, 119, 52)
-                border = QColor(140, 161, 150, 130) if is_dusk else QColor(110, 130, 119, 120)
-                text_color = self.theme.charcoal
-            else:
-                if is_dusk:
+        if is_dusk:
+            if self.is_translucent_backdrop:
+                if self.is_chip_active:
+                    bg = QColor(140, 161, 150, 60)
+                    border = QColor(140, 161, 150, 130)
+                    text_color = self.theme.charcoal
+                else:
                     a_bg = int(18 + 22 * self._hover_alpha)
                     a_bd = int(32 + 25 * self._hover_alpha)
-                else:
-                    a_bg = int(120 + 75 * self._hover_alpha)
-                    a_bd = int(155 + 75 * self._hover_alpha)
-                bg = QColor(255, 255, 255, a_bg)
-                border = QColor(255, 255, 255, a_bd)
-                text_color = self.theme.charcoal if self._hover_alpha > 0.35 else self.theme.slate_dark
-        else:
-            if self.is_chip_active:
-                bg = self.theme.sage_soft
-                border = self.theme.sage_border
-                text_color = self.theme.charcoal
+                    bg = QColor(255, 255, 255, a_bg)
+                    border = QColor(255, 255, 255, a_bd)
+                    text_color = self.theme.charcoal if self._hover_alpha > 0.35 else self.theme.slate_dark
             else:
-                bg = QColor(self.theme.oat_surface)
-                if self._hover_alpha > 0.01:
-                    hov = self.theme.card_elevated
-                    r = int(bg.red() + (hov.red() - bg.red()) * self._hover_alpha)
-                    g = int(bg.green() + (hov.green() - bg.green()) * self._hover_alpha)
-                    b = int(bg.blue() + (hov.blue() - bg.blue()) * self._hover_alpha)
-                    a = int(bg.alpha() + (hov.alpha() - bg.alpha()) * self._hover_alpha)
-                    bg = QColor(r, g, b, a)
-                border = self.theme.stroke_outer
-                text_color = self.theme.charcoal if self._hover_alpha > 0.4 else self.theme.slate_dark
+                if self.is_chip_active:
+                    bg = self.theme.sage_soft
+                    border = self.theme.sage_border
+                    text_color = self.theme.charcoal
+                else:
+                    bg = QColor(self.theme.oat_surface)
+                    if self._hover_alpha > 0.01:
+                        hov = self.theme.card_elevated
+                        r = int(bg.red() + (hov.red() - bg.red()) * self._hover_alpha)
+                        g = int(bg.green() + (hov.green() - bg.green()) * self._hover_alpha)
+                        b = int(bg.blue() + (hov.blue() - bg.blue()) * self._hover_alpha)
+                        a = int(bg.alpha() + (hov.alpha() - bg.alpha()) * self._hover_alpha)
+                        bg = QColor(r, g, b, a)
+                    border = self.theme.stroke_outer
+                    text_color = self.theme.charcoal if self._hover_alpha > 0.4 else self.theme.slate_dark
+        else:
+            # 浅色模式下：高白度底色配合清晰暗烟色描边与高对比度文字，彻底告别白底白字发虚
+            if self.is_chip_active:
+                bg = QColor(110, 130, 119, 45)
+                border = QColor(110, 130, 119, 140)
+                text_color = QColor("#181B1E")
+            else:
+                bg = QColor(255, 255, 255, int(195 + 60 * self._hover_alpha))
+                border = (
+                    self.theme.sage_border
+                    if self._hover_alpha > 0.4
+                    else QColor(0, 0, 0, int(28 + 24 * self._hover_alpha))
+                )
+                text_color = QColor("#181B1E") if self._hover_alpha > 0.3 else QColor("#282D34")
 
         painter.fillPath(path, bg)
         painter.setPen(QPen(border, 1.0))

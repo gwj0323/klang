@@ -542,8 +542,9 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         # 3. 混响强度
         rev_row = QHBoxLayout()
+        rev_row.setSpacing(10)
         lbl_rev = QLabel("混响强度", self.tab_audio)
-        lbl_rev.setFixedWidth(68)
+        lbl_rev.setFixedWidth(72)
         lbl_rev.setFont(get_nordic_font(12, QFont.Weight.Medium))
         lbl_rev.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         rev_row.addWidget(lbl_rev)
@@ -566,8 +567,9 @@ class AudioSettingsDialog(WinUIModalDialog):
         vocal_box = QVBoxLayout()
         vocal_box.setSpacing(4)
         vocal_row = QHBoxLayout()
+        vocal_row.setSpacing(10)
         lbl_vocal = QLabel("人声天平", self.tab_audio)
-        lbl_vocal.setFixedWidth(68)
+        lbl_vocal.setFixedWidth(72)
         lbl_vocal.setFont(get_nordic_font(12, QFont.Weight.Medium))
         lbl_vocal.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         vocal_row.addWidget(lbl_vocal)
@@ -705,7 +707,7 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         self._update_badge_state(is_dolby_on)
         self.spatial_controls_widget.setEnabled(is_dolby_on)
-        self.spatial_controls_opacity.setOpacity(1.0 if is_dolby_on else 0.42)
+        self.spatial_controls_opacity.setOpacity(1.0 if is_dolby_on else 0.58)
 
         self.scroll_audio = self._wrap_tab_in_scroll(self.tab_audio)
         self.stacked_layout.addWidget(self.scroll_audio)
@@ -1192,10 +1194,16 @@ class AudioSettingsDialog(WinUIModalDialog):
             )
         else:
             self.lbl_atmos_badge.setText("已关闭")
-            self.lbl_atmos_badge.setStyleSheet(
-                f"background: rgba(150, 150, 150, 0.12); color: {self.theme.slate_muted.name()}; "
-                "border: 1px solid rgba(150, 150, 150, 0.25); border-radius: 4px; padding: 1px 6px;"
-            )
+            if self.theme.name == "dusk":
+                self.lbl_atmos_badge.setStyleSheet(
+                    f"background: rgba(150, 150, 150, 0.12); color: {self.theme.slate_muted.name()}; "
+                    "border: 1px solid rgba(150, 150, 150, 0.25); border-radius: 4px; padding: 1px 6px;"
+                )
+            else:
+                self.lbl_atmos_badge.setStyleSheet(
+                    "background: rgba(0, 0, 0, 0.06); color: #4A5058; "
+                    "border: 1px solid rgba(0, 0, 0, 0.14); border-radius: 4px; padding: 1px 6px;"
+                )
 
     def _on_spatial_slider_changed(self, _val: float) -> None:
         width = round(0.8 + self.spatial_width_slider.ratio * 1.0, 2)
@@ -1285,10 +1293,16 @@ class AudioSettingsDialog(WinUIModalDialog):
             )
         else:
             self.lbl_hp_badge.setText("已关闭")
-            self.lbl_hp_badge.setStyleSheet(
-                f"background: rgba(150, 150, 150, 0.12); color: {self.theme.slate_muted.name()}; "
-                "border: 1px solid rgba(150, 150, 150, 0.25); border-radius: 4px; padding: 1px 6px;"
-            )
+            if self.theme.name == "dusk":
+                self.lbl_hp_badge.setStyleSheet(
+                    f"background: rgba(150, 150, 150, 0.12); color: {self.theme.slate_muted.name()}; "
+                    "border: 1px solid rgba(150, 150, 150, 0.25); border-radius: 4px; padding: 1px 6px;"
+                )
+            else:
+                self.lbl_hp_badge.setStyleSheet(
+                    "background: rgba(0, 0, 0, 0.06); color: #4A5058; "
+                    "border: 1px solid rgba(0, 0, 0, 0.14); border-radius: 4px; padding: 1px 6px;"
+                )
 
     def _on_open_headphone_flyout(self) -> None:
         items: List[Tuple[str, str, str]] = []

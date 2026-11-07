@@ -111,13 +111,17 @@ class WinUISlider(QWidget):
         usable_w = max(1.0, self.width() - margin * 2.0)
         thumb_x = margin + usable_w * self.ratio
 
+        is_dusk = self.theme.name == "dusk"
         track_h = 3.8 + 1.8 * self._hover_prog
         track_r = track_h / 2.0
         track_rect = QRectF(margin, cy - track_r, usable_w, track_h)
         track_path = QPainterPath()
         track_path.addRoundedRect(track_rect, track_r, track_r)
-        track_bg = QColor(self.theme.slate_muted)
-        track_bg.setAlpha(46)
+        if is_dusk:
+            track_bg = QColor(self.theme.slate_muted)
+            track_bg.setAlpha(46)
+        else:
+            track_bg = QColor(0, 0, 0, 32)
         painter.fillPath(track_path, track_bg)
 
         if self.ratio > 0.001:
@@ -136,8 +140,9 @@ class WinUISlider(QWidget):
             painter.drawEllipse(QPointF(thumb_x, cy), halo_r, halo_r)
 
         outer_r = 7.2 + 1.2 * self._hover_prog
-        painter.setPen(QPen(self.theme.stroke_outer, 1.0))
-        painter.setBrush(self.theme.card_elevated)
+        thumb_border = self.theme.stroke_outer if is_dusk else QColor(0, 0, 0, 38)
+        painter.setPen(QPen(thumb_border, 1.0))
+        painter.setBrush(self.theme.card_elevated if is_dusk else QColor(255, 255, 255))
         painter.drawEllipse(QPointF(thumb_x, cy), outer_r, outer_r)
 
         if self.is_dragging:
@@ -323,20 +328,24 @@ class TransportIconButton(QPushButton):
                 if self.kind == "eq" and self.is_eq_active:
                     fill = QColor(140, 161, 150, 60) if is_dusk else QColor(110, 130, 119, 52)
                     border = QColor(140, 161, 150, 130) if is_dusk else QColor(110, 130, 119, 120)
-                elif self.is_translucent_backdrop:
-                    if is_dusk:
+                elif is_dusk:
+                    if self.is_translucent_backdrop:
                         fill = QColor(255, 255, 255, 36 if self.underMouse() else 18)
                         border = QColor(255, 255, 255, 55 if self.underMouse() else 32)
                     else:
-                        fill = QColor(255, 255, 255, 195 if self.underMouse() else 125)
-                        border = QColor(255, 255, 255, 230 if self.underMouse() else 160)
+                        fill = self.theme.subtle_hover if self.underMouse() else self.theme.oat_surface
+                        border = self.theme.stroke_outer
                 else:
-                    fill = self.theme.subtle_hover if self.underMouse() else self.theme.oat_surface
-                    border = self.theme.stroke_outer
+                    # 浅色模式下：清晰的实体白底与暗烟描边
+                    fill = QColor(255, 255, 255, 245 if self.underMouse() else 195)
+                    border = self.theme.sage_border if self.underMouse() else QColor(0, 0, 0, 28)
                 painter.fillPath(path, fill)
                 painter.setPen(QPen(border, 1.0))
                 painter.drawPath(path)
-            fg = self.theme.charcoal if (self.underMouse() or self.is_eq_active) else self.theme.slate_dark
+            if is_dusk:
+                fg = self.theme.charcoal if (self.underMouse() or self.is_eq_active) else self.theme.slate_dark
+            else:
+                fg = QColor("#181B1E") if (self.underMouse() or self.is_eq_active) else QColor("#282D34")
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(fg)
