@@ -11,6 +11,7 @@ from PyQt6.QtCore import (
     QTimer,
     QElapsedTimer,
     QDateTime,
+    QEvent,
     pyqtSignal,
 )
 from PyQt6.QtGui import (
@@ -29,6 +30,7 @@ from PyQt6.QtGui import (
     QMouseEvent,
     QWheelEvent,
     QKeyEvent,
+    QResizeEvent,
     QScreen,
 )
 from PyQt6.QtWidgets import (
@@ -1718,12 +1720,13 @@ class ImmersiveFullscreenWindow(QWidget):
 
     def _setup_ui(self) -> None:
         root_vbox = QVBoxLayout(self)
-        root_vbox.setContentsMargins(0, 26, 0, 30)
+        root_vbox.setContentsMargins(0, 74, 0, 30)
         root_vbox.setSpacing(0)
 
-        # 1. 顶部悬浮工具条
+        # 1. 顶部悬浮工具条 (绝对坐标悬浮于中央舞台上方，绝不因隐藏重新排版引起画面抖动上移)
         self.top_bar_widget = QWidget(self)
         self.top_bar_widget.setFixedHeight(48)
+        self.top_bar_widget.setGeometry(0, 26, max(800, self.width()), 48)
         top_hbox = QHBoxLayout(self.top_bar_widget)
         top_hbox.setContentsMargins(40, 0, 40, 0)
         top_hbox.setSpacing(12)
@@ -1798,16 +1801,14 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_exit.clicked.connect(self.exit_immersive)
         top_hbox.addWidget(self.btn_exit)
 
-        root_vbox.addWidget(self.top_bar_widget)
-
         # 2. 中间舞台左右分栏 (左黑胶唱机与封面，右大字滚动流光歌词)
-        stage_split = QWidget(self)
-        stage_split.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        split_hbox = QHBoxLayout(stage_split)
+        self.stage_split = QWidget(self)
+        self.stage_split.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        split_hbox = QHBoxLayout(self.stage_split)
         split_hbox.setContentsMargins(0, 0, 40, 0)
         split_hbox.setSpacing(36)
 
-        self.artwork_view = ImmersiveArtworkView(stage_split)
+        self.artwork_view = ImmersiveArtworkView(self.stage_split)
         self.artwork_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.artwork_view.playToggled.connect(self.playToggled.emit)
         self.artwork_view.prevClicked.connect(self.prevRequested.emit)
@@ -1817,15 +1818,50 @@ class ImmersiveFullscreenWindow(QWidget):
         self.artwork_view.volumeChanged.connect(self.volumeRequested.emit)
         split_hbox.addWidget(self.artwork_view, 45)
 
-        self.lyrics_view = ImmersiveLyricsView(stage_split)
+        self.lyrics_view = ImmersiveLyricsView(self.stage_split)
         self.lyrics_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.lyrics_view.seekRequested.connect(self.seekTimeRequested.emit)
         split_hbox.addWidget(self.lyrics_view, 55)
 
-        root_vbox.addWidget(stage_split, 1)
+        root_vbox.addWidget(self.stage_split, 1)
 
+        self.top_bar_widget.raise_()
         self._top_opacity_eff = QGraphicsOpacityEffect(self.top_bar_widget)
         self.top_bar_widget.setGraphicsEffect(self._top_opacity_eff)
+
+        self._attach_mouse_tracking_and_filter()
+
+    def _attach_mouse_tracking_and_filter(self) -> None:
+        targets = [self, getattr(self, "top_bar_widget", None), getattr(self, "stage_split", None), getattr(self, "artwork_view", None), getattr(self, "lyrics_view", None)]
+        for w in targets:
+            if w is not None:
+                try:
+                    w.setMouseTracking(True)
+                    w.removeEventFilter(self)
+                    w.installEventFilter(self)
+                    for child in w.findChildren(QWidget):
+                        child.setMouseTracking(True)
+                        child.removeEventFilter(self)
+                        child.installEventFilter(self)
+                except Exception:
+                    pass
+
+    def _wake_hud(self) -> None:
+        if self._hud_target_opacity < 0.05 or self._hud_opacity < 0.05:
+            self.unsetCursor()
+        self._hud_target_opacity = 1.0
+        self._idle_timer.start(3000)
+
+    def eventFilter(self, watched, event: QEvent) -> bool:
+        if event.type() in (
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.Wheel,
+            QEvent.Type.HoverMove,
+        ):
+            self._wake_hud()
+        return super().eventFilter(watched, event)
 
     def set_show_translation(self, show: bool) -> None:
         self.show_translation = bool(show)
@@ -1945,15 +1981,16 @@ class ImmersiveFullscreenWindow(QWidget):
         self.showFullScreen()
         self.raise_()
         self.activateWindow()
+        self.top_bar_widget.setGeometry(0, 26, self.width(), 48)
+        self.top_bar_widget.raise_()
 
         self._hud_opacity = 1.0
-        self._hud_target_opacity = 1.0
+        self._wake_hud()
+        self._attach_mouse_tracking_and_filter()
         self.top_bar_widget.setVisible(True)
         self._top_opacity_eff.setOpacity(1.0)
         self._top_opacity_eff.setEnabled(False)
         self.artwork_view.controls_opacity = 1.0
-        self.unsetCursor()
-        self._idle_timer.start(3000)
 
         if hasattr(self, "_frame_clock"):
             self._frame_clock.restart()
@@ -2022,11 +2059,14 @@ class ImmersiveFullscreenWindow(QWidget):
             self._hud_target_opacity = 0.0
             self.setCursor(Qt.CursorShape.BlankCursor)
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "top_bar_widget"):
+            self.top_bar_widget.setGeometry(0, 26, self.width(), 48)
+            self.top_bar_widget.raise_()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._hud_target_opacity < 0.05:
-            self.unsetCursor()
-        self._hud_target_opacity = 1.0
-        self._idle_timer.start(3000)
+        self._wake_hud()
         super().mouseMoveEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:

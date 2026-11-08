@@ -6,7 +6,13 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('qt6_player/assets', 'qt6_player/assets')],
-    hiddenimports=['qframelesswindow', 'win32gui', 'win32api', 'win32con', 'mutagen', 'scipy.signal', 'qt6_player.services.headphone_eq'],
+    hiddenimports=[
+        'qframelesswindow', 'win32gui', 'win32api', 'win32con', 'mutagen',
+        'scipy.signal', 'qt6_player.services.headphone_eq',
+        'pyncm', 'pyncm.apis', 'pyncm.apis.login', 'pyncm.apis.track', 'pyncm.apis.playlist', 'pyncm.apis.user',
+        'qrcode', 'PIL', 'Crypto',
+        'qt6_player.services.netease_service', 'qt6_player.components.netease_login_dialog'
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

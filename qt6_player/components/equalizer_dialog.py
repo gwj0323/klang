@@ -269,6 +269,7 @@ class AudioSettingsDialog(WinUIModalDialog):
     turntablePhysicsToggled = pyqtSignal(bool)
     vinylWarmthChanged = pyqtSignal(float)
     headphoneProfileChanged = pyqtSignal(str)
+    neteaseQualityChanged = pyqtSignal(str)
 
     # 界面与偏好设置信号
     themeChanged = pyqtSignal(str)
@@ -289,6 +290,12 @@ class AudioSettingsDialog(WinUIModalDialog):
 
     _OUTPUT_MODES = ["binaural", "surround_51", "surround_71"]
     _OUTPUT_LABELS = ["耳机双耳", "5.1 环绕", "7.1 环绕"]
+
+    _NETEASE_QUALITIES = ["standard", "higher", "lossless", "hires", "jymaster"]
+    _NETEASE_LABELS = ["标准 128k", "极高 320k", "无损 FLAC", "Hi-Res", "超清母带"]
+
+    _CACHE_LIMIT_VALUES = [500, 1024, 2048, 5120, 0]
+    _CACHE_LIMIT_LABELS = ["500 MB", "1 GB", "2 GB", "5 GB", "不限"]
 
     def __init__(
         self,
@@ -321,10 +328,13 @@ class AudioSettingsDialog(WinUIModalDialog):
         immersive_fps: int = 60,
         vinyl_mode: bool = False,
         backdrop_material: str = "mica",
+        current_netease_quality: str = "lossless",
         theme: NordicThemeColors = DAYLIGHT_THEME,
         parent: Optional[QWidget] = None,
     ):
-        super().__init__("设置", 560, 680, theme=theme, parent=parent)
+        super().__init__("设置", 560, 680, theme=theme, backdrop_material=backdrop_material, parent=parent)
+        self.backdrop_material = backdrop_material
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self.current_offset = current_offset
         self.current_reverb = current_reverb
         self.current_dolby_mode = dolby_mode
@@ -366,6 +376,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             immersive_fps,
             vinyl_mode,
             backdrop_material,
+            current_netease_quality,
         )
 
     def _apply_scroll_style(self, scroll: QScrollArea) -> None:
@@ -447,6 +458,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         immersive_fps: int,
         vinyl_mode: bool,
         backdrop_material: str = "mica",
+        current_netease_quality: str = "lossless",
     ) -> None:
         vbox = self._root_vbox
         vbox.setSpacing(14)
@@ -764,6 +776,132 @@ class AudioSettingsDialog(WinUIModalDialog):
         xfade_box.addWidget(self.crossfade_tabs)
         play_vbox.addLayout(xfade_box)
 
+        # 2.5 网易云音乐在线播放音质 (NetEase VIP Audio Quality)
+        ne_box = QVBoxLayout()
+        ne_box.setSpacing(6)
+        ne_header = QHBoxLayout()
+        lbl_ne = QLabel("网易云播放音质", self.tab_playback)
+        lbl_ne.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        lbl_ne.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        ne_header.addWidget(lbl_ne)
+
+        lbl_vip = QLabel("VIP HIGH-RES", self.tab_playback)
+        lbl_vip.setFont(get_nordic_font(9, QFont.Weight.Bold, mono=True))
+        lbl_vip.setStyleSheet(
+            f"background: {self.theme.sage_accent.name()}; color: #FFFFFF; "
+            "padding: 1px 6px; border-radius: 4px; letter-spacing: 0.5px;"
+        )
+        ne_header.addWidget(lbl_vip)
+        ne_header.addStretch(1)
+
+        from qt6_player.services.netease_service import netease_manager
+        self.lbl_ne_account = QLabel(self.tab_playback)
+        self.lbl_ne_account.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_ne_account.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        ne_header.addWidget(self.lbl_ne_account)
+
+        self.btn_ne_account_action = WinUIChipButton("退出登录", fixed_w=78, parent=self.tab_playback)
+        self.btn_ne_account_action.set_theme(self.theme)
+        ne_header.addWidget(self.btn_ne_account_action)
+
+        def _update_ne_account_ui():
+            if netease_manager.is_logged_in:
+                nick = netease_manager.user_profile.get("nickname") or "网易云用户"
+                self.lbl_ne_account.setText(f"账号: {nick}")
+                self.btn_ne_account_action.setText("退出登录")
+            else:
+                self.lbl_ne_account.setText("未登录账号")
+                self.btn_ne_account_action.setText("扫码登录")
+
+        def _on_ne_account_action():
+            if netease_manager.is_logged_in:
+                netease_manager.logout()
+                _update_ne_account_ui()
+                self.lbl_cache_size.setText(f"已占用: {netease_manager.get_cache_size_str()}")
+            else:
+                from qt6_player.components.netease_login_dialog import NeteaseLoginDialog
+                dlg = NeteaseLoginDialog(theme=self.theme, parent=self.window())
+                dlg.exec()
+                _update_ne_account_ui()
+                self.lbl_cache_size.setText(f"已占用: {netease_manager.get_cache_size_str()}")
+
+        self.btn_ne_account_action.clicked.connect(_on_ne_account_action)
+        _update_ne_account_ui()
+        netease_manager.loginStatusChanged.connect(lambda _in, _prof: _update_ne_account_ui())
+
+        ne_box.addLayout(ne_header)
+
+        self.netease_quality_tabs = WinUISegmentedControl(self._NETEASE_LABELS, self.tab_playback)
+        self.netease_quality_tabs.set_theme(self.theme)
+        init_q_idx = self._NETEASE_QUALITIES.index(current_netease_quality) if current_netease_quality in self._NETEASE_QUALITIES else 2
+        self.netease_quality_tabs.set_current_index(init_q_idx, animate=False)
+        self.netease_quality_tabs.currentIndexChanged.connect(
+            lambda idx: self.neteaseQualityChanged.emit(self._NETEASE_QUALITIES[idx])
+        )
+        ne_box.addWidget(self.netease_quality_tabs)
+
+        lbl_ne_desc = QLabel("支持最高 24-bit/192kHz 无损母带流传输与离线缓存（需 VIP 账号权限）", self.tab_playback)
+        lbl_ne_desc.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        lbl_ne_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        ne_box.addWidget(lbl_ne_desc)
+        play_vbox.addLayout(ne_box)
+
+        # 2.6 网易云本地缓存管理 (Cache Quota & Cleanup)
+        cache_box = QVBoxLayout()
+        cache_box.setSpacing(6)
+
+        cache_header = QHBoxLayout()
+        self.lbl_cache_title = QLabel("网易云本地缓存", self.tab_playback)
+        self.lbl_cache_title.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.lbl_cache_title.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        cache_header.addWidget(self.lbl_cache_title)
+
+        from qt6_player.services.netease_service import netease_manager
+        cur_limit = getattr(netease_manager, "cache_limit_mb", 2048)
+        self.lbl_cache_quota_info = QLabel("缓存配额上限", self.tab_playback)
+        self.lbl_cache_quota_info.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_cache_quota_info.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        cache_header.addWidget(self.lbl_cache_quota_info)
+        cache_header.addStretch(1)
+        cache_box.addLayout(cache_header)
+
+        self.cache_limit_tabs = WinUISegmentedControl(self._CACHE_LIMIT_LABELS, self.tab_playback)
+        self.cache_limit_tabs.set_theme(self.theme)
+        if cur_limit in self._CACHE_LIMIT_VALUES:
+            init_c_idx = self._CACHE_LIMIT_VALUES.index(cur_limit)
+        else:
+            init_c_idx = 2  # default 2GB
+        self.cache_limit_tabs.set_current_index(init_c_idx, animate=False)
+        cache_box.addWidget(self.cache_limit_tabs)
+
+        cache_action_row = QHBoxLayout()
+        cache_action_row.setSpacing(10)
+        self.lbl_cache_size = QLabel(f"已占用: {netease_manager.get_cache_size_str()}", self.tab_playback)
+        self.lbl_cache_size.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_cache_size.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        cache_action_row.addWidget(self.lbl_cache_size, 1)
+
+        self.btn_clear_cache = WinUIChipButton("清空缓存", fixed_w=78, parent=self.tab_playback)
+        self.btn_clear_cache.set_theme(self.theme)
+        cache_action_row.addWidget(self.btn_clear_cache)
+        cache_box.addLayout(cache_action_row)
+
+        def _on_cache_limit_changed(idx: int):
+            limit_val = self._CACHE_LIMIT_VALUES[idx]
+            netease_manager.set_cache_limit_mb(limit_val)
+            self.lbl_cache_size.setText(f"已占用: {netease_manager.get_cache_size_str()}")
+
+        def _on_clear_cache_clicked():
+            cnt, freed = netease_manager.clear_cache()
+            self.lbl_cache_size.setText(f"已占用: {netease_manager.get_cache_size_str()}")
+            mb_freed = freed / (1024 * 1024)
+            self.lbl_cache_quota_info.setText(f"已清空 {cnt} 首曲目 (释放 {mb_freed:.1f} MB)")
+
+        self.cache_limit_tabs.currentIndexChanged.connect(_on_cache_limit_changed)
+        self.btn_clear_cache.clicked.connect(_on_clear_cache_clicked)
+
+        play_vbox.addLayout(cache_box)
+
         # 3. 音量平衡 (ReplayGain)
         rg_row = QHBoxLayout()
         rg_text_col = QVBoxLayout()
@@ -938,9 +1076,13 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.backdrop_tabs.set_theme(self.theme)
         mat_idx = 0 if backdrop_material == "solid" else (2 if backdrop_material == "acrylic" else 1)
         self.backdrop_tabs.set_current_index(mat_idx, animate=False)
-        self.backdrop_tabs.currentIndexChanged.connect(
-            lambda idx: self.backdropMaterialChanged.emit(["solid", "mica", "acrylic"][idx])
-        )
+
+        def _on_mat_changed(idx: int):
+            mat_mode = ["solid", "mica", "acrylic"][idx]
+            self.set_backdrop_material(mat_mode)
+            self.backdropMaterialChanged.emit(mat_mode)
+
+        self.backdrop_tabs.currentIndexChanged.connect(_on_mat_changed)
         mat_box.addWidget(self.backdrop_tabs)
         ui_vbox.addLayout(mat_box)
 
@@ -1229,7 +1371,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         if not items:
             items.append(("default", "check", "系统默认输出设备"))
 
-        self._device_flyout = WinUIFlyoutMenu(items, theme=self.theme, parent=self)
+        self._device_flyout = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self)
         self._device_flyout.actionTriggered.connect(self._on_device_selected)
         global_pos = self.btn_output_device.mapToGlobal(QPoint(0, self.btn_output_device.height() + 4))
         self._device_flyout.popup_animated(global_pos)
@@ -1311,7 +1453,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             label = f"{p.name} ({p.category})" if p.category != "直通" else p.name
             items.append((pid, icon_kind, label))
 
-        self._headphone_flyout = WinUIFlyoutMenu(items, theme=self.theme, parent=self)
+        self._headphone_flyout = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self)
         self._headphone_flyout.actionTriggered.connect(self._on_headphone_selected)
         global_pos = self.btn_headphone_profile.mapToGlobal(QPoint(0, self.btn_headphone_profile.height() + 4))
         self._headphone_flyout.popup_animated(global_pos)
@@ -1348,6 +1490,16 @@ class AudioSettingsDialog(WinUIModalDialog):
         # Tab 1
         self.btn_output_device.set_theme(theme)
         self.crossfade_tabs.set_theme(theme)
+        if hasattr(self, "netease_quality_tabs"):
+            self.netease_quality_tabs.set_theme(theme)
+        if hasattr(self, "btn_ne_account_action"):
+            self.btn_ne_account_action.set_theme(theme)
+        if hasattr(self, "cache_limit_tabs"):
+            self.cache_limit_tabs.set_theme(theme)
+        if hasattr(self, "btn_clear_cache"):
+            self.btn_clear_cache.set_theme(theme)
+        if hasattr(self, "lbl_cache_title"):
+            self.lbl_cache_title.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
         self.switch_replay_gain.set_theme(theme)
         self.switch_turntable.set_theme(theme)
         self.vinyl_warmth_slider.set_theme(theme)
@@ -1370,5 +1522,63 @@ class AudioSettingsDialog(WinUIModalDialog):
             self._apply_scroll_style(self.scroll_playback)
         if hasattr(self, "scroll_ui"):
             self._apply_scroll_style(self.scroll_ui)
+
+        if hasattr(self, "_device_flyout") and self._device_flyout:
+            self._device_flyout.set_theme(theme)
+        if hasattr(self, "_headphone_flyout") and self._headphone_flyout:
+            self._headphone_flyout.set_theme(theme)
+
+        self.update()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        super().set_backdrop_material(material)
+
+        # Propagate to segmented controls
+        for tab in (
+            getattr(self, "category_tabs", None),
+            getattr(self, "preset_tabs", None),
+            getattr(self, "dolby_mode_tabs", None),
+            getattr(self, "output_tabs", None),
+            getattr(self, "crossfade_tabs", None),
+            getattr(self, "netease_quality_tabs", None),
+            getattr(self, "rate_tabs", None),
+            getattr(self, "sleep_tabs", None),
+            getattr(self, "theme_tabs", None),
+            getattr(self, "backdrop_tabs", None),
+            getattr(self, "fps_tabs", None),
+            getattr(self, "cover_mode_tabs", None),
+        ):
+            if tab and hasattr(tab, "set_backdrop_material"):
+                tab.set_backdrop_material(material)
+
+        # Propagate to chip buttons
+        for btn in (
+            getattr(self, "btn_headphone_profile", None),
+            getattr(self, "btn_preview", None),
+            getattr(self, "btn_output_device", None),
+            getattr(self, "btn_vocal_reset", None),
+            getattr(self, "btn_scrape_action", None),
+        ):
+            if btn and hasattr(btn, "set_backdrop_material"):
+                btn.set_backdrop_material(material)
+
+        # Propagate to flyout menus
+        for fly in (
+            getattr(self, "_device_flyout", None),
+            getattr(self, "_headphone_flyout", None),
+        ):
+            if fly and hasattr(fly, "set_backdrop_material"):
+                fly.set_backdrop_material(material)
+
+        # Update scroll areas
+        for scroll in (
+            getattr(self, "scroll_audio", None),
+            getattr(self, "scroll_playback", None),
+            getattr(self, "scroll_ui", None),
+        ):
+            if scroll:
+                self._apply_scroll_style(scroll)
 
         self.update()

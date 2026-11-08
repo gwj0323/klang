@@ -1,4 +1,5 @@
 import math
+import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 import numpy as np
@@ -1171,6 +1172,22 @@ class NordicAudioEngine(QObject):
         self._refresh_output_devices_cache()
         self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
 
+        # 提升 Windows 进程与音频调度优先级，锁定 1ms 高精度多媒体计时器，杜绝窗口切换与后台节流时的爆音断流
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                winmm = ctypes.WinDLL("winmm")
+                winmm.timeBeginPeriod(1)
+                kernel32 = ctypes.WinDLL("kernel32")
+                kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+                kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                kernel32.SetPriorityClass.restype = wintypes.BOOL
+                # 0x00008000 = ABOVE_NORMAL_PRIORITY_CLASS
+                kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x00008000)
+            except Exception:
+                pass
+
         self._tick_timer = QTimer(self)
         self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._tick_timer.setInterval(10)
@@ -1426,8 +1443,8 @@ class NordicAudioEngine(QObject):
             self._push_io = None
             self._audio_sink = QAudioSink(device, fmt, self)
             buf_multiplier = max(1, self._channels // 2)
-            # 64KB 硬件缓冲 (~371ms @ 44.1kHz)，保证窗口拖拽、弹窗或动画时永不欠载断音
-            self._audio_sink.setBufferSize(65536 * buf_multiplier)
+            # 256KB 硬件缓冲 (~1.48s @ 44.1kHz)，彻底杜绝窗口切换、Alt+Tab、DWM 渲染或后台节流时的爆音断流
+            self._audio_sink.setBufferSize(262144 * buf_multiplier)
             self._audio_sink.setVolume(self.volume)
             self._stream_device._reset_tail_frame()
             self._stream_device.start_stream()
@@ -1471,7 +1488,7 @@ class NordicAudioEngine(QObject):
             return
         block_bytes = ContinuousDspStreamDevice.BLOCK_FRAMES * 2 * self._channels
         buf_multiplier = max(1, self._channels // 2)
-        fadeout_reserve = 28672 * buf_multiplier
+        fadeout_reserve = 16384 * buf_multiplier
         waiting_for_initial_decode = (
             self._using_local_file
             and not self._decoder_finished
@@ -1486,7 +1503,7 @@ class NordicAudioEngine(QObject):
                     self._push_io.write(chunk)
             return
 
-        # 维持 ~208ms 充裕硬件缓冲防止任何 UI 卡顿，同时预留 28KB 空间供微淡出块与黑胶物理制动块即时写入
+        # 维持 ~1.4s 硬件环形缓冲彻底杜绝窗口切换与后台抢占断音，同时预留 16KB 空间供微淡出块即时写入
         while self._audio_sink.bytesFree() >= fadeout_reserve + block_bytes:
             chunk = self._stream_device._render_next_dsp_block()
             if not chunk:
@@ -1823,6 +1840,11 @@ class NordicAudioEngine(QObject):
         self._stream_device._env_gain = 0.0
         self._stream_device._last_tail_frame.fill(0.0)
 
+        # 立即重置 QAudioSink 硬件缓冲，清空旧位置音频，确保 0ms 定位即播
+        if self._audio_sink is not None:
+            self._audio_sink.reset()
+            self._push_io = self._audio_sink.start()
+
         if self._using_local_file and self._decoder_failed:
             abs_sec = (self._track_start_frame / float(self._sample_rate)) + clamped
             self._media_player.setPosition(int(abs_sec * 1000))
@@ -2018,6 +2040,8 @@ class NordicAudioEngine(QObject):
         self._feed_audio_sink()
         if self.is_playing:
             rel_frames = max(0, self._frame_cursor - self._track_start_frame)
-            self.current_time = min(self.duration, rel_frames / float(self._sample_rate))
+            queued_bytes = max(0, self._audio_sink.bufferSize() - self._audio_sink.bytesFree()) if self._audio_sink else 0
+            latency_sec = queued_bytes / float(self._sample_rate * 2 * self._channels)
+            self.current_time = max(0.0, min(self.duration, (rel_frames / float(self._sample_rate)) - latency_sec))
             self.timeUpdated.emit(self.current_time, self.duration, "tick")
             self.spectrumUpdated.emit(self.current_spectrum_bands)

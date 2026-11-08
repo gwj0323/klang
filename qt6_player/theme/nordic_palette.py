@@ -113,11 +113,13 @@ def _resolve_ordered_families(mono: bool) -> List[str]:
     if mono:
         candidates = [
             "SF Mono",
-            "JetBrains Mono",
             "Cascadia Code",
+            "JetBrains Mono",
             "Consolas",
-            "Segoe UI",
+            "PingFang SC",
             "Microsoft YaHei UI",
+            "Microsoft YaHei",
+            "Segoe UI",
         ]
     else:
         candidates = [
@@ -127,13 +129,13 @@ def _resolve_ordered_families(mono: bool) -> List[str]:
             "-apple-system",
             "BlinkMacSystemFont",
             "PingFang SC",
+            "Microsoft YaHei UI",
+            "Microsoft YaHei",
             "HarmonyOS Sans SC",
-            "Noto Sans SC",
             "Segoe UI Variable Display",
             "Segoe UI Variable Text",
-            "Inter",
             "Segoe UI",
-            "Microsoft YaHei UI",
+            "Noto Sans SC",
         ]
 
     ordered = [c for c in candidates if c in available]
@@ -168,45 +170,21 @@ def get_nordic_font(
     font.setStyleStrategy(
         QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
     )
-    if px <= 15:
-        font.setHintingPreference(QFont.HintingPreference.PreferDefaultHinting)
-    else:
-        font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
+    # 统一使用 PreferNoHinting 消除 DirectWrite 栅格化抖动与中文字符瘦细变形
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     _FONT_CACHE[key] = font
     return QFont(font)
 
 
 def get_apple_sans_stylesheet() -> str:
-    """返回全应用全局样式表，确保所有 Qt 控件与对话框默认统一使用 Apple Sans (SF Pro) 字体族"""
-    sans_list = (
-        "'SF Pro Display', 'SF Pro Text', 'SF Pro', 'Apple Sans', -apple-system, "
-        "BlinkMacSystemFont, 'PingFang SC', 'HarmonyOS Sans SC', 'Noto Sans SC', "
-        "'Microsoft YaHei UI', sans-serif"
-    )
-    return f"""
-    * {{
-        font-family: {sans_list};
-    }}
-    QWidget {{
-        font-family: {sans_list};
-    }}
-    QToolTip {{
-        font-family: {sans_list};
+    """返回全应用全局辅助样式表，优化弹窗与菜单基础渲染"""
+    return """
+    QToolTip {
         font-size: 12px;
-    }}
-    QMenu {{
-        font-family: {sans_list};
+    }
+    QMenu {
         font-size: 12px;
-    }}
-    QDialog {{
-        font-family: {sans_list};
-    }}
-    QLineEdit, QTextEdit, QPlainTextEdit {{
-        font-family: {sans_list};
-    }}
-    QListWidget, QListView, QTreeView, QTableView {{
-        font-family: {sans_list};
-    }}
+    }
     """
 
 

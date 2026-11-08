@@ -132,6 +132,10 @@ def save_player_state(
     builtin_overrides = {}
 
     for t in tracks:
+        # 严格隔离：网易云在线/缓存曲目绝不持久化进入本地音乐库核心数据
+        if str(t.track_id).startswith("netease_"):
+            continue
+
         lyrics_data = []
         if t.lyrics:
             for l in t.lyrics:
@@ -180,7 +184,9 @@ def save_player_state(
                 "cover_path": str(t.cover_path) if t.cover_path else "",
             }
 
-    payload = dict(settings)
+    current_state = load_player_state()
+    payload = dict(current_state)
+    payload.update(settings)
     payload["playlist"] = playlist_data
     payload["local_tracks"] = local_tracks_data
     payload["builtin_overrides"] = builtin_overrides
@@ -190,6 +196,21 @@ def save_player_state(
     if sync:
         return _write_payload_to_disk(safe_payload)
 
+    threading.Thread(
+        target=_write_payload_to_disk,
+        args=(safe_payload,),
+        daemon=True,
+    ).start()
+    return True
+
+
+def update_player_state_fields(updates: Dict[str, Any], sync: bool = False) -> bool:
+    """Safely update specific key-value fields in player_state.json without touching others."""
+    state = load_player_state()
+    state.update(updates)
+    safe_payload = _make_json_safe(state)
+    if sync:
+        return _write_payload_to_disk(safe_payload)
     threading.Thread(
         target=_write_payload_to_disk,
         args=(safe_payload,),
@@ -254,7 +275,7 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
     if saved_playlist and isinstance(saved_playlist, list):
         for idx, item in enumerate(saved_playlist):
             tid = str(item.get("track_id", ""))
-            if tid in _LEGACY_BUILTIN_IDS:
+            if tid in _LEGACY_BUILTIN_IDS or tid.startswith("netease_"):
                 continue
             fp = item.get("file_path")
             if not fp or not Path(fp).is_file():
@@ -308,7 +329,7 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
 
     for idx, item in enumerate(state.get("local_tracks") or []):
         tid = str(item.get("track_id", ""))
-        if tid in _LEGACY_BUILTIN_IDS:
+        if tid in _LEGACY_BUILTIN_IDS or tid.startswith("netease_"):
             continue
         fp = item.get("file_path")
         if not fp or not Path(fp).is_file():

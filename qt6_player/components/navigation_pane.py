@@ -1,6 +1,7 @@
 import math
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import List, Optional, Dict, Set
 from PyQt6.QtCore import (
@@ -45,6 +46,8 @@ from qt6_player.components.fluent_widgets import (
     WinUIFlyoutMenu,
     WinUIModalDialog,
 )
+from qt6_player.services.netease_service import netease_manager
+from qt6_player.components.netease_login_dialog import NeteaseLoginDialog
 
 
 class TrackMetadataDialog(WinUIModalDialog):
@@ -279,6 +282,8 @@ class WatchedFoldersDialog(WinUIModalDialog):
             item = self.list_vbox.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
         t = self.theme
@@ -341,6 +346,7 @@ class NavGroupHeaderButton(QPushButton):
         count: int,
         expanded: bool = True,
         theme: NordicThemeColors = DAYLIGHT_THEME,
+        backdrop_material: str = "mica",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -348,11 +354,18 @@ class NavGroupHeaderButton(QPushButton):
         self.count = count
         self.expanded = expanded
         self.theme = theme
+        self.backdrop_material = str(backdrop_material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self.setFixedHeight(32)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
+        self.update()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -362,7 +375,13 @@ class NavGroupHeaderButton(QPushButton):
         rect = QRectF(self.rect()).adjusted(2.0, 2.0, -2.0, -2.0)
         path = QPainterPath()
         path.addRoundedRect(rect, 6.0, 6.0)
-        painter.fillPath(path, self.theme.oat_surface)
+
+        is_dusk = self.theme.name == "dusk"
+        if self.is_translucent_backdrop:
+            bg = QColor(255, 255, 255, 14) if is_dusk else QColor(0, 0, 0, 10)
+        else:
+            bg = self.theme.oat_surface
+        painter.fillPath(path, bg)
 
         arrow = "▾" if self.expanded else "▸"
         painter.setPen(self.theme.sage_accent)
@@ -417,6 +436,8 @@ class NavTrackItemButton(QPushButton):
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.backdrop_material: str = "mica"
         self.is_translucent_backdrop: bool = True
+        self._import_flyout: Optional[WinUIFlyoutMenu] = None
+        self._ctx_menu: Optional[WinUIFlyoutMenu] = None
         self._thumb_pixmap: Optional[QPixmap] = None
         self._hover_alpha: float = 0.0
         self._reveal_progress: float = 1.0
@@ -563,7 +584,7 @@ class NavTrackItemButton(QPushButton):
             items.append(("open_dir", "folder", "打开文件所在位置"))
         items.append(("remove", "trash", "从曲库移除"))
 
-        self._ctx_menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+        self._ctx_menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
         self._ctx_menu.actionTriggered.connect(self._on_ctx_action)
         self._ctx_menu.popup_animated(global_pos)
 
@@ -865,8 +886,10 @@ class NavigationPane(QWidget):
     importLrcRequested = pyqtSignal()
     watchFoldersRequested = pyqtSignal()
     playlistsChanged = pyqtSignal()
+    neteaseTrackSelected = pyqtSignal(object, list, int)  # selected_track, playlist_tracks, index_in_playlist
+    _thumbnailsRefreshed = pyqtSignal()
 
-    EXPANDED_WIDTH = 264
+    EXPANDED_WIDTH = 276
 
     _SORT_LABELS = {
         "default": "默认排序",
@@ -885,12 +908,15 @@ class NavigationPane(QWidget):
 
     def __init__(self, tracks: List[NordicTrack], parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.tracks = tracks
+        self.local_tracks: List[NordicTrack] = list(tracks) if tracks else []
+        self.netease_tracks: List[NordicTrack] = []
+        self.tracks: List[NordicTrack] = self.local_tracks
         self.active_index: int = 0
+        self._active_track_id: str = ""
         self.is_playing: bool = False
         self._eq_phase: float = 0.0
 
-        # 视图模式: 0="全部", 1="喜欢", 2="歌单", 3="分类"
+        # 视图模式: 0="全部", 1="喜欢", 2="歌单", 3="分类", 4="网易云"
         self.view_mode: int = 0
         self.filter_favorites_only: bool = False
         self.search_keyword: str = ""
@@ -901,6 +927,26 @@ class NavigationPane(QWidget):
         # 自定义歌单: {歌单名: [track_id, ...]}
         self.custom_playlists: Dict[str, List[str]] = {}
         self.active_playlist_name: str = ""
+
+        # 网易云音乐状态
+        self.netease_tracks: List[NordicTrack] = []
+        self._netease_playlist_tracks: List[NordicTrack] = []
+        self.netease_sub_mode: str = "daily"  # "daily" | "pl:{playlist_id}"
+        self.netease_sub_name: str = "每日推荐"
+        self.is_netease_loading: bool = False
+        self.is_netease_searching: bool = False
+        self._netease_search_keyword: str = ""
+
+        self._netease_search_timer = QTimer(self)
+        self._netease_search_timer.setSingleShot(True)
+        self._netease_search_timer.setInterval(400)
+        self._netease_search_timer.timeout.connect(self._do_netease_cloud_search)
+
+        netease_manager.loginStatusChanged.connect(self._on_netease_login_status_changed)
+        netease_manager.playlistsLoaded.connect(self._on_netease_playlists_loaded)
+        netease_manager.dailyRecommendLoaded.connect(self._on_daily_recommend_loaded)
+        netease_manager.playlistTracksLoaded.connect(self._on_playlist_tracks_loaded)
+        self._thumbnailsRefreshed.connect(self._refresh_item_thumbnails)
 
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.backdrop_material: str = "mica"
@@ -913,8 +959,8 @@ class NavigationPane(QWidget):
         layout.setContentsMargins(12, 12, 12, 14)
         layout.setSpacing(8)
 
-        # 1. 顶部四栏视图切换器 (全部 / 喜欢 / 歌单 / 分类)
-        self.segmented_tabs = WinUISegmentedControl(["全部", "喜欢", "歌单", "分类"], self)
+        # 1. 顶部五栏视图切换器 (全部 / 喜欢 / 歌单 / 分类 / 网易云)
+        self.segmented_tabs = WinUISegmentedControl(["全部", "喜欢", "歌单", "分类", "网易云"], self)
         self.segmented_tabs.currentIndexChanged.connect(self._on_tab_index_changed)
         layout.addWidget(self.segmented_tabs)
 
@@ -966,6 +1012,14 @@ class NavigationPane(QWidget):
         self.btn_sort.setFont(get_nordic_font(11, QFont.Weight.Medium))
         self.btn_sort.clicked.connect(self._open_sort_menu)
         sub_hbox.addWidget(self.btn_sort)
+
+        self.btn_netease_logout = QPushButton("退出登录", self.sub_bar)
+        self.btn_netease_logout.setFixedHeight(24)
+        self.btn_netease_logout.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_netease_logout.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.btn_netease_logout.clicked.connect(self._on_netease_logout_clicked)
+        self.btn_netease_logout.hide()
+        sub_hbox.addWidget(self.btn_netease_logout)
 
         layout.addWidget(self.sub_bar)
 
@@ -1029,7 +1083,7 @@ class NavigationPane(QWidget):
             self.active_playlist_name = next(iter(self.custom_playlists.keys()), "")
         self._update_sub_bar_ui()
         if self.view_mode == 2:
-            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.rebuild_list(self.local_tracks, active_index=self.active_index)
 
     def prompt_create_playlist(self, initial_track_id: Optional[str] = None) -> None:
         dlg = CreatePlaylistDialog("新建歌单", "", theme=self.theme, parent=self.window())
@@ -1042,7 +1096,7 @@ class NavigationPane(QWidget):
             self.active_playlist_name = name
             self._update_sub_bar_ui()
             if self.view_mode == 2:
-                self.rebuild_list(self.tracks, active_index=self.active_index)
+                self.rebuild_list(self.local_tracks, active_index=self.active_index)
             self.playlistsChanged.emit()
 
         dlg.playlistCreated.connect(_on_created)
@@ -1056,7 +1110,7 @@ class NavigationPane(QWidget):
         if track_id not in self.custom_playlists[playlist_name]:
             self.custom_playlists[playlist_name].append(track_id)
             if self.view_mode == 2 and self.active_playlist_name == playlist_name:
-                self.rebuild_list(self.tracks, active_index=self.active_index)
+                self.rebuild_list(self.local_tracks, active_index=self.active_index)
             self.playlistsChanged.emit()
             return True
         return False
@@ -1066,7 +1120,7 @@ class NavigationPane(QWidget):
             plist = self.custom_playlists[self.active_playlist_name]
             if track_id in plist:
                 plist.remove(track_id)
-                self.rebuild_list(self.tracks, active_index=self.active_index)
+                self.rebuild_list(self.local_tracks, active_index=self.active_index)
                 self.playlistsChanged.emit()
                 return True
         return False
@@ -1076,7 +1130,7 @@ class NavigationPane(QWidget):
             del self.custom_playlists[self.active_playlist_name]
             self.active_playlist_name = next(iter(self.custom_playlists.keys()), "")
             self._update_sub_bar_ui()
-            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.rebuild_list(self.local_tracks, active_index=self.active_index)
             self.playlistsChanged.emit()
 
     def _on_sub_selector_clicked(self) -> None:
@@ -1086,7 +1140,7 @@ class NavigationPane(QWidget):
                 self.prompt_create_playlist()
                 return
             items = [(f"pl:{name}", "music_file", f"{name} ({len(ids)})") for name, ids in self.custom_playlists.items()]
-            menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
             menu.actionTriggered.connect(self._on_playlist_menu_selected)
             menu.popup_animated(pos)
         elif self.view_mode == 3:
@@ -1095,22 +1149,93 @@ class NavigationPane(QWidget):
                 ("grp:album", "music_file", "按专辑分组"),
                 ("grp:folder", "folder", "按文件夹分组"),
             ]
-            menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
             menu.actionTriggered.connect(self._on_group_menu_selected)
             menu.popup_animated(pos)
+        elif self.view_mode == 4:
+            items = [
+                ("ne:daily", "sparkle", "每日推荐"),
+            ]
+            if netease_manager.user_playlists:
+                for pl in netease_manager.user_playlists:
+                    icon = "heart" if pl.get("is_liked") else "music_file"
+                    name = pl.get("name", "歌单")
+                    cnt = pl.get("track_count", 0)
+                    items.append((f"ne_pl:{pl['id']}", icon, f"{name} ({cnt})"))
+            cur_q_lbl = netease_manager.QUALITY_LABELS.get(netease_manager.preferred_quality, "无损 FLAC")
+            items.append(("ne:quality", "equalizer", f"音质选择 (当前: {cur_q_lbl}) ▾"))
+            items.append(("ne:refresh", "sparkle", "刷新歌单列表"))
+            nickname = netease_manager.user_profile.get("nickname", "已登录账号")
+            items.append(("ne:logout", "cross", f"退出登录 ({nickname})"))
+
+            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
+            menu.actionTriggered.connect(self._on_netease_menu_selected)
+            menu.popup_animated(pos)
+
+    def _open_netease_quality_menu(self) -> None:
+        pos = self.btn_sub_selector.mapToGlobal(QPoint(0, self.btn_sub_selector.height() + 4))
+        cur_q = netease_manager.preferred_quality
+        items = []
+        for q_k, q_lbl in netease_manager.QUALITY_LABELS.items():
+            icon = "sparkle" if q_k in ("lossless", "hires", "jymaster") else "music_file"
+            prefix = "✓ " if q_k == cur_q else ""
+            items.append((f"set_q:{q_k}", icon, f"{prefix}{q_lbl}"))
+        menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
+
+        def _on_q(act: str):
+            if act.startswith("set_q:"):
+                nk = act[6:]
+                netease_manager.set_preferred_quality(nk)
+                self._update_sub_bar_ui()
+                win = self.window()
+                if hasattr(win, "lyrics_stage"):
+                    win.lyrics_stage._show_toast(f"网易云播放音质已设为：{netease_manager.QUALITY_LABELS.get(nk)}")
+
+        menu.actionTriggered.connect(_on_q)
+        menu.popup_animated(pos)
+
+    def _on_netease_menu_selected(self, act: str) -> None:
+        if self.is_netease_searching:
+            self.is_netease_searching = False
+            self._netease_search_keyword = ""
+            if hasattr(self, "search_box"):
+                self.search_box.clear()
+        if act == "ne:daily":
+            self.netease_sub_mode = "daily"
+            self.netease_sub_name = "每日推荐"
+            self._update_sub_bar_ui()
+            self._load_current_netease_playlist()
+        elif act.startswith("ne_pl:"):
+            pl_id = int(act[6:])
+            self.netease_sub_mode = f"pl:{pl_id}"
+            pl_name = "云歌单"
+            for pl in netease_manager.user_playlists:
+                if str(pl.get("id")) == str(pl_id):
+                    pl_name = pl.get("name", "云歌单")
+                    break
+            self.netease_sub_name = pl_name
+            self._update_sub_bar_ui()
+            self._load_current_netease_playlist()
+        elif act == "ne:quality":
+            self._open_netease_quality_menu()
+        elif act == "ne:refresh":
+            netease_manager.fetch_user_playlists()
+            self._load_current_netease_playlist()
+        elif act == "ne:logout":
+            netease_manager.logout()
 
     def _on_playlist_menu_selected(self, act: str) -> None:
         if act.startswith("pl:"):
             self.active_playlist_name = act[3:]
             self._update_sub_bar_ui()
-            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.rebuild_list(self.local_tracks, active_index=self.active_index)
 
     def _on_group_menu_selected(self, act: str) -> None:
         if act.startswith("grp:"):
             self.group_mode = act[4:]
             self.collapsed_groups.clear()
             self._update_sub_bar_ui()
-            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.rebuild_list(self.local_tracks, active_index=self.active_index)
 
     def _open_sort_menu(self) -> None:
         pos = self.btn_sort.mapToGlobal(QPoint(0, self.btn_sort.height() + 4))
@@ -1122,7 +1247,7 @@ class NavigationPane(QWidget):
             ("duration", "clock", "按时长"),
             ("recent", "plus", "按最近添加"),
         ]
-        menu = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+        menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
         menu.actionTriggered.connect(self._on_sort_selected)
         menu.popup_animated(pos)
 
@@ -1130,7 +1255,7 @@ class NavigationPane(QWidget):
         if mode in self._SORT_LABELS:
             self.sort_mode = mode
             self._update_sub_bar_ui()
-            self.rebuild_list(self.tracks, active_index=self.active_index)
+            self.rebuild_list(active_index=self.active_index)
             self._trigger_list_transition()
 
     def _update_sub_bar_ui(self) -> None:
@@ -1168,6 +1293,8 @@ class NavigationPane(QWidget):
         self.btn_del_playlist.setStyleSheet(muted_btn_style)
         self.btn_sort.setStyleSheet(muted_btn_style)
         self.btn_sort.setText(f"{self._SORT_LABELS.get(self.sort_mode, '默认排序')} ▾")
+        if hasattr(self, "btn_netease_logout"):
+            self.btn_netease_logout.setStyleSheet(muted_btn_style)
 
         if self.view_mode in (0, 1):
             self.lbl_count.show()
@@ -1175,6 +1302,8 @@ class NavigationPane(QWidget):
             self.btn_new_playlist.hide()
             self.btn_del_playlist.hide()
             self.btn_sort.show()
+            if hasattr(self, "btn_netease_logout"):
+                self.btn_netease_logout.hide()
         elif self.view_mode == 2:
             self.lbl_count.hide()
             self.btn_sub_selector.show()
@@ -1183,6 +1312,8 @@ class NavigationPane(QWidget):
             self.btn_new_playlist.show()
             self.btn_del_playlist.setVisible(bool(self.active_playlist_name))
             self.btn_sort.hide()
+            if hasattr(self, "btn_netease_logout"):
+                self.btn_netease_logout.hide()
         elif self.view_mode == 3:
             self.lbl_count.hide()
             self.btn_sub_selector.show()
@@ -1190,13 +1321,37 @@ class NavigationPane(QWidget):
             self.btn_new_playlist.hide()
             self.btn_del_playlist.hide()
             self.btn_sort.show()
+            if hasattr(self, "btn_netease_logout"):
+                self.btn_netease_logout.hide()
+        elif self.view_mode == 4:
+            if not netease_manager.is_logged_in:
+                self.lbl_count.setText("未登录网易云")
+                self.lbl_count.show()
+                self.btn_sub_selector.hide()
+                self.btn_new_playlist.hide()
+                self.btn_del_playlist.hide()
+                self.btn_sort.hide()
+                if hasattr(self, "btn_netease_logout"):
+                    self.btn_netease_logout.hide()
+            else:
+                self.lbl_count.hide()
+                self.btn_sub_selector.show()
+                self.btn_sub_selector.setText(f"{self.netease_sub_name} ▾")
+                self.btn_new_playlist.hide()
+                self.btn_del_playlist.hide()
+                self.btn_sort.show()
+                if hasattr(self, "btn_netease_logout"):
+                    nickname = netease_manager.user_profile.get("nickname") or "账号"
+                    self.btn_netease_logout.setToolTip(f"退出网易云账号: {nickname}")
+                    self.btn_netease_logout.show()
 
     def _step_eq_bars(self) -> None:
         if not self.isVisible():
             return
         self._eq_phase = (self._eq_phase + 0.38) % (math.pi * 2.0)
         for btn in self.item_buttons:
-            if btn.index == self.active_index:
+            is_match = (btn.track.track_id == self._active_track_id) if self._active_track_id else (btn.index == self.active_index)
+            if is_match:
                 btn.eq_phase = self._eq_phase
                 if btn.isVisible():
                     btn.update(11, int(btn.height() / 2 - 18), 36, 36)
@@ -1204,7 +1359,8 @@ class NavigationPane(QWidget):
     def set_playing_state(self, is_playing: bool) -> None:
         self.is_playing = bool(is_playing)
         for btn in self.item_buttons:
-            new_playing = self.is_playing and (btn.index == self.active_index)
+            is_match = (btn.track.track_id == self._active_track_id) if self._active_track_id else (btn.index == self.active_index)
+            new_playing = self.is_playing and is_match
             if btn.is_playing != new_playing:
                 btn.is_playing = new_playing
                 btn.update()
@@ -1221,7 +1377,7 @@ class NavigationPane(QWidget):
             ("watch_folders", "folder", "自动监控音乐文件夹…"),
             ("add_lrc", "lrc", "为当前歌曲导入 LRC 歌词"),
         ]
-        self._import_flyout = WinUIFlyoutMenu(items, theme=self.theme, parent=self.window())
+        self._import_flyout = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
         self._import_flyout.actionTriggered.connect(self._on_import_flyout_action)
         self._import_flyout.popup_animated(global_pos)
 
@@ -1257,13 +1413,148 @@ class NavigationPane(QWidget):
         self.view_mode = idx
         self.filter_favorites_only = (idx == 1)
         self._update_sub_bar_ui()
-        self.rebuild_list(self.tracks, active_index=self.active_index)
+        if hasattr(self, "search_box"):
+            if idx == 4:
+                self.search_box.set_placeholder("搜索网易云在线歌曲 / 歌手…")
+            else:
+                self.search_box.set_placeholder("搜索歌名 / 歌手 / 专辑…")
+        if idx == 4:
+            if not netease_manager.is_logged_in:
+                self.rebuild_list([], active_index=-1)
+            else:
+                cur_kw = self.search_box.text().strip() if hasattr(self, "search_box") else ""
+                if cur_kw:
+                    self._netease_search_timer.start(400)
+                elif not self.netease_tracks and not self.is_netease_loading:
+                    self._load_current_netease_playlist()
+                else:
+                    self.rebuild_list(self.netease_tracks, active_index=self.active_index)
+        else:
+            self.rebuild_list(self.local_tracks, active_index=self.active_index)
         self._trigger_list_transition()
 
+    def _load_current_netease_playlist(self) -> None:
+        if not netease_manager.is_logged_in:
+            return
+        self.is_netease_loading = True
+        self.rebuild_list([], active_index=-1)
+        if self.netease_sub_mode == "daily":
+            netease_manager.fetch_daily_recommend_async()
+        elif self.netease_sub_mode.startswith("pl:"):
+            pl_id = int(self.netease_sub_mode[3:])
+            netease_manager.fetch_playlist_tracks_async(pl_id)
+
+    def _on_daily_recommend_loaded(self, tracks: List[NordicTrack]) -> None:
+        if self.netease_sub_mode == "daily":
+            self.is_netease_loading = False
+            self.netease_tracks = list(tracks)
+            self._netease_playlist_tracks = list(tracks)
+            if self.view_mode == 4 and not self.is_netease_searching:
+                self.rebuild_list(self.netease_tracks, active_index=self.active_index)
+            self._prefetch_thumbnails_for_tracks(tracks)
+
+    def _on_playlist_tracks_loaded(self, pl_id: int, tracks: List[NordicTrack]) -> None:
+        if self.netease_sub_mode == f"pl:{pl_id}":
+            self.is_netease_loading = False
+            self.netease_tracks = list(tracks)
+            self._netease_playlist_tracks = list(tracks)
+            if self.view_mode == 4 and not self.is_netease_searching:
+                self.rebuild_list(self.netease_tracks, active_index=self.active_index)
+            self._prefetch_thumbnails_for_tracks(tracks)
+
+    def _on_netease_login_status_changed(self, is_logged_in: bool, profile: dict) -> None:
+        if self.view_mode == 4:
+            self._update_sub_bar_ui()
+            if is_logged_in:
+                self._load_current_netease_playlist()
+            else:
+                self.netease_tracks.clear()
+                self.rebuild_list([], active_index=-1)
+
+    def _on_netease_playlists_loaded(self, playlists: list) -> None:
+        if self.view_mode == 4:
+            self._update_sub_bar_ui()
+
+    def _on_netease_logout_clicked(self) -> None:
+        netease_manager.logout()
+        win = self.window()
+        if hasattr(win, "lyrics_stage") and hasattr(win.lyrics_stage, "_show_toast"):
+            win.lyrics_stage._show_toast("已退出网易云账号")
+
+    def _open_netease_login_dialog(self) -> None:
+        dlg = NeteaseLoginDialog(theme=self.theme, parent=self.window())
+        dlg.exec()
+
+    def _prefetch_thumbnails_for_tracks(self, tracks: List[NordicTrack]) -> None:
+        def _worker():
+            updated = False
+            for t in tracks[:30]:
+                url = getattr(t, "_cover_url", None) or (t.cover_path if t.cover_path and t.cover_path.startswith("http") else None)
+                if url:
+                    song_id = getattr(t, "_netease_song_id", None) or t.track_id.replace("netease_", "")
+                    p = netease_manager.cache_cover_image(song_id, url)
+                    if p:
+                        t.cover_path = p
+                        t._cached_cover_pix = None
+                        t._cover_cache_loaded = False
+                        updated = True
+            if updated:
+                self._thumbnailsRefreshed.emit()
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _refresh_item_thumbnails(self) -> None:
+        for btn in self.item_buttons:
+            btn.refresh_thumbnail()
+
+    def _on_netease_item_clicked(self, index: int, track: NordicTrack) -> None:
+        self.set_active_index(index)
+        self.neteaseTrackSelected.emit(track, list(self.netease_tracks), index)
+
     def _on_search_changed(self, text: str) -> None:
-        self.search_keyword = text.strip().lower()
-        self._apply_visibility_filter()
-        self._trigger_list_transition()
+        kw = text.strip()
+        if self.view_mode == 4:
+            if not kw:
+                if self._netease_search_timer.isActive():
+                    self._netease_search_timer.stop()
+                if self.is_netease_searching or self._netease_search_keyword:
+                    self.is_netease_searching = False
+                    self._netease_search_keyword = ""
+                    self.netease_tracks = list(self._netease_playlist_tracks)
+                    self.rebuild_list(self.netease_tracks, active_index=self.active_index)
+                    self._apply_visibility_filter()
+                    self._trigger_list_transition()
+            else:
+                self._netease_search_timer.start(400)
+        else:
+            self.search_keyword = kw.lower()
+            self._apply_visibility_filter()
+            self._trigger_list_transition()
+
+    def _do_netease_cloud_search(self) -> None:
+        kw = self.search_box.text().strip()
+        if not kw or self.view_mode != 4:
+            return
+        self.is_netease_searching = True
+        self._netease_search_keyword = kw
+        self.is_netease_loading = True
+        self.lbl_count.setText(f"正在搜索「{kw}」…")
+        self.rebuild_list([], active_index=-1)
+
+        def _worker():
+            results = netease_manager.search_tracks(kw, limit=30)
+            def _on_done():
+                cur_kw = self.search_box.text().strip()
+                if cur_kw != kw or self.view_mode != 4:
+                    return
+                self.is_netease_loading = False
+                self.netease_tracks = results
+                self.rebuild_list(self.netease_tracks, active_index=-1)
+                self.lbl_count.setText(f"共找到 {len(results)} 首在线歌曲")
+                self._trigger_list_transition()
+                self._prefetch_thumbnails_for_tracks(results)
+            QTimer.singleShot(0, _on_done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _matches_search(self, t: NordicTrack) -> bool:
         if not self.search_keyword:
@@ -1287,7 +1578,15 @@ class NavigationPane(QWidget):
             btn.setVisible(vis)
             if vis:
                 visible_count += 1
-        self.lbl_count.setText(f"共 {visible_count} 首")
+        if self.view_mode in (0, 1):
+            self.lbl_count.setText(f"共 {visible_count} 首")
+        elif self.view_mode == 4:
+            if not netease_manager.is_logged_in:
+                self.lbl_count.setText("未登录网易云")
+            elif self.is_netease_searching:
+                self.lbl_count.setText(f"共找到 {len(self.netease_tracks)} 首在线歌曲")
+            else:
+                self.lbl_count.setText(f"共 {len(self.netease_tracks)} 首")
 
     def _sorted_indexed_tracks(self, pairs: List[tuple]) -> List[tuple]:
         if self.sort_mode == "title":
@@ -1322,21 +1621,31 @@ class NavigationPane(QWidget):
                 gbtn.update()
         self._apply_visibility_filter()
 
-    def rebuild_list(self, tracks: List[NordicTrack], active_index: int = 0) -> None:
-        self.tracks = tracks
-        self.active_index = active_index
+    def rebuild_list(self, tracks: Optional[List[NordicTrack]] = None, active_index: Optional[int] = None) -> None:
+        if tracks is not None:
+            if self.view_mode != 4:
+                self.local_tracks = list(tracks)
+            else:
+                self.netease_tracks = list(tracks)
+
+        current_tracks = self.netease_tracks if self.view_mode == 4 else self.local_tracks
+        self.tracks = current_tracks
+        if active_index is not None:
+            self.active_index = active_index
 
         while self.list_vbox.count():
             item = self.list_vbox.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
         self.item_buttons.clear()
         self.group_buttons.clear()
 
         if self.view_mode == 2:
-            # 自定义歌单视图
+            # 自定义歌单视图 (严格仅使用本地曲库 self.local_tracks)
             if not self.custom_playlists:
                 empty_lbl = QLabel("暂无自定义歌单\n点击右上角「＋新建」创建歌单", self.list_container)
                 empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1346,11 +1655,13 @@ class NavigationPane(QWidget):
             else:
                 if self.active_playlist_name not in self.custom_playlists:
                     self.active_playlist_name = next(iter(self.custom_playlists.keys()), "")
-                id_map = {t.track_id: (i, t) for i, t in enumerate(tracks)}
+                local_ids = {x.track_id for x in self.local_tracks}
+                all_candidates = list(self.local_tracks) + [t for t in self.netease_tracks if t.track_id not in local_ids]
+                id_map = {t.track_id: (i, t) for i, t in enumerate(all_candidates)}
                 pl_ids = self.custom_playlists.get(self.active_playlist_name, [])
                 pairs = [id_map[tid] for tid in pl_ids if tid in id_map]
                 if not pairs:
-                    empty_lbl = QLabel("歌单内暂无曲目\n可在列表右键将歌曲「添加到歌单」", self.list_container)
+                    empty_lbl = QLabel("歌单内暂无曲目\n可在曲库右键「添加到歌单」，或直接点击左下角「+ 导入音乐」/ 拖拽歌曲至此", self.list_container)
                     empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     empty_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
                     empty_lbl.setStyleSheet(f"color: {self.theme.slate_muted.name()}; padding: 36px 12px;")
@@ -1360,9 +1671,9 @@ class NavigationPane(QWidget):
                         self._add_track_button(idx, track, in_custom_playlist=True)
 
         elif self.view_mode == 3:
-            # 分类折叠视图 (按歌手 / 专辑 / 文件夹)
+            # 分类折叠视图 (按歌手 / 专辑 / 文件夹，严格仅使用本地曲库 self.local_tracks)
             groups: Dict[str, List[tuple]] = {}
-            for idx, track in enumerate(tracks):
+            for idx, track in enumerate(self.local_tracks):
                 g_key = self._group_key_for_track(track)
                 groups.setdefault(g_key, []).append((idx, track))
 
@@ -1374,6 +1685,7 @@ class NavigationPane(QWidget):
                     len(g_pairs),
                     expanded=is_exp,
                     theme=self.theme,
+                    backdrop_material=getattr(self, "backdrop_material", "mica"),
                     parent=self.list_container,
                 )
                 g_btn.clicked.connect(lambda _=False, gn=g_name: self._toggle_group_collapsed(gn))
@@ -1384,9 +1696,67 @@ class NavigationPane(QWidget):
                     btn = self._add_track_button(idx, track, in_custom_playlist=False)
                     btn._group_key = g_name
 
+        elif self.view_mode == 4:
+            # 网易云音乐视图
+            if not self.is_netease_searching and not netease_manager.is_logged_in:
+                login_widget = QWidget(self.list_container)
+                login_widget.setStyleSheet("background: transparent;")
+                lw_layout = QVBoxLayout(login_widget)
+                lw_layout.setContentsMargins(16, 48, 16, 24)
+                lw_layout.setSpacing(12)
+                lw_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+                title_lbl = QLabel("网易云音乐", login_widget)
+                title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                title_lbl.setFont(get_nordic_font(15, QFont.Weight.DemiBold))
+                title_lbl.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+                lw_layout.addWidget(title_lbl)
+
+                desc_lbl = QLabel("登录网易云音乐账号\n同步收藏歌单与每日推荐", login_widget)
+                desc_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                desc_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
+                desc_lbl.setStyleSheet(f"color: {self.theme.slate_muted.name()}; line-height: 1.4; background: transparent;")
+                lw_layout.addWidget(desc_lbl)
+
+                lw_layout.addSpacing(6)
+
+                btn_login = QPushButton("扫码登录", login_widget)
+                btn_login.setFixedSize(110, 32)
+                btn_login.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_login.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+                btn_login.setStyleSheet(
+                    f"QPushButton {{ background: {self.theme.sage_accent.name()}; color: #FAF9F6; "
+                    f"border-radius: 6px; border: none; }} "
+                    f"QPushButton:hover {{ background: {self.theme.sage_border.name()}; }}"
+                )
+                btn_login.clicked.connect(self._open_netease_login_dialog)
+                lw_layout.addWidget(btn_login, 0, Qt.AlignmentFlag.AlignCenter)
+
+                self.list_vbox.addWidget(login_widget)
+            elif self.is_netease_loading:
+                msg = f"正在网易云搜索「{self._netease_search_keyword}」…" if self.is_netease_searching else f"正在同步「{self.netease_sub_name}」…"
+                loading_lbl = QLabel(msg, self.list_container)
+                loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                loading_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
+                loading_lbl.setStyleSheet(f"color: {self.theme.slate_muted.name()}; padding: 48px 12px;")
+                self.list_vbox.addWidget(loading_lbl)
+            else:
+                if not self.netease_tracks:
+                    msg = f"未找到与「{self._netease_search_keyword}」相关的歌曲" if self.is_netease_searching else f"「{self.netease_sub_name}」暂无歌曲"
+                    empty_lbl = QLabel(msg, self.list_container)
+                    empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    empty_lbl.setFont(get_nordic_font(11, QFont.Weight.Normal))
+                    empty_lbl.setStyleSheet(f"color: {self.theme.slate_muted.name()}; padding: 48px 12px;")
+                    self.list_vbox.addWidget(empty_lbl)
+                else:
+                    pairs = list(enumerate(self.netease_tracks))
+                    sorted_pairs = self._sorted_indexed_tracks(pairs)
+                    for idx, track in sorted_pairs:
+                        self._add_track_button(idx, track, in_custom_playlist=False, is_netease=True)
+
         else:
-            # 全部 (0) 或 喜欢 (1) 视图
-            all_pairs = list(enumerate(tracks))
+            # 全部 (0) 或 喜欢 (1) 视图 (严格仅使用本地曲库 self.local_tracks)
+            all_pairs = list(enumerate(self.local_tracks))
             sorted_pairs = self._sorted_indexed_tracks(all_pairs)
             for idx, track in sorted_pairs:
                 self._add_track_button(idx, track, in_custom_playlist=False)
@@ -1400,18 +1770,23 @@ class NavigationPane(QWidget):
         idx: int,
         track: NordicTrack,
         in_custom_playlist: bool = False,
+        is_netease: bool = False,
     ) -> NavTrackItemButton:
+        is_sel = (track.track_id == self._active_track_id) if self._active_track_id else (idx == self.active_index and ((self.view_mode == 4) == is_netease))
         btn = NavTrackItemButton(
             idx,
             track,
-            selected=(idx == self.active_index),
+            selected=is_sel,
             in_custom_playlist=in_custom_playlist,
             parent=self.list_container,
         )
-        btn.is_playing = self.is_playing and (idx == self.active_index)
+        btn.is_playing = self.is_playing and is_sel
         btn.set_theme(self.theme)
         btn.set_backdrop_material(getattr(self, "backdrop_material", "mica"))
-        btn.clicked.connect(lambda checked=False, i=idx: self._on_item_clicked(i))
+        if is_netease:
+            btn.clicked.connect(lambda checked=False, i=idx, t=track: self._on_netease_item_clicked(i, t))
+        else:
+            btn.clicked.connect(lambda checked=False, i=idx: self._on_item_clicked(i))
         btn.favoriteToggled.connect(self._on_item_fav_toggled)
         btn.contextActionRequested.connect(self.trackActionRequested.emit)
         btn.dragReorderRequested.connect(self._on_drag_reorder)
@@ -1441,10 +1816,12 @@ class NavigationPane(QWidget):
         self.set_active_index(index)
         self.trackSelected.emit(index)
 
-    def set_active_index(self, index: int) -> None:
+    def set_active_index(self, index: int, track_id: Optional[str] = None) -> None:
         self.active_index = index
+        if track_id:
+            self._active_track_id = str(track_id)
         for btn in self.item_buttons:
-            new_sel = (btn.index == index)
+            new_sel = (btn.track.track_id == self._active_track_id) if self._active_track_id else (btn.index == index)
             new_play = self.is_playing and new_sel
             if btn.is_selected != new_sel or btn.is_playing != new_play:
                 btn.is_selected = new_sel
@@ -1460,7 +1837,12 @@ class NavigationPane(QWidget):
             self.search_box.set_backdrop_material(material)
         if hasattr(self, "btn_import_split"):
             self.btn_import_split.set_backdrop_material(material)
+        if hasattr(self, "_import_flyout") and self._import_flyout:
+            self._import_flyout.set_backdrop_material(material)
         self._update_sub_bar_ui()
+        for gbtn in getattr(self, "group_buttons", []):
+            if hasattr(gbtn, "set_backdrop_material"):
+                gbtn.set_backdrop_material(material)
         for btn in self.item_buttons:
             if hasattr(btn, "set_backdrop_material"):
                 btn.set_backdrop_material(material)
@@ -1471,11 +1853,15 @@ class NavigationPane(QWidget):
         self.segmented_tabs.set_theme(theme)
         self.search_box.set_theme(theme)
         self.btn_import_split.set_theme(theme)
+        if hasattr(self, "_import_flyout") and self._import_flyout:
+            self._import_flyout.set_theme(theme)
         self._update_sub_bar_ui()
         for gbtn in self.group_buttons:
             gbtn.set_theme(theme)
         for btn in self.item_buttons:
             btn.set_theme(theme)
+        if self.view_mode in (2, 4) and not self.item_buttons:
+            self.rebuild_list(self.netease_tracks if self.view_mode == 4 else self.local_tracks, active_index=self.active_index)
         self.update()
 
     def paintEvent(self, event) -> None:

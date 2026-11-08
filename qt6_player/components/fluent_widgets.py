@@ -316,6 +316,15 @@ class WinUISegmentedControl(QWidget):
         self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self.update()
 
+    def set_theme(self, theme: NordicThemeColors) -> None:
+        self.theme = theme
+        self.update()
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
+
     def _on_anim_val(self, val: float) -> None:
         self.pill_pos = float(val)
         self.update()
@@ -676,6 +685,12 @@ class WinUISearchBox(QWidget):
         self.edit.installEventFilter(self)
         layout.addWidget(self.edit)
 
+    def set_placeholder(self, text: str) -> None:
+        self.edit.setPlaceholderText(str(text))
+
+    def clear(self) -> None:
+        self.edit.clear()
+
     def set_backdrop_material(self, material: str) -> None:
         self.backdrop_material = str(material)
         self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
@@ -906,11 +921,14 @@ class WinUIFlyoutMenu(QWidget):
         self,
         items: List[Tuple[str, str, str]],  # [(action_id, icon_kind, label), ...]
         theme: NordicThemeColors = DAYLIGHT_THEME,
+        backdrop_material: str = "mica",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.items = items
         self.theme = theme
+        self.backdrop_material = str(backdrop_material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self.hovered_idx: int = -1
         self._anim_progress: float = 0.0
 
@@ -988,10 +1006,20 @@ class WinUIFlyoutMenu(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, 9.0, 9.0)
 
+        is_dusk = self.theme.name == "dusk"
         bg = QColor(self.theme.mist_white)
-        bg.setAlpha(248)
+        if self.backdrop_material == "acrylic":
+            bg.setAlpha(208 if is_dusk else 220)
+        elif self.backdrop_material == "mica":
+            bg.setAlpha(234 if is_dusk else 244)
+        else:
+            bg.setAlpha(255)
+
         painter.fillPath(path, bg)
-        painter.setPen(QPen(self.theme.sage_border, 1.0))
+        border_col = self.theme.sage_border
+        if self.backdrop_material == "acrylic":
+            border_col = QColor(255, 255, 255, 45) if is_dusk else QColor(0, 0, 0, 30)
+        painter.setPen(QPen(border_col, 1.0))
         painter.drawPath(path)
 
         row_h = 34.0
@@ -1033,10 +1061,13 @@ class WinUIModalDialog(QDialog):
         width: int,
         height: int,
         theme: NordicThemeColors = DAYLIGHT_THEME,
+        backdrop_material: str = "mica",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.theme = theme
+        self.backdrop_material = str(backdrop_material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self._drag_pos: Optional[QPoint] = None
         self.setWindowTitle(title)
         self.setFixedSize(width, height)
@@ -1071,6 +1102,11 @@ class WinUIModalDialog(QDialog):
         modal_curve.setOvershoot(1.10)
         self._entry_anim.setEasingCurve(modal_curve)
         self._entry_anim.valueChanged.connect(self._on_entry_anim)
+
+    def set_backdrop_material(self, material: str) -> None:
+        self.backdrop_material = str(material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.update()
 
     def _paint_close_btn(self, event) -> None:
         p = QPainter(self.btn_close_modal)
@@ -1139,8 +1175,20 @@ class WinUIModalDialog(QDialog):
         path = QPainterPath()
         path.addRoundedRect(rect, 12.0, 12.0)
 
-        painter.fillPath(path, self.theme.mist_white)
-        painter.setPen(QPen(self.theme.sage_border, 1.0))
+        is_dusk = self.theme.name == "dusk"
+        bg = QColor(self.theme.mist_white)
+        if self.backdrop_material == "acrylic":
+            bg.setAlpha(208 if is_dusk else 220)
+        elif self.backdrop_material == "mica":
+            bg.setAlpha(232 if is_dusk else 242)
+        else:
+            bg.setAlpha(255)
+
+        painter.fillPath(path, bg)
+        border_col = self.theme.sage_border
+        if self.backdrop_material == "acrylic":
+            border_col = QColor(255, 255, 255, 45) if is_dusk else QColor(0, 0, 0, 30)
+        painter.setPen(QPen(border_col, 1.0))
         painter.drawPath(path)
 
         inner_rect = rect.adjusted(1.0, 1.0, -1.0, -1.0)
