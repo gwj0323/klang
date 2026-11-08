@@ -1,7 +1,11 @@
 using System;
+using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Klang_WinUI.Controls;
 
@@ -13,35 +17,28 @@ public sealed partial class TransportBar : UserControl
     public event EventHandler? ShuffleClicked;
     public event EventHandler? RepeatClicked;
     public event EventHandler? EqualizerClicked;
+    public event EventHandler? RateClicked;
+    public event EventHandler? FavoriteClicked;
     public event EventHandler<double>? UserSeekRequested;
     public event EventHandler<float>? UserVolumeChanged;
 
     private bool _isPlaying = false;
     private bool _isMuted = false;
     private bool _isUserDragging = false;
+    private bool _isFavorite = false;
     private double _previousVolume = 85;
-
-    private DispatcherTimer? _waveTimer;
-    private readonly Random _rand = new();
+    private readonly DispatcherTimer _bounceTimer = new();
 
     public TransportBar()
     {
         InitializeComponent();
-        InitWaveTimer();
-    }
 
-    private void InitWaveTimer()
-    {
-        _waveTimer = new DispatcherTimer
+        _bounceTimer.Interval = TimeSpan.FromMilliseconds(160);
+        _bounceTimer.Tick += (s, e) =>
         {
-            Interval = TimeSpan.FromMilliseconds(120)
-        };
-        _waveTimer.Tick += (s, e) =>
-        {
-            MiniWave1.Height = _rand.Next(4, 14);
-            MiniWave2.Height = _rand.Next(8, 20);
-            MiniWave3.Height = _rand.Next(6, 18);
-            MiniWave4.Height = _rand.Next(4, 12);
+            _bounceTimer.Stop();
+            PlayPauseScale.ScaleX = 1.0;
+            PlayPauseScale.ScaleY = 1.0;
         };
     }
 
@@ -53,23 +50,43 @@ public sealed partial class TransportBar : UserControl
             _isPlaying = value;
             PlayPauseIcon.Glyph = _isPlaying ? "\uE769" : "\uE768";
             PlayPauseBtn.SetValue(ToolTipService.ToolTipProperty, _isPlaying ? "暂停 (Space)" : "播放 (Space)");
-
-            if (_isPlaying) _waveTimer?.Start();
-            else _waveTimer?.Stop();
         }
     }
 
-    public void UpdateTrackState(string? title, string? artist)
+    public void UpdateTrackState(string? title, string? artist, string? coverPath = null)
     {
         StatusCaptionText.Text = string.IsNullOrWhiteSpace(title) ? "未加载曲目" : title;
         LyricSnippetText.Text = string.IsNullOrWhiteSpace(artist) ? "Klang" : artist;
+
+        if (!string.IsNullOrEmpty(coverPath) && File.Exists(coverPath))
+        {
+            try
+            {
+                MiniCoverImage.Source = new BitmapImage(new Uri(coverPath));
+                MiniCoverImage.Visibility = Visibility.Visible;
+                MiniCoverFallback.Visibility = Visibility.Collapsed;
+            }
+            catch
+            {
+                MiniCoverImage.Visibility = Visibility.Collapsed;
+                MiniCoverFallback.Visibility = Visibility.Visible;
+            }
+        }
+        else
+        {
+            MiniCoverImage.Visibility = Visibility.Collapsed;
+            MiniCoverFallback.Visibility = Visibility.Visible;
+        }
     }
 
     public void UpdateLyricSnippet(string text)
     {
-        LyricSnippetText.Text = string.IsNullOrWhiteSpace(text)
-            ? "Klang"
-            : text;
+        LyricSnippetText.Text = string.IsNullOrWhiteSpace(text) ? "Klang" : text;
+    }
+
+    public void UpdateEqBadge(string presetName)
+    {
+        EqBadgeText.Text = string.IsNullOrWhiteSpace(presetName) ? "音效" : presetName;
     }
 
     public void UpdateProgress(double currentSec, double totalSec)
@@ -91,6 +108,44 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
+    public void SetPlaybackRate(double rate)
+    {
+        RateText.Text = $"{rate:0.0}x";
+    }
+
+    public void SetShuffleState(bool isShuffle)
+    {
+        ShuffleIcon.Foreground = isShuffle
+            ? (Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush)
+            : (Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush);
+    }
+
+    public void SetRepeatMode(string mode)
+    {
+        // "loop_list" | "loop_single"
+        if (mode == "loop_single")
+        {
+            RepeatIcon.Glyph = "\uE8ED";
+            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, "循环模式：单曲循环");
+            RepeatIcon.Foreground = Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush;
+        }
+        else
+        {
+            RepeatIcon.Glyph = "\uE8EE";
+            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, "循环模式：列表循环");
+            RepeatIcon.Foreground = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush;
+        }
+    }
+
+    public void SetFavorite(bool isFav)
+    {
+        _isFavorite = isFav;
+        FavoriteIcon.Glyph = isFav ? "\uEB52" : "\uEB51";
+        FavoriteIcon.Foreground = isFav
+            ? (Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush)
+            : (Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush);
+    }
+
     private static string FormatTime(double seconds)
     {
         if (double.IsNaN(seconds) || seconds < 0) return "00:00";
@@ -102,32 +157,25 @@ public sealed partial class TransportBar : UserControl
 
     private void PlayPauseBtn_Click(object sender, RoutedEventArgs e)
     {
+        // 弹性微按压动画
+        PlayPauseScale.ScaleX = 0.88;
+        PlayPauseScale.ScaleY = 0.88;
+        _bounceTimer.Start();
+
         PlayPauseClicked?.Invoke(this, EventArgs.Empty);
     }
 
-    private void PrevBtn_Click(object sender, RoutedEventArgs e)
-    {
-        PrevClicked?.Invoke(this, EventArgs.Empty);
-    }
+    private void PrevBtn_Click(object sender, RoutedEventArgs e) => PrevClicked?.Invoke(this, EventArgs.Empty);
+    private void NextBtn_Click(object sender, RoutedEventArgs e) => NextClicked?.Invoke(this, EventArgs.Empty);
+    private void ShuffleBtn_Click(object sender, RoutedEventArgs e) => ShuffleClicked?.Invoke(this, EventArgs.Empty);
+    private void RepeatBtn_Click(object sender, RoutedEventArgs e) => RepeatClicked?.Invoke(this, EventArgs.Empty);
+    private void RateBtn_Click(object sender, RoutedEventArgs e) => RateClicked?.Invoke(this, EventArgs.Empty);
+    private void EqBtn_Click(object sender, RoutedEventArgs e) => EqualizerClicked?.Invoke(this, EventArgs.Empty);
 
-    private void NextBtn_Click(object sender, RoutedEventArgs e)
+    private void FavoriteBtn_Click(object sender, RoutedEventArgs e)
     {
-        NextClicked?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void ShuffleBtn_Click(object sender, RoutedEventArgs e)
-    {
-        ShuffleClicked?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void RepeatBtn_Click(object sender, RoutedEventArgs e)
-    {
-        RepeatClicked?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void EqBtn_Click(object sender, RoutedEventArgs e)
-    {
-        EqualizerClicked?.Invoke(this, EventArgs.Empty);
+        SetFavorite(!_isFavorite);
+        FavoriteClicked?.Invoke(this, EventArgs.Empty);
     }
 
     private void VolumeBtn_Click(object sender, RoutedEventArgs e)
@@ -147,17 +195,15 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
-    private void TimelineSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
-    {
-        if (Math.Abs(e.NewValue - e.OldValue) > 1.5)
-        {
-            UserSeekRequested?.Invoke(this, e.NewValue);
-        }
-    }
-
-    private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+    private void VolumeSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
         float vol = (float)(VolumeSlider.Value / 100.0);
+        int pct = (int)VolumeSlider.Value;
+        if (VolumePctText != null)
+        {
+            VolumePctText.Text = $"{pct}%";
+        }
+
         if (VolumeSlider.Value == 0)
         {
             VolumeIcon.Glyph = "\uE74F";
@@ -180,5 +226,24 @@ public sealed partial class TransportBar : UserControl
         }
 
         UserVolumeChanged?.Invoke(this, vol);
+    }
+
+    private void TimelineSlider_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _isUserDragging = true;
+    }
+
+    private void TimelineSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_isUserDragging)
+        {
+            _isUserDragging = false;
+            UserSeekRequested?.Invoke(this, TimelineSlider.Value);
+        }
+    }
+
+    private void TimelineSlider_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+    {
+        _isUserDragging = false;
     }
 }

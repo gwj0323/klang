@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentDialog
+    x:Class="Klang_WinUI.Dialogs.EqualizerDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="DSP 声学效果器 &amp; 耳机硬件校准"
+    CloseButtonText="关闭"
+    DefaultButton="Close"
+    PrimaryButtonText="重置原声"
+    Style="{StaticResource DefaultContentDialogStyle}"
+    mc:Ignorable="d">
+
+    <ScrollViewer
+        MaxHeight="580"
+        Padding="0,0,16,0"
+        VerticalScrollBarVisibility="Auto">
+
+        <StackPanel Width="460" Spacing="20">
+            <!-- 1. 声学预设切换胶囊 -->
+            <StackPanel Spacing="8">
+                <TextBlock
+                    FontSize="12"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="声学预设 (Acoustic Profiles)" />
+
+                <Grid ColumnDefinitions="*,*,*,*,*">
+                    <Button
+                        x:Name="PresetDefaultBtn"
+                        Grid.Column="0"
+                        Height="32"
+                        Margin="2"
+                        Click="PresetBtn_Click"
+                        CornerRadius="6"
+                        Tag="默认原声">
+                        <TextBlock FontSize="12" Text="默认原声" />
+                    </Button>
+                    <Button
+                        x:Name="PresetVocalBtn"
+                        Grid.Column="1"
+                        Height="32"
+                        Margin="2"
+                        Click="PresetBtn_Click"
+                        CornerRadius="6"
+                        Tag="流行人声">
+                        <TextBlock FontSize="12" Text="流行人声" />
+                    </Button>
+                    <Button
+                        x:Name="PresetBassBtn"
+                        Grid.Column="2"
+                        Height="32"
+                        Margin="2"
+                        Click="PresetBtn_Click"
+                        CornerRadius="6"
+                        Tag="低音增强">
+                        <TextBlock FontSize="12" Text="低音增强" />
+                    </Button>
+                    <Button
+                        x:Name="PresetTrebleBtn"
+                        Grid.Column="3"
+                        Height="32"
+                        Margin="2"
+                        Click="PresetBtn_Click"
+                        CornerRadius="6"
+                        Tag="清澈高音">
+                        <TextBlock FontSize="12" Text="清澈高音" />
+                    </Button>
+                    <Button
+                        x:Name="PresetLiveBtn"
+                        Grid.Column="4"
+                        Height="32"
+                        Margin="2"
+                        Click="PresetBtn_Click"
+                        CornerRadius="6"
+                        Tag="现场空间">
+                        <TextBlock FontSize="12" Text="现场空间" />
+                    </Button>
+                </Grid>
+            </StackPanel>
+
+            <!-- 2. 5 段参量均衡器滑块机架 -->
+            <Border
+                Padding="16,14,16,14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="12">
+                    <Grid>
+                        <TextBlock
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Text="5 段发烧级硬件 IIR 均衡器" />
+                        <TextBlock
+                            x:Name="CurrentPresetLabel"
+                            HorizontalAlignment="Right"
+                            FontSize="11"
+                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                            Text="当前：默认原声" />
+                    </Grid>
+
+                    <!-- 60Hz -->
+                    <Grid ColumnDefinitions="54,*,44">
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Text="60Hz (低音)" />
+                        <Slider
+                            x:Name="Slider60Hz"
+                            Grid.Column="1"
+                            Margin="8,0,8,0"
+                            Maximum="12"
+                            Minimum="-12"
+                            StepFrequency="0.5"
+                            ValueChanged="EqSlider_ValueChanged" />
+                        <TextBlock
+                            x:Name="Val60Hz"
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="0.0dB"
+                            TextAlignment="Right" />
+                    </Grid>
+
+                    <!-- 230Hz -->
+                    <Grid ColumnDefinitions="54,*,44">
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Text="230Hz (温暖)" />
+                        <Slider
+                            x:Name="Slider230Hz"
+                            Grid.Column="1"
+                            Margin="8,0,8,0"
+                            Maximum="12"
+                            Minimum="-12"
+                            StepFrequency="0.5"
+                            ValueChanged="EqSlider_ValueChanged" />
+                        <TextBlock
+                            x:Name="Val230Hz"
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="0.0dB"
+                            TextAlignment="Right" />
+                    </Grid>
+
+                    <!-- 910Hz -->
+                    <Grid ColumnDefinitions="54,*,44">
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Text="910Hz (人声)" />
+                        <Slider
+                            x:Name="Slider910Hz"
+                            Grid.Column="1"
+                            Margin="8,0,8,0"
+                            Maximum="12"
+                            Minimum="-12"
+                            StepFrequency="0.5"
+                            ValueChanged="EqSlider_ValueChanged" />
+                        <TextBlock
+                            x:Name="Val910Hz"
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="0.0dB"
+                            TextAlignment="Right" />
+                    </Grid>
+
+                    <!-- 3.6kHz -->
+                    <Grid ColumnDefinitions="54,*,44">
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Text="3.6k (通透)" />
+                        <Slider
+                            x:Name="Slider3600Hz"
+                            Grid.Column="1"
+                            Margin="8,0,8,0"
+                            Maximum="12"
+                            Minimum="-12"
+                            StepFrequency="0.5"
+                            ValueChanged="EqSlider_ValueChanged" />
+                        <TextBlock
+                            x:Name="Val3600Hz"
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="0.0dB"
+                            TextAlignment="Right" />
+                    </Grid>
+
+                    <!-- 12kHz -->
+                    <Grid ColumnDefinitions="54,*,44">
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Text="12k (空气感)" />
+                        <Slider
+                            x:Name="Slider12000Hz"
+                            Grid.Column="1"
+                            Margin="8,0,8,0"
+                            Maximum="12"
+                            Minimum="-12"
+                            StepFrequency="0.5"
+                            ValueChanged="EqSlider_ValueChanged" />
+                        <TextBlock
+                            x:Name="Val12000Hz"
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="0.0dB"
+                            TextAlignment="Right" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 3. 空间音频 / 杜比全景声 -->
+            <Border
+                Padding="16,14,16,14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        FontSize="12"
+                        FontWeight="SemiBold"
+                        Text="空间音频渲染 (Spatial Audio)" />
+                    <ComboBox
+                        x:Name="SpatialCombo"
+                        HorizontalAlignment="Stretch"
+                        SelectionChanged="SpatialCombo_SelectionChanged">
+                        <ComboBoxItem Content="杜比全景声 (Dolby Atmos - 360° 空间漫射 + 8.6kHz 天空声道)" Tag="atmos" />
+                        <ComboBoxItem Content="双耳空间音频 (Spatial Stereo - 宽声场扩展)" Tag="spatial" />
+                        <ComboBoxItem Content="关闭 (纯净立体声直通)" Tag="off" />
+                    </ComboBox>
+                </StackPanel>
+            </Border>
+
+            <!-- 4. 人声 ⟷ 伴奏 无极天平 -->
+            <Border
+                Padding="16,14,16,14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <Grid>
+                        <TextBlock
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Text="人声 ⟷ 伴奏 无极天平 (Mid/Side 分离)" />
+                        <TextBlock
+                            x:Name="VocalBalanceLabel"
+                            HorizontalAlignment="Right"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="均衡 0.0" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="纯伴奏 (K歌)" />
+                        <Slider
+                            x:Name="VocalBalanceSlider"
+                            Grid.Column="1"
+                            Margin="10,0,10,0"
+                            Maximum="1.0"
+                            Minimum="-1.0"
+                            StepFrequency="0.05"
+                            ValueChanged="VocalBalanceSlider_ValueChanged" />
+                        <TextBlock
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="人声聚焦" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 5. 黑胶模拟温暖度 -->
+            <Border
+                Padding="16,14,16,14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <Grid>
+                        <TextBlock
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Text="黑胶模拟温暖味 (Vinyl Warmth)" />
+                        <TextBlock
+                            x:Name="VinylWarmthLabel"
+                            HorizontalAlignment="Right"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="0%" />
+                    </Grid>
+                    <Slider
+                        x:Name="VinylWarmthSlider"
+                        Maximum="100"
+                        Minimum="0"
+                        StepFrequency="1"
+                        ValueChanged="VinylWarmthSlider_ValueChanged" />
+                </StackPanel>
+            </Border>
+
+            <!-- 6. 耳机声学校准 (AutoEq) -->
+            <Border
+                Padding="16,14,16,14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        FontSize="12"
+                        FontWeight="SemiBold"
+                        Text="耳机硬件声学校准 (AutoEq 哈曼曲线目标补偿)" />
+                    <ComboBox
+                        x:Name="HeadphoneCombo"
+                        HorizontalAlignment="Stretch"
+                        SelectionChanged="HeadphoneCombo_SelectionChanged" />
+                    <TextBlock
+                        x:Name="HeadphoneDescLabel"
+                        FontSize="11"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="保持音频原始声底直通输出，未开启硬件声学校准。"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

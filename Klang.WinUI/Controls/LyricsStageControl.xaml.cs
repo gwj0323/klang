@@ -19,6 +19,14 @@ public sealed partial class LyricsStageControl : UserControl
     {
         InitializeComponent();
         LyricsItemsControl.ItemsSource = Lyrics;
+        UpdateEmptyState();
+    }
+
+    private void UpdateEmptyState()
+    {
+        bool hasLyrics = Lyrics.Count > 0;
+        EmptyLyricsPanel.Visibility = hasLyrics ? Visibility.Collapsed : Visibility.Visible;
+        LyricsScrollViewer.Visibility = hasLyrics ? Visibility.Visible : Visibility.Collapsed;
     }
 
     public void LoadLyrics(string? audioFilePath)
@@ -32,6 +40,7 @@ public sealed partial class LyricsStageControl : UserControl
             Lyrics.Add(l);
         }
 
+        UpdateEmptyState();
         LyricsScrollViewer.ChangeView(null, 0, null, true);
     }
 
@@ -76,12 +85,13 @@ public sealed partial class LyricsStageControl : UserControl
                         double deltaY = point.Y - (viewportH / 2.0) + (container.ActualHeight / 2.0);
                         double targetOffset = LyricsScrollViewer.VerticalOffset + deltaY;
 
+                        // false 表示带 WinUI 3 原生惯性阻尼丝滑平滑过渡
                         LyricsScrollViewer.ChangeView(null, targetOffset, null, false);
                     }
                 }
                 catch
                 {
-                    // 布局重绘安全保护
+                    // 布局安全保护
                 }
             }
         });

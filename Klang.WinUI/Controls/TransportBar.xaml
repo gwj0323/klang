@@ -7,97 +7,143 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
+    <UserControl.Resources>
+        <!-- 极简高雅 Nordic 细长进度条与悬浮光晕滑块轻量级样式 -->
+        <x:Double x:Key="SliderTrackThemeHeight">3.8</x:Double>
+        <x:Double x:Key="SliderThumbWidth">14</x:Double>
+        <x:Double x:Key="SliderThumbHeight">14</x:Double>
+        <CornerRadius x:Key="SliderThumbCornerRadius">7</CornerRadius>
+    </UserControl.Resources>
+
     <Border
-        Height="84"
-        Padding="20,0,20,0"
+        Height="88"
+        Padding="24,0,24,0"
         Background="{ThemeResource LayerFillColorDefaultBrush}"
         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
         BorderThickness="0,1,0,0">
 
         <Grid VerticalAlignment="Center">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="280" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="280" />
             </Grid.ColumnDefinitions>
 
-            <!-- 1. 左侧：动态微型声波律动 + 实时单句歌词摘要 (Qt 原版标志性设计) -->
-            <StackPanel
-                Grid.Column="0"
-                VerticalAlignment="Center"
-                Orientation="Horizontal"
-                Spacing="12">
-                <!-- 微缩律动柱 -->
+            <!-- 1. 左侧：42x42 迷你封面 + 状态标题 + 动态单句歌词/艺术家 + 收藏心形 -->
+            <Grid Grid.Column="0" VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 迷你封面 -->
                 <Border
-                    Width="36"
-                    Height="36"
-                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                    Grid.Column="0"
+                    Width="44"
+                    Height="44"
+                    Margin="0,0,12,0"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <StackPanel
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        Orientation="Horizontal"
-                        Spacing="3">
-                        <Border x:Name="MiniWave1" Width="3" Height="8" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                        <Border x:Name="MiniWave2" Width="3" Height="16" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                        <Border x:Name="MiniWave3" Width="3" Height="12" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                        <Border x:Name="MiniWave4" Width="3" Height="6" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    </StackPanel>
+                    <Grid>
+                        <FontIcon
+                            x:Name="MiniCoverFallback"
+                            FontSize="20"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Glyph="&#xE8D6;" />
+                        <Image
+                            x:Name="MiniCoverImage"
+                            Stretch="UniformToFill"
+                            Visibility="Collapsed" />
+                    </Grid>
                 </Border>
 
-                <StackPanel VerticalAlignment="Center" Spacing="2">
+                <!-- 歌曲标题与动态歌词摘要 -->
+                <StackPanel
+                    Grid.Column="1"
+                    VerticalAlignment="Center"
+                    Spacing="2">
                     <TextBlock
                         x:Name="StatusCaptionText"
-                        FontSize="11"
+                        FontSize="13"
                         FontWeight="SemiBold"
                         Text="未加载曲目"
                         TextTrimming="CharacterEllipsis" />
                     <TextBlock
                         x:Name="LyricSnippetText"
-                        MaxWidth="240"
-                        FontSize="12"
+                        FontSize="11"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="Klang"
                         TextTrimming="CharacterEllipsis" />
                 </StackPanel>
-            </StackPanel>
 
-            <!-- 2. 中间：播放控制按钮簇与时间进度条 -->
+                <!-- 收藏红心按钮 -->
+                <Button
+                    x:Name="FavoriteBtn"
+                    Grid.Column="2"
+                    Width="30"
+                    Height="30"
+                    Margin="8,0,0,0"
+                    Padding="0"
+                    Click="FavoriteBtn_Click"
+                    CornerRadius="15"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="添加到我喜欢">
+                    <FontIcon
+                        x:Name="FavoriteIcon"
+                        FontSize="14"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Glyph="&#xEB51;" />
+                </Button>
+            </Grid>
+
+            <!-- 2. 中间：核心播放控制按钮簇 + 毫秒级时间进度条 -->
             <StackPanel
                 Grid.Column="1"
                 MaxWidth="560"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                Spacing="4">
+                Spacing="6">
+
                 <!-- 控制按钮组 -->
                 <StackPanel
                     HorizontalAlignment="Center"
                     Orientation="Horizontal"
-                    Spacing="14">
+                    Spacing="12">
+
+                    <!-- 随机播放 -->
                     <Button
                         x:Name="ShuffleBtn"
+                        Width="32"
+                        Height="32"
+                        Padding="0"
+                        Click="ShuffleBtn_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="随机播放">
+                        <FontIcon
+                            x:Name="ShuffleIcon"
+                            FontSize="14"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Glyph="&#xE8B1;" />
+                    </Button>
+
+                    <!-- 上一曲 -->
+                    <Button
+                        x:Name="PrevBtn"
                         Width="34"
                         Height="34"
                         Padding="0"
-                        Click="ShuffleBtn_Click"
-                        Style="{StaticResource SubtleButtonStyle}"
-                        ToolTipService.ToolTip="随机播放">
-                        <FontIcon FontSize="15" Glyph="&#xE8B1;" />
-                    </Button>
-
-                    <Button
-                        x:Name="PrevBtn"
-                        Width="36"
-                        Height="36"
-                        Padding="0"
                         Click="PrevBtn_Click"
+                        CornerRadius="17"
                         Style="{StaticResource SubtleButtonStyle}"
                         ToolTipService.ToolTip="上一首 (Ctrl+Left)">
-                        <FontIcon FontSize="16" Glyph="&#xE892;" />
+                        <FontIcon FontSize="15" Glyph="&#xE892;" />
                     </Button>
 
+                    <!-- 核心播放/暂停弹性大按钮 -->
                     <Button
                         x:Name="PlayPauseBtn"
                         Width="44"
@@ -107,48 +153,76 @@
                         CornerRadius="22"
                         Style="{StaticResource AccentButtonStyle}"
                         ToolTipService.ToolTip="播放 / 暂停 (Space)">
+                        <Button.RenderTransform>
+                            <ScaleTransform x:Name="PlayPauseScale" CenterX="22" CenterY="22" ScaleX="1.0" ScaleY="1.0" />
+                        </Button.RenderTransform>
                         <FontIcon
                             x:Name="PlayPauseIcon"
                             FontSize="18"
                             Glyph="&#xE768;" />
                     </Button>
 
+                    <!-- 下一曲 -->
                     <Button
                         x:Name="NextBtn"
-                        Width="36"
-                        Height="36"
-                        Padding="0"
-                        Click="NextBtn_Click"
-                        Style="{StaticResource SubtleButtonStyle}"
-                        ToolTipService.ToolTip="下一首 (Ctrl+Right)">
-                        <FontIcon FontSize="16" Glyph="&#xE893;" />
-                    </Button>
-
-                    <Button
-                        x:Name="RepeatBtn"
                         Width="34"
                         Height="34"
                         Padding="0"
-                        Click="RepeatBtn_Click"
+                        Click="NextBtn_Click"
+                        CornerRadius="17"
                         Style="{StaticResource SubtleButtonStyle}"
-                        ToolTipService.ToolTip="循环模式">
-                        <FontIcon FontSize="15" Glyph="&#xE8EE;" />
+                        ToolTipService.ToolTip="下一首 (Ctrl+Right)">
+                        <FontIcon FontSize="15" Glyph="&#xE893;" />
+                    </Button>
+
+                    <!-- 循环模式 -->
+                    <Button
+                        x:Name="RepeatBtn"
+                        Width="32"
+                        Height="32"
+                        Padding="0"
+                        Click="RepeatBtn_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="循环模式：列表循环">
+                        <FontIcon
+                            x:Name="RepeatIcon"
+                            FontSize="14"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Glyph="&#xE8EE;" />
+                    </Button>
+
+                    <!-- 倍速切换按钮 -->
+                    <Button
+                        x:Name="RateBtn"
+                        Height="26"
+                        Padding="8,0,8,0"
+                        Click="RateBtn_Click"
+                        CornerRadius="13"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="切换播放倍速">
+                        <TextBlock
+                            x:Name="RateText"
+                            FontSize="11"
+                            FontWeight="Medium"
+                            Text="1.0x" />
                     </Button>
                 </StackPanel>
 
-                <!-- 时间进度条 -->
+                <!-- 时间进度条与两端时间指示 -->
                 <Grid Margin="0,-2,0,0">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="42" />
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="42" />
                     </Grid.ColumnDefinitions>
 
                     <TextBlock
                         x:Name="CurrentTimeText"
                         Grid.Column="0"
-                        Margin="0,0,8,0"
+                        HorizontalAlignment="Right"
                         VerticalAlignment="Center"
+                        FontFamily="Consolas, Segoe UI"
                         FontSize="11"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="00:00" />
@@ -156,48 +230,63 @@
                     <Slider
                         x:Name="TimelineSlider"
                         Grid.Column="1"
+                        Margin="10,0,10,0"
                         VerticalAlignment="Center"
                         IsThumbToolTipEnabled="False"
                         Maximum="100"
                         Minimum="0"
-                        ValueChanged="TimelineSlider_ValueChanged"
+                        PointerCaptureLost="TimelineSlider_PointerCaptureLost"
+                        PointerPressed="TimelineSlider_PointerPressed"
+                        PointerReleased="TimelineSlider_PointerReleased"
                         Value="0" />
 
                     <TextBlock
                         x:Name="TotalTimeText"
                         Grid.Column="2"
-                        Margin="8,0,0,0"
+                        HorizontalAlignment="Left"
                         VerticalAlignment="Center"
+                        FontFamily="Consolas, Segoe UI"
                         FontSize="11"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="00:00" />
                 </Grid>
             </StackPanel>
 
-            <!-- 3. 右侧：DSP 均衡器入口与音量调节 -->
+            <!-- 3. 右侧：DSP 均衡器入口胶囊 + 静音与音量滑块 + 百分比 -->
             <StackPanel
                 Grid.Column="2"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="8">
+
+                <!-- DSP 均衡器药丸按钮 -->
                 <Button
                     x:Name="EqBtn"
-                    Width="34"
-                    Height="34"
-                    Padding="0"
+                    Height="28"
+                    Padding="10,0,10,0"
                     Click="EqBtn_Click"
+                    CornerRadius="14"
                     Style="{StaticResource SubtleButtonStyle}"
-                    ToolTipService.ToolTip="DSP 声学均衡器 &amp; AutoEq">
-                    <FontIcon FontSize="15" Glyph="&#xE9E9;" />
+                    ToolTipService.ToolTip="DSP 声学效果器 &amp; 耳机校准">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <FontIcon FontSize="12" Glyph="&#xE9E9;" />
+                        <TextBlock
+                            x:Name="EqBadgeText"
+                            FontSize="11"
+                            FontWeight="Medium"
+                            Text="音效" />
+                    </StackPanel>
                 </Button>
 
+                <!-- 静音开关 -->
                 <Button
                     x:Name="VolumeBtn"
-                    Width="34"
-                    Height="34"
+                    Width="32"
+                    Height="32"
                     Padding="0"
                     Click="VolumeBtn_Click"
+                    CornerRadius="16"
                     Style="{StaticResource SubtleButtonStyle}"
                     ToolTipService.ToolTip="静音 / 取消静音">
                     <FontIcon
@@ -206,15 +295,27 @@
                         Glyph="&#xE767;" />
                 </Button>
 
+                <!-- 音量细滑块 -->
                 <Slider
                     x:Name="VolumeSlider"
-                    Width="90"
+                    Width="88"
                     VerticalAlignment="Center"
                     IsThumbToolTipEnabled="False"
                     Maximum="100"
                     Minimum="0"
                     ValueChanged="VolumeSlider_ValueChanged"
                     Value="85" />
+
+                <!-- 音量百分比 -->
+                <TextBlock
+                    x:Name="VolumePctText"
+                    Width="32"
+                    VerticalAlignment="Center"
+                    FontFamily="Consolas, Segoe UI"
+                    FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="85%"
+                    TextAlignment="Right" />
             </StackPanel>
         </Grid>
     </Border>

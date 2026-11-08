@@ -7,38 +7,106 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Width="320" VerticalAlignment="Center">
-        <StackPanel Spacing="16">
-            <!-- 1. 300x300 专辑黑胶艺术卡片 -->
-            <Border
-                Width="300"
-                Height="300"
-                HorizontalAlignment="Center"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="16">
-                <Grid>
-                    <!-- 默认黑胶唱片唱针图标 -->
-                    <FontIcon
-                        x:Name="FallbackIcon"
-                        FontSize="72"
-                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                        Glyph="&#xE8D6;" />
+    <Grid Width="340" VerticalAlignment="Center">
+        <StackPanel Spacing="18">
 
-                    <!-- 高清内嵌专辑封面图 -->
-                    <Image
-                        x:Name="CoverImage"
-                        Stretch="UniformToFill"
-                        Visibility="Collapsed" />
-                </Grid>
-            </Border>
+            <!-- 1. 黑胶唱片 + 艺术封套联动舞台 (280x280 核心区域) -->
+            <Grid
+                Width="320"
+                Height="270"
+                HorizontalAlignment="Center">
 
-            <!-- 2. 曲目元数据 (Qt 原版文案) -->
-            <StackPanel Spacing="6">
+                <!-- [底层] 真实黑胶唱片 (Vinyl LP Disc)：随播放滑出并匀速旋转 -->
+                <Border
+                    x:Name="VinylDisc"
+                    Width="250"
+                    Height="250"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Background="#16171A"
+                    BorderBrush="#2A2C30"
+                    BorderThickness="1"
+                    CornerRadius="125">
+                    <Border.RenderTransform>
+                        <TransformGroup>
+                            <TranslateTransform x:Name="VinylSlideTransform" X="0" />
+                            <RotateTransform x:Name="VinylRotateTransform" Angle="0" CenterX="125" CenterY="125" />
+                        </TransformGroup>
+                    </Border.RenderTransform>
+
+                    <!-- 黑胶唱片同心纹路与中心标签 -->
+                    <Grid>
+                        <!-- 外圈纹理环 -->
+                        <Border Width="220" Height="220" BorderBrush="#35383F" BorderThickness="1" CornerRadius="110" Opacity="0.35" />
+                        <Border Width="190" Height="190" BorderBrush="#35383F" BorderThickness="1" CornerRadius="95" Opacity="0.30" />
+                        <Border Width="160" Height="160" BorderBrush="#35383F" BorderThickness="1" CornerRadius="80" Opacity="0.25" />
+                        <Border Width="130" Height="130" BorderBrush="#35383F" BorderThickness="1" CornerRadius="65" Opacity="0.20" />
+
+                        <!-- 黑胶中心彩胶贴纸 (Label) -->
+                        <Border
+                            Width="92"
+                            Height="92"
+                            Background="{ThemeResource AccentFillColorDefaultBrush}"
+                            BorderBrush="#111113"
+                            BorderThickness="2"
+                            CornerRadius="46">
+                            <Grid>
+                                <FontIcon FontSize="18" Foreground="#FAF9F6" Glyph="&#xE8D6;" />
+                                <!-- 中心转轴孔 (Spindle Hole) -->
+                                <Border
+                                    Width="14"
+                                    Height="14"
+                                    Background="#111113"
+                                    CornerRadius="7" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- [顶层] 唱片封套 (Jacket Card)：沉浸圆角与平滑切换过渡 -->
+                <Border
+                    x:Name="JacketCard"
+                    Width="260"
+                    Height="260"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14">
+                    <Border.RenderTransform>
+                        <ScaleTransform x:Name="CoverScaleTransform" CenterX="130" CenterY="130" ScaleX="1.0" ScaleY="1.0" />
+                    </Border.RenderTransform>
+
+                    <Grid>
+                        <!-- 默认未加载音乐占位图标 -->
+                        <FontIcon
+                            x:Name="FallbackIcon"
+                            FontSize="64"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Glyph="&#xE8D6;" />
+
+                        <!-- 高清专辑封面图 (支持平滑淡入淡出动画) -->
+                        <Image
+                            x:Name="CoverImage"
+                            Stretch="UniformToFill"
+                            Visibility="Collapsed" />
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- 2. 曲目元数据信息 (文字入场动效) -->
+            <StackPanel
+                x:Name="MetaInfoPanel"
+                Margin="4,0,4,0"
+                Spacing="5">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform x:Name="MetaTranslateTransform" Y="0" />
+                </StackPanel.RenderTransform>
+
                 <TextBlock
                     x:Name="TitleText"
-                    FontSize="22"
+                    FontSize="20"
                     FontWeight="SemiBold"
                     Text="暂无播放曲目"
                     TextTrimming="CharacterEllipsis"
@@ -46,8 +114,8 @@
 
                 <TextBlock
                     x:Name="ArtistText"
-                    FontSize="14"
-                    FontWeight="Medium"
+                    FontSize="13"
+                    FontWeight="Normal"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="点击左侧栏按钮导入本地音乐"
                     TextTrimming="CharacterEllipsis"
@@ -90,31 +158,31 @@
                 </Grid>
             </StackPanel>
 
-            <!-- 3. 动态模拟律动声波条 (Nordic Spectrum) -->
+            <!-- 3. 真实音频驱动的 16 频段律动频谱条 (Nordic Spectrum Analyzer) -->
             <Border
-                Height="28"
-                Padding="10,4,10,4"
+                Height="32"
+                Padding="12,6,12,6"
                 Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
-                CornerRadius="6">
+                CornerRadius="8">
                 <Grid x:Name="SpectrumGrid" ColumnDefinitions="*,*,*,*,*,*,*,*,*,*,*,*,*,*,*,*">
-                    <Border Grid.Column="0" Width="3" Height="6" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="1" Width="3" Height="14" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="2" Width="3" Height="18" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="3" Width="3" Height="10" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="4" Width="3" Height="22" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="5" Width="3" Height="16" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="6" Width="3" Height="8" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="7" Width="3" Height="20" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="8" Width="3" Height="14" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="9" Width="3" Height="18" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="10" Width="3" Height="12" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="11" Width="3" Height="22" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="12" Width="3" Height="16" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="13" Width="3" Height="8" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="14" Width="3" Height="15" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
-                    <Border Grid.Column="15" Width="3" Height="6" VerticalAlignment="Center" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
+                    <Border x:Name="Bar0" Grid.Column="0" Width="3.5" Height="4" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar1" Grid.Column="1" Width="3.5" Height="6" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar2" Grid.Column="2" Width="3.5" Height="5" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar3" Grid.Column="3" Width="3.5" Height="8" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar4" Grid.Column="4" Width="3.5" Height="12" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar5" Grid.Column="5" Width="3.5" Height="14" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar6" Grid.Column="6" Width="3.5" Height="10" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar7" Grid.Column="7" Width="3.5" Height="16" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar8" Grid.Column="8" Width="3.5" Height="15" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar9" Grid.Column="9" Width="3.5" Height="11" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar10" Grid.Column="10" Width="3.5" Height="8" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar11" Grid.Column="11" Width="3.5" Height="6" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar12" Grid.Column="12" Width="3.5" Height="9" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar13" Grid.Column="13" Width="3.5" Height="7" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar14" Grid.Column="14" Width="3.5" Height="5" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
+                    <Border x:Name="Bar15" Grid.Column="15" Width="3.5" Height="4" VerticalAlignment="Bottom" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.75" />
                 </Grid>
             </Border>
         </StackPanel>

@@ -18,6 +18,7 @@ public sealed partial class MainWindow : Window
     private TrackItem? _currentTrack;
     private string _playMode = "loop_list"; // "loop_list" | "loop_single" | "random"
     private readonly Random _rand = new();
+    private double _playbackRate = 1.0;
 
     public MainWindow()
     {
@@ -46,6 +47,12 @@ public sealed partial class MainWindow : Window
             {
                 BottomTransportBar.UpdateLyricSnippet(StageLyricsControl.Lyrics[activeIdx].Text);
             }
+        };
+
+        // 真实声学能量频谱驱动黑胶唱片卡动态律动柱
+        AudioEngineService.Instance.SpectrumChanged += (bands) =>
+        {
+            StageCoverCard.UpdateSpectrum(bands);
         };
 
         AudioEngineService.Instance.StateChanged += (state) =>
@@ -102,13 +109,43 @@ public sealed partial class MainWindow : Window
         BottomTransportBar.ShuffleClicked += (s, e) =>
         {
             _playMode = (_playMode == "random") ? "loop_list" : "random";
+            BottomTransportBar.SetShuffleState(_playMode == "random");
             BottomTransportBar.UpdateLyricSnippet(_playMode == "random" ? "已开启随机播放" : "已开启列表循环");
         };
 
         BottomTransportBar.RepeatClicked += (s, e) =>
         {
             _playMode = (_playMode == "loop_single") ? "loop_list" : "loop_single";
+            BottomTransportBar.SetRepeatMode(_playMode);
             BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? "已开启单曲循环" : "已开启列表循环");
+        };
+
+        BottomTransportBar.RateClicked += (s, e) =>
+        {
+            _playbackRate = _playbackRate switch
+            {
+                1.0 => 1.25,
+                1.25 => 1.5,
+                1.5 => 2.0,
+                2.0 => 0.75,
+                _ => 1.0
+            };
+            BottomTransportBar.SetPlaybackRate(_playbackRate);
+            BottomTransportBar.UpdateLyricSnippet($"播放倍速：{_playbackRate:0.0}x");
+        };
+
+        BottomTransportBar.FavoriteClicked += (s, e) =>
+        {
+            if (_currentTrack != null)
+            {
+                _currentTrack.IsFavorite = !_currentTrack.IsFavorite;
+                BottomTransportBar.SetFavorite(_currentTrack.IsFavorite);
+            }
+        };
+
+        BottomTransportBar.EqualizerClicked += async (s, e) =>
+        {
+            await OpenEqualizerDialogAsync();
         };
 
         BottomTransportBar.UserSeekRequested += (s, pos) =>
@@ -122,10 +159,13 @@ public sealed partial class MainWindow : Window
             AudioEngineService.Instance.Volume = vol;
         };
 
-        // 初始化界面初始文案（不填任何虚假预制歌曲）
+        // 初始化界面初始文案与状态
+        BottomTransportBar.SetShuffleState(false);
+        BottomTransportBar.SetRepeatMode("loop_list");
+        BottomTransportBar.UpdateEqBadge(AudioEngineService.Instance.CurrentPreset);
         StageCoverCard.UpdateTrack(null);
         StageLyricsControl.LoadLyrics(null);
-        BottomTransportBar.UpdateTrackState(null, null);
+        BottomTransportBar.UpdateTrackState(null, null, null);
     }
 
     private void PlayTrack(TrackItem track)
@@ -134,7 +174,8 @@ public sealed partial class MainWindow : Window
 
         StageCoverCard.UpdateTrack(track);
         StageLyricsControl.LoadLyrics(track.FilePath);
-        BottomTransportBar.UpdateTrackState(track.Title, track.Artist);
+        BottomTransportBar.UpdateTrackState(track.Title, track.Artist, track.CoverPath);
+        BottomTransportBar.SetFavorite(track.IsFavorite);
 
         if (!string.IsNullOrEmpty(track.FilePath))
         {
@@ -184,6 +225,26 @@ public sealed partial class MainWindow : Window
         }
 
         PlayTrack(tracks[prevIdx]);
+    }
+
+    private async System.Threading.Tasks.Task OpenEqualizerDialogAsync()
+    {
+        try
+        {
+            if (this.Content?.XamlRoot == null) return;
+
+            var eqDialog = new EqualizerDialog
+            {
+                XamlRoot = this.Content.XamlRoot
+            };
+
+            await eqDialog.ShowAsync();
+            BottomTransportBar.UpdateEqBadge(AudioEngineService.Instance.CurrentPreset);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"EQ dialog error: {ex.Message}");
+        }
     }
 
     private void SidebarToggleBtn_Click(object sender, RoutedEventArgs e)

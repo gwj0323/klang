@@ -11,7 +11,7 @@
         <!-- 居中丝滑歌词滚动视口 -->
         <ScrollViewer
             x:Name="LyricsScrollViewer"
-            Padding="24,0,24,0"
+            Padding="28,0,28,0"
             HorizontalScrollBarVisibility="Disabled"
             IsScrollInertiaEnabled="True"
             VerticalScrollBarVisibility="Hidden">
@@ -22,12 +22,12 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Button
-                            Margin="0,5,0,5"
-                            Padding="16,10,16,10"
+                            Margin="0,6,0,6"
+                            Padding="20,12,20,12"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Center"
                             Click="LyricLine_Click"
-                            CornerRadius="10"
+                            CornerRadius="12"
                             Style="{StaticResource SubtleButtonStyle}"
                             ToolTipService.ToolTip="点击跳转到此时刻播放">
                             <Button.RenderTransform>
@@ -36,7 +36,7 @@
                                     ScaleY="{Binding ScaleY}" />
                             </Button.RenderTransform>
 
-                            <StackPanel HorizontalAlignment="Center" Spacing="4">
+                            <StackPanel HorizontalAlignment="Center" Spacing="5">
                                 <!-- 主歌词 -->
                                 <TextBlock
                                     FontSize="{Binding MainFontSize}"
@@ -61,5 +61,22 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
         </ScrollViewer>
+
+        <!-- 空歌词占位提示 -->
+        <StackPanel
+            x:Name="EmptyLyricsPanel"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="8"
+            Visibility="Visible">
+            <FontIcon
+                FontSize="36"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Glyph="&#xEC4F;" />
+            <TextBlock
+                FontSize="13"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="暂无歌词" />
+        </StackPanel>
     </Grid>
 </UserControl>
