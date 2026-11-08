@@ -4,16 +4,117 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:local="using:Klang_WinUI.Pages"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Padding="24,16,24,16" RowSpacing="24">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Settings" />
-        <TextBlock Grid.Row="1" Text="This is the Settings page" />
-    </Grid>
+    <ScrollViewer Padding="28,20,28,32">
+        <StackPanel MaxWidth="800" HorizontalAlignment="Left" Spacing="24">
+            <!-- 标题 -->
+            <StackPanel Spacing="4">
+                <TextBlock FontSize="24" FontWeight="Bold" Text="设置" />
+                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="定制你的 Klang 视觉与声学输出偏好" />
+            </StackPanel>
+
+            <!-- 1. 外观与系统材质 -->
+            <StackPanel Spacing="12">
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="外观与质感" />
+
+                <!-- 系统材质切换卡片 -->
+                <Border
+                    Padding="16,14,16,14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Spacing="2">
+                            <TextBlock FontWeight="Medium" Text="背景材质 (System Backdrop)" />
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="实时调用 Windows 11 原生 DWM 亚克力与云母特效" />
+                        </StackPanel>
+
+                        <ComboBox Grid.Column="1" Width="160" SelectedIndex="0">
+                            <ComboBoxItem Content="云母 (Mica)" />
+                            <ComboBoxItem Content="亚克力 (Acrylic)" />
+                            <ComboBoxItem Content="标准纯色" />
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <!-- 应用主题模式 -->
+                <Border
+                    Padding="16,14,16,14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Spacing="2">
+                            <TextBlock FontWeight="Medium" Text="应用主题" />
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="浅色、深色或随系统自动切换" />
+                        </StackPanel>
+
+                        <ComboBox Grid.Column="1" Width="160" SelectedIndex="0">
+                            <ComboBoxItem Content="跟随系统" />
+                            <ComboBoxItem Content="浅色 (Daylight)" />
+                            <ComboBoxItem Content="深色 (Dusk)" />
+                        </ComboBox>
+                    </Grid>
+                </Border>
+            </StackPanel>
+
+            <!-- 2. 音频硬件与输出缓冲 -->
+            <StackPanel Spacing="12">
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="音频输出与声卡" />
+
+                <Border
+                    Padding="16,14,16,14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Spacing="2">
+                            <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲模式" />
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="256KB 抗欠载环形缓冲，彻底杜绝窗口切换和调度断音" />
+                        </StackPanel>
+
+                        <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="已启用" OffContent="已关闭" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+
+            <!-- 3. 关于 Klang -->
+            <StackPanel Spacing="12">
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="关于 Klang" />
+
+                <Border
+                    Padding="16,16,16,16"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel Spacing="6">
+                        <TextBlock FontWeight="SemiBold" Text="Klang for Windows (WinUI 3 Edition)" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="运行框架：Windows App SDK · .NET 10 Native" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="采用微软最新 Fluent Design System 规范，为追求纯粹听觉美感打造。" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

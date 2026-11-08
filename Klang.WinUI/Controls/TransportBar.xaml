@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Klang_WinUI.Controls.TransportBar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Border
+        Height="84"
+        Padding="18,0,18,0"
+        Background="{ThemeResource LayerFillColorDefaultBrush}"
+        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+        BorderThickness="0,1,0,0">
+
+        <Grid VerticalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="280" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 1. 左侧：封面缩略图、曲目信息与格式标签 -->
+            <StackPanel
+                Grid.Column="0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="12">
+                <Border
+                    Width="50"
+                    Height="50"
+                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid>
+                        <FontIcon
+                            x:Name="FallbackCoverIcon"
+                            FontSize="22"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Glyph="&#xE8D6;" />
+                        <Image
+                            x:Name="CoverImage"
+                            Stretch="UniformToFill"
+                            Visibility="Collapsed" />
+                    </Grid>
+                </Border>
+
+                <StackPanel VerticalAlignment="Center" Spacing="2">
+                    <TextBlock
+                        x:Name="TrackTitleText"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Text="未播放曲目"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBlock
+                        x:Name="ArtistText"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="Klang - 沉浸式声学播放器"
+                        TextTrimming="CharacterEllipsis" />
+                    <StackPanel
+                        Margin="0,2,0,0"
+                        Orientation="Horizontal"
+                        Spacing="6">
+                        <Border
+                            Padding="5,1,5,1"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                            <TextBlock
+                                x:Name="BadgeFormat"
+                                FontSize="10"
+                                FontWeight="Medium"
+                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                Text="WASAPI · 0ms" />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- 2. 中间：播放控制按钮簇与时间进度条 -->
+            <StackPanel
+                Grid.Column="1"
+                MaxWidth="560"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="4">
+                <!-- 控制按钮组 -->
+                <StackPanel
+                    HorizontalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="14">
+                    <Button
+                        x:Name="ShuffleBtn"
+                        Width="34"
+                        Height="34"
+                        Padding="0"
+                        Click="ShuffleBtn_Click"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="随机播放">
+                        <FontIcon FontSize="15" Glyph="&#xE8B1;" />
+                    </Button>
+
+                    <Button
+                        x:Name="PrevBtn"
+                        Width="36"
+                        Height="36"
+                        Padding="0"
+                        Click="PrevBtn_Click"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="上一首 (Ctrl+Left)">
+                        <FontIcon FontSize="16" Glyph="&#xE892;" />
+                    </Button>
+
+                    <Button
+                        x:Name="PlayPauseBtn"
+                        Width="42"
+                        Height="42"
+                        Padding="0"
+                        Click="PlayPauseBtn_Click"
+                        CornerRadius="21"
+                        Style="{StaticResource AccentButtonStyle}"
+                        ToolTipService.ToolTip="播放 / 暂停 (Space)">
+                        <FontIcon
+                            x:Name="PlayPauseIcon"
+                            FontSize="18"
+                            Glyph="&#xE768;" />
+                    </Button>
+
+                    <Button
+                        x:Name="NextBtn"
+                        Width="36"
+                        Height="36"
+                        Padding="0"
+                        Click="NextBtn_Click"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="下一首 (Ctrl+Right)">
+                        <FontIcon FontSize="16" Glyph="&#xE893;" />
+                    </Button>
+
+                    <Button
+                        x:Name="RepeatBtn"
+                        Width="34"
+                        Height="34"
+                        Padding="0"
+                        Click="RepeatBtn_Click"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="循环模式">
+                        <FontIcon FontSize="15" Glyph="&#xE8EE;" />
+                    </Button>
+                </StackPanel>
+
+                <!-- 时间进度条 -->
+                <Grid Margin="0,-2,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock
+                        x:Name="CurrentTimeText"
+                        Grid.Column="0"
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        FontSize="11"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="00:00" />
+
+                    <Slider
+                        x:Name="TimelineSlider"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        IsThumbToolTipEnabled="False"
+                        Maximum="100"
+                        Minimum="0"
+                        ValueChanged="TimelineSlider_ValueChanged"
+                        Value="0" />
+
+                    <TextBlock
+                        x:Name="TotalTimeText"
+                        Grid.Column="2"
+                        Margin="8,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="11"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="00:00" />
+                </Grid>
+            </StackPanel>
+
+            <!-- 3. 右侧：DSP 均衡器入口、音量与沉浸模式按钮 -->
+            <StackPanel
+                Grid.Column="2"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="8">
+                <Button
+                    x:Name="EqBtn"
+                    Width="34"
+                    Height="34"
+                    Padding="0"
+                    Click="EqBtn_Click"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="DSP 声学均衡器 &amp; AutoEq">
+                    <FontIcon FontSize="15" Glyph="&#xE9E9;" />
+                </Button>
+
+                <Button
+                    x:Name="VolumeBtn"
+                    Width="34"
+                    Height="34"
+                    Padding="0"
+                    Click="VolumeBtn_Click"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="静音 / 取消静音">
+                    <FontIcon
+                        x:Name="VolumeIcon"
+                        FontSize="15"
+                        Glyph="&#xE767;" />
+                </Button>
+
+                <Slider
+                    x:Name="VolumeSlider"
+                    Width="90"
+                    VerticalAlignment="Center"
+                    IsThumbToolTipEnabled="False"
+                    Maximum="100"
+                    Minimum="0"
+                    ValueChanged="VolumeSlider_ValueChanged"
+                    Value="85" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>
