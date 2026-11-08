@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Windows.Storage.Pickers;
 using WinRT.Interop;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
@@ -17,7 +16,7 @@ public sealed partial class NavigationPane : UserControl
     public ObservableCollection<TrackItem> DisplayTracks { get; } = new();
     private readonly List<TrackItem> _allTracks = new();
     private string _currentTab = "all";
-    private string? _lastFolder;
+    private string _currentSort = "default";
 
     public event EventHandler<TrackItem>? TrackSelected;
 
@@ -32,7 +31,7 @@ public sealed partial class NavigationPane : UserControl
     {
         _allTracks.Clear();
         _allTracks.AddRange(tracks);
-        ApplyFilterAndSort();
+        ApplyFilterAndSort(_currentSort);
     }
 
     private void UpdateEmptyState()
@@ -47,28 +46,22 @@ public sealed partial class NavigationPane : UserControl
     {
         try
         {
-            var folderPicker = new FolderPicker();
-            folderPicker.SuggestedStartLocation = PickerLocationId.MusicLibrary;
-            folderPicker.FileTypeFilter.Add("*");
-
+            IntPtr hwnd = IntPtr.Zero;
             if (App.MainWindowInstance != null)
             {
-                IntPtr hwnd = WindowNative.GetWindowHandle(App.MainWindowInstance);
-                InitializeWithWindow.Initialize(folderPicker, hwnd);
+                hwnd = WindowNative.GetWindowHandle(App.MainWindowInstance);
             }
 
-            var folder = await folderPicker.PickSingleFolderAsync();
-            if (folder != null)
+            string? folder = FolderPickerHelper.PickFolder(hwnd);
+            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
             {
-                _lastFolder = folder.Path;
                 AddFolderBtn.IsEnabled = false;
 
-                var scanned = await LibraryService.Instance.ScanFolderAsync(folder.Path);
+                var scanned = await LibraryService.Instance.ScanFolderAsync(folder);
                 LoadTracks(scanned);
 
                 AddFolderBtn.IsEnabled = true;
 
-                // 如果扫描出了曲目且当前无播放，默认选中第一首
                 if (DisplayTracks.Count > 0)
                 {
                     TracksListView.SelectedIndex = 0;
@@ -78,7 +71,7 @@ public sealed partial class NavigationPane : UserControl
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Picker error: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"Pick folder error: {ex.Message}");
             AddFolderBtn.IsEnabled = true;
         }
     }
@@ -88,26 +81,39 @@ public sealed partial class NavigationPane : UserControl
         if (sender is Button btn && btn.Tag is string tag)
         {
             _currentTab = tag;
-
-            // 切换按钮高亮样式
-            TabAllBtn.Style = (tag == "all") ? (Style)Resources["AccentButtonStyle"] : (Style)Resources["SubtleButtonStyle"];
-            TabFavBtn.Style = (tag == "fav") ? (Style)Resources["AccentButtonStyle"] : (Style)Resources["SubtleButtonStyle"];
-            TabPlaylistsBtn.Style = (tag == "playlists") ? (Style)Resources["AccentButtonStyle"] : (Style)Resources["SubtleButtonStyle"];
-            TabNeteaseBtn.Style = (tag == "netease") ? (Style)Resources["AccentButtonStyle"] : (Style)Resources["SubtleButtonStyle"];
-
-            ApplyFilterAndSort();
+            UpdateTabStyles(tag);
+            ApplyFilterAndSort(_currentSort);
         }
+    }
+
+    private void UpdateTabStyles(string activeTag)
+    {
+        try
+        {
+            var accentStyle = Application.Current.Resources["AccentButtonStyle"] as Style;
+            var subtleStyle = Application.Current.Resources["SubtleButtonStyle"] as Style;
+
+            if (accentStyle != null && subtleStyle != null)
+            {
+                TabAllBtn.Style = (activeTag == "all") ? accentStyle : subtleStyle;
+                TabFavBtn.Style = (activeTag == "fav") ? accentStyle : subtleStyle;
+                TabPlaylistsBtn.Style = (activeTag == "playlists") ? accentStyle : subtleStyle;
+                TabNeteaseBtn.Style = (activeTag == "netease") ? accentStyle : subtleStyle;
+            }
+        }
+        catch { }
     }
 
     private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
-        ApplyFilterAndSort();
+        ApplyFilterAndSort(_currentSort);
     }
 
     private void SortItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is MenuFlyoutItem item && item.Tag is string sortKey)
         {
+            _currentSort = sortKey;
             SortDropDownBtn.Content = $"{item.Text} ▾";
             ApplyFilterAndSort(sortKey);
         }
@@ -119,13 +125,11 @@ public sealed partial class NavigationPane : UserControl
 
         IEnumerable<TrackItem> filtered = _allTracks;
 
-        // 标签页过滤
         if (_currentTab == "fav")
         {
             filtered = filtered.Where(t => t.IsFavorite);
         }
 
-        // 搜索关键词过滤
         if (!string.IsNullOrEmpty(query))
         {
             filtered = filtered.Where(t =>
@@ -134,7 +138,6 @@ public sealed partial class NavigationPane : UserControl
                 t.Album.ToLowerInvariant().Contains(query));
         }
 
-        // 排序规则
         filtered = sortKey switch
         {
             "title" => filtered.OrderBy(t => t.Title),

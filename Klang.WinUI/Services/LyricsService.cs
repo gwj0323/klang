@@ -21,7 +21,7 @@ public class LyricsService
     {
         if (string.IsNullOrWhiteSpace(audioFilePath) || !File.Exists(audioFilePath))
         {
-            return CreateEmptyPlaceholder("♪ 纯音乐 / 暂无歌词 ♪");
+            return CreateEmptyPlaceholder("暂无歌词");
         }
 
         string dir = Path.GetDirectoryName(audioFilePath) ?? "";
@@ -66,7 +66,7 @@ public class LyricsService
             System.Diagnostics.Debug.WriteLine($"Error reading embedded lyrics: {ex.Message}");
         }
 
-        return CreateEmptyPlaceholder("♪ 享受纯粹音乐沉浸 ♪");
+        return CreateEmptyPlaceholder("暂无歌词");
     }
 
     public List<LyricLine> ParseLrc(string primaryLrc, string? transLrc = null)
@@ -74,7 +74,7 @@ public class LyricsService
         var primaryEntries = ParseRawEntries(primaryLrc);
         if (primaryEntries.Count == 0)
         {
-            return CreateEmptyPlaceholder("♪ 纯音乐 / 暂无歌词 ♪");
+            return CreateEmptyPlaceholder("暂无歌词");
         }
 
         var transEntries = !string.IsNullOrWhiteSpace(transLrc) ? ParseRawEntries(transLrc) : new List<RawLrcEntry>();
@@ -181,11 +181,11 @@ public class LyricsService
         return active;
     }
 
-    private List<LyricLine> CreateEmptyPlaceholder(string message)
+    private List<LyricLine> CreateEmptyPlaceholder(string message = "暂无歌词", string sub = "")
     {
         return new List<LyricLine>
         {
-            new LyricLine { Index = 0, Time = 0.0, EndTime = 9999.0, Text = message, Sub = "Klang · 沉浸式听音空间" }
+            new LyricLine { Index = 0, Time = 0.0, EndTime = 9999.0, Text = message, Sub = sub }
         };
     }
 }

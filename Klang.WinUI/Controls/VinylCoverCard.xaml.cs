@@ -52,18 +52,27 @@ public sealed partial class VinylCoverCard : UserControl
     {
         if (track == null)
         {
-            TitleText.Text = "未播放曲目";
-            ArtistText.Text = "Klang - 沉浸式声学播放器";
-            AlbumText.Text = "Studio Workspace";
-            QualityBadgeText.Text = "WASAPI · 0ms";
+            TitleText.Text = "暂无播放曲目";
+            ArtistText.Text = "点击左侧栏按钮导入本地音乐";
+            AlbumText.Text = "";
+            QualityBadgeBorder.Visibility = Visibility.Collapsed;
             ShowFallbackCover();
             return;
         }
 
         TitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? "未知曲目" : track.Title;
         ArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知歌手" : track.Artist;
-        AlbumText.Text = string.IsNullOrWhiteSpace(track.Album) ? "未知专辑" : track.Album;
-        QualityBadgeText.Text = track.FormatBadge;
+        AlbumText.Text = string.IsNullOrWhiteSpace(track.Album) ? "" : track.Album;
+
+        if (!string.IsNullOrEmpty(track.FormatBadge))
+        {
+            QualityBadgeText.Text = track.FormatBadge;
+            QualityBadgeBorder.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            QualityBadgeBorder.Visibility = Visibility.Collapsed;
+        }
 
         if (!string.IsNullOrEmpty(track.CoverPath) && File.Exists(track.CoverPath))
         {

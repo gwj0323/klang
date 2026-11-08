@@ -49,16 +49,17 @@
 
                 <StackPanel VerticalAlignment="Center" Spacing="2">
                     <TextBlock
-                        FontSize="10"
-                        FontWeight="Bold"
-                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                        Text="SYNCED LYRIC STAGE" />
+                        x:Name="StatusCaptionText"
+                        FontSize="11"
+                        FontWeight="SemiBold"
+                        Text="未加载曲目"
+                        TextTrimming="CharacterEllipsis" />
                     <TextBlock
                         x:Name="LyricSnippetText"
                         MaxWidth="240"
-                        FontSize="13"
+                        FontSize="12"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="点击播放或任意歌词体验丝滑居中滚动"
+                        Text="Klang"
                         TextTrimming="CharacterEllipsis" />
                 </StackPanel>
             </StackPanel>

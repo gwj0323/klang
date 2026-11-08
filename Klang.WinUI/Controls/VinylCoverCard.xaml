@@ -34,13 +34,13 @@
                 </Grid>
             </Border>
 
-            <!-- 2. 曲目核心元数据 -->
+            <!-- 2. 曲目元数据 (Qt 原版文案) -->
             <StackPanel Spacing="6">
                 <TextBlock
                     x:Name="TitleText"
                     FontSize="22"
                     FontWeight="SemiBold"
-                    Text="未播放曲目"
+                    Text="暂无播放曲目"
                     TextTrimming="CharacterEllipsis"
                     TextWrapping="NoWrap" />
 
@@ -49,7 +49,7 @@
                     FontSize="14"
                     FontWeight="Medium"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Klang - 沉浸式声学播放器"
+                    Text="点击左侧栏按钮导入本地音乐"
                     TextTrimming="CharacterEllipsis"
                     TextWrapping="NoWrap" />
 
@@ -61,6 +61,7 @@
                     </Grid.ColumnDefinitions>
 
                     <Border
+                        x:Name="QualityBadgeBorder"
                         Grid.Column="0"
                         Margin="0,0,8,0"
                         VerticalAlignment="Center"
@@ -68,7 +69,8 @@
                         Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                         BorderThickness="1"
-                        CornerRadius="4">
+                        CornerRadius="4"
+                        Visibility="Collapsed">
                         <TextBlock
                             x:Name="QualityBadgeText"
                             FontSize="10"
@@ -83,7 +85,7 @@
                         VerticalAlignment="Center"
                         FontSize="12"
                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                        Text="Studio Workspace"
+                        Text=""
                         TextTrimming="CharacterEllipsis" />
                 </Grid>
             </StackPanel>

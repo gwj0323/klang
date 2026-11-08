@@ -5,13 +5,13 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    Title="偏好设置"
+    Title="设置"
     CloseButtonText="完成"
     DefaultButton="Close"
     mc:Ignorable="d">
 
-    <StackPanel Width="420" Spacing="16">
-        <!-- 系统材质切换 -->
+    <StackPanel Width="400" Spacing="14">
+        <!-- 材质设置 -->
         <Border
             Padding="14"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -25,11 +25,16 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Spacing="2">
-                    <TextBlock FontWeight="Medium" Text="背景材质 (Backdrop)" />
-                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Windows 11 原生云母 / 亚克力材质" />
+                    <TextBlock FontWeight="Medium" Text="背景材质" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="云母 (Mica) / 亚克力 (Acrylic)" />
                 </StackPanel>
 
-                <ComboBox Grid.Column="1" Width="140" SelectedIndex="0">
+                <ComboBox
+                    x:Name="BackdropComboBox"
+                    Grid.Column="1"
+                    Width="140"
+                    SelectedIndex="0"
+                    SelectionChanged="BackdropComboBox_SelectionChanged">
                     <ComboBoxItem Content="云母 (Mica)" />
                     <ComboBoxItem Content="亚克力 (Acrylic)" />
                     <ComboBoxItem Content="标准纯色" />
@@ -51,11 +56,11 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Spacing="2">
-                    <TextBlock FontWeight="Medium" Text="WASAPI 硬件缓冲" />
-                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="256KB 抗欠载环形缓冲 (50ms)" />
+                    <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="低延迟共享缓冲模式 (50ms)" />
                 </StackPanel>
 
-                <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="已开启" OffContent="已关闭" />
+                <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="开启" OffContent="关闭" />
             </Grid>
         </Border>
 
@@ -67,9 +72,8 @@
             BorderThickness="1"
             CornerRadius="8">
             <StackPanel Spacing="4">
-                <TextBlock FontWeight="SemiBold" Text="Klang for Windows (WinUI 3 Native)" />
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Windows App SDK · .NET 10" />
-                <TextBlock FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="深度复刻 Qt 录音室一体化布局，纯净无损声学工程。" />
+                <TextBlock FontWeight="SemiBold" Text="Klang" />
+                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="基于 Windows App SDK (.NET 10) 的现代音乐播放器" />
             </StackPanel>
         </Border>
     </StackPanel>

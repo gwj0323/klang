@@ -59,10 +59,16 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
+    public void UpdateTrackState(string? title, string? artist)
+    {
+        StatusCaptionText.Text = string.IsNullOrWhiteSpace(title) ? "未加载曲目" : title;
+        LyricSnippetText.Text = string.IsNullOrWhiteSpace(artist) ? "Klang" : artist;
+    }
+
     public void UpdateLyricSnippet(string text)
     {
         LyricSnippetText.Text = string.IsNullOrWhiteSpace(text)
-            ? "♪ 享受纯粹音乐沉浸 ♪"
+            ? "Klang"
             : text;
     }
 

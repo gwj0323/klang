@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using NAudio.Wave;
 using Windows.Graphics;
 using Klang_WinUI.Dialogs;
@@ -15,30 +16,31 @@ public sealed partial class MainWindow : Window
 {
     private bool _isSidebarOpen = true;
     private TrackItem? _currentTrack;
+    private string _playMode = "loop_list"; // "loop_list" | "loop_single" | "random"
+    private readonly Random _rand = new();
 
     public MainWindow()
     {
         InitializeComponent();
 
-        // 沉浸式标题栏集成
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
         AppWindow.SetIcon("Assets/AppIcon.ico");
 
-        // 严格对标 Qt 版 1280 x 820 标准工作台尺寸
+        // 1280 x 820 标准工作台尺寸
         AppWindow.Resize(new SizeInt32(1280, 820));
 
         // 1. 初始化音频引擎调度器
         AudioEngineService.Instance.InitializeDispatcher(this.DispatcherQueue);
 
-        // 2. 监听音频引擎播放状态与进度
+        // 2. 监听音频进度与状态
         AudioEngineService.Instance.PositionChanged += (current, total) =>
         {
             BottomTransportBar.UpdateProgress(current, total);
             StageLyricsControl.UpdatePlaybackTime(current);
 
-            // 同步底栏单句微缩歌词 (Qt 原版特性)
+            // 同步底栏单句微缩歌词
             int activeIdx = LyricsService.Instance.FindActiveIndex(StageLyricsControl.Lyrics, current);
             if (activeIdx >= 0 && activeIdx < StageLyricsControl.Lyrics.Count)
             {
@@ -53,22 +55,60 @@ public sealed partial class MainWindow : Window
             StageCoverCard.SetPlaying(isPlaying);
         };
 
-        // 3. 绑定左侧曲库面板曲目选中事件
+        // 曲目自然播放结束，自动切下一首
+        AudioEngineService.Instance.TrackEnded += () =>
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_playMode == "loop_single" && _currentTrack != null)
+                {
+                    PlayTrack(_currentTrack);
+                }
+                else
+                {
+                    PlayNext();
+                }
+            });
+        };
+
+        // 3. 绑定左侧曲库选中与点击事件
         LeftNavPane.TrackSelected += (s, track) =>
         {
             PlayTrack(track);
         };
 
-        // 4. 绑定歌词点击跳播事件
+        // 4. 歌词点击跳播
         StageLyricsControl.SeekRequested += (s, timeSec) =>
         {
             AudioEngineService.Instance.Seek(timeSec);
         };
 
-        // 5. 绑定底栏控制事件
+        // 5. 底栏控制事件绑定
         BottomTransportBar.PlayPauseClicked += (s, e) =>
         {
-            AudioEngineService.Instance.TogglePlayPause();
+            if (_currentTrack == null && LeftNavPane.DisplayTracks.Count > 0)
+            {
+                PlayTrack(LeftNavPane.DisplayTracks[0]);
+            }
+            else
+            {
+                AudioEngineService.Instance.TogglePlayPause();
+            }
+        };
+
+        BottomTransportBar.NextClicked += (s, e) => PlayNext();
+        BottomTransportBar.PrevClicked += (s, e) => PlayPrev();
+
+        BottomTransportBar.ShuffleClicked += (s, e) =>
+        {
+            _playMode = (_playMode == "random") ? "loop_list" : "random";
+            BottomTransportBar.UpdateLyricSnippet(_playMode == "random" ? "已开启随机播放" : "已开启列表循环");
+        };
+
+        BottomTransportBar.RepeatClicked += (s, e) =>
+        {
+            _playMode = (_playMode == "loop_single") ? "loop_list" : "loop_single";
+            BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? "已开启单曲循环" : "已开启列表循环");
         };
 
         BottomTransportBar.UserSeekRequested += (s, pos) =>
@@ -82,88 +122,68 @@ public sealed partial class MainWindow : Window
             AudioEngineService.Instance.Volume = vol;
         };
 
-        // 6. 默认初始化示例曲库（保证开箱即拥有饱满视觉）
-        InitDefaultSampleTracks();
+        // 初始化界面初始文案（不填任何虚假预制歌曲）
+        StageCoverCard.UpdateTrack(null);
+        StageLyricsControl.LoadLyrics(null);
+        BottomTransportBar.UpdateTrackState(null, null);
     }
 
     private void PlayTrack(TrackItem track)
     {
         _currentTrack = track;
 
-        // 更新中间黑胶封面与音频规格
         StageCoverCard.UpdateTrack(track);
-
-        // 更新右侧实时歌词
         StageLyricsControl.LoadLyrics(track.FilePath);
+        BottomTransportBar.UpdateTrackState(track.Title, track.Artist);
 
-        // 更新底栏信息
-        BottomTransportBar.UpdateLyricSnippet($"{track.Title} - {track.Artist}");
-
-        // 开始音频播放
         if (!string.IsNullOrEmpty(track.FilePath))
         {
             AudioEngineService.Instance.Play(track.FilePath);
         }
     }
 
-    private void InitDefaultSampleTracks()
+    private void PlayNext()
     {
-        var samples = new List<TrackItem>
-        {
-            new TrackItem
-            {
-                Index = 1,
-                Title = "Arrival of the Birds",
-                Artist = "The Cinematic Orchestra",
-                Album = "The Crimson Wing",
-                Duration = 162,
-                FormatBadge = "FLAC 24bit"
-            },
-            new TrackItem
-            {
-                Index = 2,
-                Title = "Experience",
-                Artist = "Ludovico Einaudi",
-                Album = "In a Time Lapse",
-                Duration = 315,
-                FormatBadge = "Hi-Res 96kHz"
-            },
-            new TrackItem
-            {
-                Index = 3,
-                Title = "Cornfield Chase",
-                Artist = "Hans Zimmer",
-                Album = "Interstellar OST",
-                Duration = 126,
-                FormatBadge = "Master 192k"
-            },
-            new TrackItem
-            {
-                Index = 4,
-                Title = "Nuvole Bianche",
-                Artist = "Ludovico Einaudi",
-                Album = "Una Mattina",
-                Duration = 357,
-                FormatBadge = "FLAC"
-            },
-            new TrackItem
-            {
-                Index = 5,
-                Title = "Time",
-                Artist = "Hans Zimmer",
-                Album = "Inception OST",
-                Duration = 275,
-                FormatBadge = "DSD 2.8MHz"
-            }
-        };
+        var tracks = LeftNavPane.DisplayTracks;
+        if (tracks.Count == 0) return;
 
-        LeftNavPane.LoadTracks(samples);
-        if (samples.Count > 0)
+        int nextIdx = 0;
+        if (_currentTrack != null)
         {
-            StageCoverCard.UpdateTrack(samples[0]);
-            StageLyricsControl.LoadLyrics(null);
-            BottomTransportBar.UpdateLyricSnippet($"{samples[0].Title} - {samples[0].Artist}");
+            int currentIdx = tracks.IndexOf(_currentTrack);
+            if (currentIdx >= 0)
+            {
+                if (_playMode == "random" && tracks.Count > 1)
+                {
+                    nextIdx = _rand.Next(0, tracks.Count);
+                    if (nextIdx == currentIdx) nextIdx = (nextIdx + 1) % tracks.Count;
+                }
+                else
+                {
+                    nextIdx = (currentIdx + 1) % tracks.Count;
+                }
+            }
         }
+
+        PlayTrack(tracks[nextIdx]);
+    }
+
+    private void PlayPrev()
+    {
+        var tracks = LeftNavPane.DisplayTracks;
+        if (tracks.Count == 0) return;
+
+        int prevIdx = 0;
+        if (_currentTrack != null)
+        {
+            int currentIdx = tracks.IndexOf(_currentTrack);
+            if (currentIdx >= 0)
+            {
+                prevIdx = (currentIdx - 1 + tracks.Count) % tracks.Count;
+            }
+        }
+
+        PlayTrack(tracks[prevIdx]);
     }
 
     private void SidebarToggleBtn_Click(object sender, RoutedEventArgs e)
@@ -175,35 +195,58 @@ public sealed partial class MainWindow : Window
 
     private void DesktopLyricBtn_Click(object sender, RoutedEventArgs e)
     {
-        // 桌面歌词开关占位
+        // 桌面歌词暂留后续
     }
 
     private void MiniPlayerBtn_Click(object sender, RoutedEventArgs e)
     {
-        // 迷你窗模式占位
+        // 迷你窗暂留后续
     }
 
     private void FullscreenBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
         {
-            if (presenter.State == OverlappedPresenterState.Maximized)
-            {
-                presenter.Restore();
-            }
-            else
-            {
-                presenter.Maximize();
-            }
+            AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+        }
+        else
+        {
+            AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
         }
     }
 
     private async void SettingsBtn_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new SettingsDialog
+        try
         {
-            XamlRoot = this.Content.XamlRoot
-        };
-        await dialog.ShowAsync();
+            if (this.Content?.XamlRoot == null) return;
+
+            var dialog = new SettingsDialog
+            {
+                XamlRoot = this.Content.XamlRoot
+            };
+
+            dialog.BackdropChanged += (mat) =>
+            {
+                if (mat == "mica")
+                {
+                    this.SystemBackdrop = new MicaBackdrop();
+                }
+                else if (mat == "acrylic")
+                {
+                    this.SystemBackdrop = new DesktopAcrylicBackdrop();
+                }
+                else
+                {
+                    this.SystemBackdrop = null;
+                }
+            };
+
+            await dialog.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Settings dialog error: {ex.Message}");
+        }
     }
 }
