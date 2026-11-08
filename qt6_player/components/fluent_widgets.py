@@ -2,6 +2,7 @@ import math
 from typing import List, Optional, Tuple, Callable
 from PyQt6.QtCore import (
     Qt,
+    QRect,
     QRectF,
     QPointF,
     QPoint,
@@ -16,16 +17,21 @@ from PyQt6.QtGui import (
     QPen,
     QColor,
     QFont,
+    QFontMetrics,
     QFontDatabase,
     QPainterPath,
     QMouseEvent,
     QKeyEvent,
+    QPixmap,
+    QIcon,
 )
 from PyQt6.QtWidgets import (
     QWidget,
     QDialog,
     QPushButton,
     QLineEdit,
+    QScrollArea,
+    QFrame,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
@@ -75,7 +81,7 @@ def draw_nordic_icon(
         painter.drawRoundedRect(box, 2.2, 2.2)
         painter.drawLine(QPointF(cx - 2.2, cy - 5.5), QPointF(cx - 2.2, cy + 5.5))
 
-    elif kind in ("heart_outline", "heart_filled"):
+    elif kind in ("heart", "heart_outline", "heart_filled"):
         path = QPainterPath()
         # 优雅几何心形贝塞尔曲线
         s = min(rect.width(), rect.height()) * 0.34
@@ -85,7 +91,7 @@ def draw_nordic_icon(
         path.cubicTo(cx, cy - s * 0.62, cx + s * 0.18, cy - s * 0.95, cx + s * 0.52, cy - s * 0.95)
         path.cubicTo(cx + s * 1.15, cy - s * 0.95, cx + s * 1.35, cy + s * 0.10, cx, cy + s * 0.88)
         path.closeSubpath()
-        if kind == "heart_filled":
+        if kind in ("heart", "heart_filled"):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawPath(path)
@@ -909,79 +915,55 @@ class WinUICheckChip(QPushButton):
         )
 
 
-class WinUIFlyoutMenu(QWidget):
+class _FlyoutItemList(QWidget):
     """
-    带平滑弹出动效 (Fade + Slide) 与矢量图标的 WinUI 3 悬浮菜单
-    替代生硬的原生 QMenu。
+    WinUIFlyoutMenu 内部滚动渲染列表
+    支持：分类标题 (header:xxx)、分割线 (separator)、常规操作项、高灵敏悬停动效与键盘导航。
     """
 
     actionTriggered = pyqtSignal(str)
 
-    def __init__(
-        self,
-        items: List[Tuple[str, str, str]],  # [(action_id, icon_kind, label), ...]
-        theme: NordicThemeColors = DAYLIGHT_THEME,
-        backdrop_material: str = "mica",
-        parent: Optional[QWidget] = None,
-    ):
+    def __init__(self, theme: NordicThemeColors, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.items = items
         self.theme = theme
-        self.backdrop_material = str(backdrop_material)
-        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.display_items: List[Tuple[str, str, str]] = []
+        self.item_layouts: List[Tuple[float, float]] = []  # [(y, h), ...]
         self.hovered_idx: int = -1
-        self._anim_progress: float = 0.0
+        self._total_height: float = 0.0
 
-        self.setWindowFlags(
-            Qt.WindowType.Popup
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint
-        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        row_h = 34
-        from PyQt6.QtGui import QFontMetrics
-        metrics = QFontMetrics(get_nordic_font(12, QFont.Weight.Medium))
-        max_txt_w = max((metrics.horizontalAdvance(lbl) for _, _, lbl in items), default=150)
-        w = max(216, min(380, max_txt_w + 54))
-        h = len(items) * row_h + 12
-        self.setFixedSize(w, h)
-
-        self._anim = QVariantAnimation(self)
-        self._anim.setDuration(220)
-        flyout_curve = QEasingCurve(QEasingCurve.Type.OutBack)
-        flyout_curve.setOvershoot(1.22)
-        self._anim.setEasingCurve(flyout_curve)
-        self._anim.valueChanged.connect(self._on_anim_val)
-
-    def _on_anim_val(self, val: float) -> None:
-        self._anim_progress = float(val)
-        self.setWindowOpacity(max(0.01, self._anim_progress))
-        if hasattr(self, "_target_pos"):
-            offset_y = int((1.0 - self._anim_progress) * -8.0)
-            self.move(self._target_pos.x(), self._target_pos.y() + offset_y)
+    def set_items(self, items: List[Tuple[str, str, str]]) -> None:
+        self.display_items = list(items)
+        y = 4.0
+        self.item_layouts = []
+        for act_id, _, _ in self.display_items:
+            if act_id == "separator":
+                h = 8.0
+            elif act_id.startswith("header:"):
+                h = 26.0
+            else:
+                h = 34.0
+            self.item_layouts.append((y, h))
+            y += h
+        self._total_height = max(40.0, y + 4.0)
+        self.setFixedHeight(int(self._total_height))
+        self.hovered_idx = -1
         self.update()
 
-    def popup_animated(self, global_pos: QPoint) -> None:
-        self._target_pos = global_pos
-        self._anim_progress = 0.0
-        self.setWindowOpacity(0.01)
-        self.move(global_pos.x(), global_pos.y() - 8)
-        self.show()
-        self._anim.stop()
-        self._anim.setStartValue(0.0)
-        self._anim.setEndValue(1.0)
-        self._anim.start()
-
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        y = event.position().y() - 6.0
-        idx = int(y // 34.0)
-        if not (0 <= idx < len(self.items)):
-            idx = -1
-        if idx != self.hovered_idx:
-            self.hovered_idx = idx
+        my = event.position().y()
+        new_hov = -1
+        for idx, (y, h) in enumerate(self.item_layouts):
+            if y <= my < y + h:
+                act_id = self.display_items[idx][0]
+                if act_id != "separator" and not act_id.startswith("header:"):
+                    new_hov = idx
+                break
+        if new_hov != self.hovered_idx:
+            self.hovered_idx = new_hov
+            self.setCursor(Qt.CursorShape.PointingHandCursor if new_hov >= 0 else Qt.CursorShape.ArrowCursor)
             self.update()
         super().mouseMoveEvent(event)
 
@@ -991,12 +973,385 @@ class WinUIFlyoutMenu(QWidget):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and 0 <= self.hovered_idx < len(self.items):
-            act_id = self.items[self.hovered_idx][0]
-            self.close()
-            self.actionTriggered.emit(act_id)
-            return
+        if event.button() == Qt.MouseButton.LeftButton and 0 <= self.hovered_idx < len(self.display_items):
+            act_id = self.display_items[self.hovered_idx][0]
+            if act_id != "separator" and not act_id.startswith("header:"):
+                self.actionTriggered.emit(act_id)
+                return
         super().mousePressEvent(event)
+
+    def navigate_selection(self, delta: int) -> None:
+        clickable_indices = [
+            i for i, (act_id, _, _) in enumerate(self.display_items)
+            if act_id != "separator" and not act_id.startswith("header:")
+        ]
+        if not clickable_indices:
+            return
+        if self.hovered_idx not in clickable_indices:
+            self.hovered_idx = clickable_indices[0] if delta > 0 else clickable_indices[-1]
+        else:
+            curr_pos = clickable_indices.index(self.hovered_idx)
+            new_pos = max(0, min(len(clickable_indices) - 1, curr_pos + delta))
+            self.hovered_idx = clickable_indices[new_pos]
+
+        self.update()
+        # 确保当前选中项滚动到视野内
+        p = self.parent()
+        while p and not isinstance(p, QScrollArea):
+            p = p.parent()
+        if isinstance(p, QScrollArea) and 0 <= self.hovered_idx < len(self.item_layouts):
+            y, h = self.item_layouts[self.hovered_idx]
+            p.ensureVisible(int(self.width() / 2), int(y + h / 2), 20, 20)
+
+    def select_current(self) -> bool:
+        if 0 <= self.hovered_idx < len(self.display_items):
+            act_id = self.display_items[self.hovered_idx][0]
+            if act_id != "separator" and not act_id.startswith("header:"):
+                self.actionTriggered.emit(act_id)
+                return True
+        return False
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        clip_rect = event.rect()
+        w = float(self.width())
+
+        if not self.display_items:
+            painter.setPen(self.theme.slate_muted)
+            painter.setFont(get_nordic_font(11, QFont.Weight.Normal))
+            painter.drawText(
+                QRectF(0.0, 0.0, w, 40.0),
+                int(Qt.AlignmentFlag.AlignCenter),
+                "未找到匹配的歌单",
+            )
+            return
+
+        for idx, (act_id, icon_kind, label) in enumerate(self.display_items):
+            y, h = self.item_layouts[idx]
+            if y + h < clip_rect.top() or y > clip_rect.bottom():
+                continue
+
+            if act_id == "separator":
+                sep_y = y + h * 0.5
+                sep_col = QColor(self.theme.sage_border)
+                sep_col.setAlpha(110)
+                painter.setPen(QPen(sep_col, 1.0))
+                painter.drawLine(QPointF(10.0, sep_y), QPointF(w - 10.0, sep_y))
+            elif act_id.startswith("header:"):
+                painter.setPen(self.theme.slate_muted)
+                painter.setFont(get_nordic_font(10, QFont.Weight.DemiBold))
+                painter.drawText(
+                    QRectF(12.0, y, w - 24.0, h),
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                    label,
+                )
+            else:
+                is_hov = (idx == self.hovered_idx)
+                r = QRectF(4.0, y + 1.0, w - 8.0, h - 2.0)
+                if is_hov:
+                    hp = QPainterPath()
+                    hp.addRoundedRect(r, 6.0, 6.0)
+                    painter.fillPath(hp, self.theme.sage_soft)
+
+                ic_col = self.theme.sage_accent if is_hov else self.theme.slate_dark
+                draw_nordic_icon(
+                    painter,
+                    icon_kind,
+                    QRectF(r.left() + 8.0, r.center().y() - 8.0, 16.0, 16.0),
+                    ic_col,
+                    stroke_w=1.35,
+                )
+
+                painter.setPen(self.theme.charcoal if is_hov else self.theme.slate_dark)
+                painter.setFont(get_nordic_font(11.5, QFont.Weight.Medium if is_hov else QFont.Weight.Normal))
+                text_r = QRectF(r.left() + 32.0, r.top(), r.width() - 38.0, r.height())
+                elided_lbl = painter.fontMetrics().elidedText(
+                    label, Qt.TextElideMode.ElideRight, int(text_r.width())
+                )
+                painter.drawText(
+                    text_r,
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                    elided_lbl,
+                )
+
+
+class WinUIFlyoutMenu(QWidget):
+    """
+    带平滑弹出动效 (Fade + Slide)、滚动区域、自适应搜索过滤与矢量图标的 WinUI 3 悬浮菜单。
+    自动约束最大高度与屏幕边界，杜绝下拉列表过长溢出屏幕与遮挡任务栏。
+    """
+
+    actionTriggered = pyqtSignal(str)
+
+    def __init__(
+        self,
+        items: List[Tuple[str, str, str]],  # [(action_id, icon_kind, label), ...]
+        theme: NordicThemeColors = DAYLIGHT_THEME,
+        backdrop_material: str = "mica",
+        searchable: Optional[bool] = None,
+        search_placeholder: str = "搜索...",
+        max_height: int = 420,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self.items = list(items)
+        self.theme = theme
+        self.backdrop_material = str(backdrop_material)
+        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
+        self.search_placeholder = search_placeholder
+        self.max_height = max_height
+        self._anim_progress: float = 0.0
+
+        # 默认：当可选项超过 10 项时自动开启快速过滤框
+        clickable_cnt = sum(
+            1 for it in self.items
+            if it[0] != "separator" and not it[0].startswith("header:")
+        )
+        self.searchable = (clickable_cnt > 10) if searchable is None else bool(searchable)
+
+        self.setWindowFlags(
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMouseTracking(True)
+
+        # 根布局
+        self._root_vbox = QVBoxLayout(self)
+        self._root_vbox.setContentsMargins(8, 8, 8, 8)
+        self._root_vbox.setSpacing(6)
+
+        # 宽度自适应测量
+        metrics = QFontMetrics(get_nordic_font(12, QFont.Weight.Medium))
+        max_txt_w = max((metrics.horizontalAdvance(lbl) for _, _, lbl in items if lbl), default=150)
+        self._menu_w = max(240, min(390, max_txt_w + 68))
+
+        is_dusk = self.theme.name == "dusk"
+
+        # 搜索过滤输入框（若开启）
+        if self.searchable:
+            self.search_edit = QLineEdit(self)
+            self.search_edit.setFixedHeight(28)
+            self.search_edit.setPlaceholderText(self.search_placeholder)
+            self.search_edit.setClearButtonEnabled(True)
+            self.search_edit.setFont(get_nordic_font(11, QFont.Weight.Normal))
+
+            pix = QPixmap(14, 14)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            draw_nordic_icon(p, "search", QRectF(0, 0, 14, 14), self.theme.slate_muted, stroke_w=1.35)
+            p.end()
+            self.search_edit.addAction(QIcon(pix), QLineEdit.ActionPosition.LeadingPosition)
+
+            bg_search = "rgba(255, 255, 255, 0.08)" if is_dusk else "rgba(0, 0, 0, 0.04)"
+            border_col = self.theme.sage_border.name()
+            txt_col = self.theme.charcoal.name()
+            accent_col = self.theme.sage_accent.name()
+
+            self.search_edit.setStyleSheet(f"""
+                QLineEdit {{
+                    background: {bg_search};
+                    border: 1px solid {border_col};
+                    border-radius: 6px;
+                    padding: 3px 8px 3px 4px;
+                    color: {txt_col};
+                }}
+                QLineEdit:focus {{
+                    border: 1px solid {accent_col};
+                    background: {"rgba(255, 255, 255, 0.14)" if is_dusk else "rgba(255, 255, 255, 0.95)"};
+                }}
+            """)
+            self.search_edit.textChanged.connect(self._on_search_text_changed)
+            self.search_edit.installEventFilter(self)
+            self._root_vbox.addWidget(self.search_edit)
+
+        # 优雅 WinUI 3 极窄滚动区域
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        thumb_col = "rgba(255, 255, 255, 0.35)" if is_dusk else "rgba(120, 130, 140, 0.40)"
+        thumb_hov = self.theme.sage_accent.name()
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 5px;
+                margin: 2px 1px 2px 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {thumb_col};
+                min-height: 24px;
+                border-radius: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {thumb_hov};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+                background: none;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
+        self.scroll_area.viewport().setStyleSheet("background: transparent;")
+        self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        self.list_widget = _FlyoutItemList(self.theme, self.scroll_area)
+        self.list_widget.set_items(self.items)
+        self.list_widget.setFixedWidth(self._menu_w - 20)
+        self.scroll_area.setWidget(self.list_widget)
+        self.list_widget.actionTriggered.connect(self._on_item_triggered)
+
+        self._root_vbox.addWidget(self.scroll_area, 1)
+
+        # 计算窗口尺寸
+        content_h = self.list_widget._total_height
+        extra_h = (36 if self.searchable else 0) + 18
+        target_h = max(100, min(self.max_height, int(content_h + extra_h)))
+        self.setFixedSize(self._menu_w, target_h)
+
+        # 弹出动画
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(220)
+        flyout_curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        flyout_curve.setOvershoot(1.18)
+        self._anim.setEasingCurve(flyout_curve)
+        self._anim.valueChanged.connect(self._on_anim_val)
+
+    def _on_item_triggered(self, act_id: str) -> None:
+        self.close()
+        self.actionTriggered.emit(act_id)
+
+    def _on_search_text_changed(self, query: str) -> None:
+        q = query.strip().lower()
+        if not q:
+            self.list_widget.set_items(self.items)
+            return
+
+        has_headers = any(it[0].startswith("header:") for it in self.items)
+        filtered: List[Tuple[str, str, str]] = []
+        if has_headers:
+            current_header = None
+            header_items = []
+            for it in self.items:
+                act_id, _, lbl = it
+                if act_id.startswith("header:"):
+                    if current_header and header_items:
+                        filtered.append(current_header)
+                        filtered.extend(header_items)
+                    elif not current_header and header_items:
+                        filtered.extend(header_items)
+                    current_header = it
+                    header_items = []
+                elif act_id == "separator":
+                    continue
+                else:
+                    if q in lbl.lower():
+                        header_items.append(it)
+            if current_header and header_items:
+                filtered.append(current_header)
+                filtered.extend(header_items)
+            elif not current_header and header_items:
+                filtered.extend(header_items)
+        else:
+            for it in self.items:
+                act_id, _, lbl = it
+                if act_id == "separator" or act_id.startswith("header:"):
+                    continue
+                if q in lbl.lower():
+                    filtered.append(it)
+
+        self.list_widget.set_items(filtered)
+
+    def _on_anim_val(self, val: float) -> None:
+        self._anim_progress = float(val)
+        self.setWindowOpacity(max(0.01, self._anim_progress))
+        if hasattr(self, "_target_pos"):
+            offset_y = int((1.0 - self._anim_progress) * -8.0)
+            self.move(self._target_pos.x(), self._target_pos.y() + offset_y)
+        self.update()
+
+    def popup_animated(self, global_pos: QPoint, anchor_widget: Optional[QWidget] = None) -> None:
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.screenAt(global_pos) or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+
+        w = self.width()
+        h = self.height()
+
+        x = max(avail.left() + 8, min(global_pos.x(), avail.right() - w - 8))
+
+        # 智能避让任务栏与底部屏幕边界：如朝下溢出则翻转向上弹出
+        anchor_h = anchor_widget.height() if anchor_widget else 28
+        if global_pos.y() + h > avail.bottom() - 10:
+            above_y = global_pos.y() - anchor_h - h - 8
+            if above_y >= avail.top() + 8:
+                y = above_y
+            else:
+                y = max(avail.top() + 8, avail.bottom() - h - 10)
+        else:
+            y = global_pos.y()
+
+        self._target_pos = QPoint(int(x), int(y))
+        self._anim_progress = 0.0
+        self.setWindowOpacity(0.01)
+        self.move(int(x), int(y) - 8)
+        self.show()
+        if hasattr(self, "search_edit") and self.searchable:
+            self.search_edit.setFocus()
+            self.search_edit.selectAll()
+        self._anim.stop()
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+
+    def eventFilter(self, obj, event):
+        if hasattr(self, "search_edit") and obj == self.search_edit and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Down:
+                self.list_widget.navigate_selection(1)
+                return True
+            elif key == Qt.Key.Key_Up:
+                self.list_widget.navigate_selection(-1)
+                return True
+            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if self.list_widget.select_current():
+                    return True
+            elif key == Qt.Key.Key_Escape:
+                self.close()
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        elif key == Qt.Key.Key_Down:
+            self.list_widget.navigate_selection(1)
+            event.accept()
+            return
+        elif key == Qt.Key.Key_Up:
+            self.list_widget.navigate_selection(-1)
+            event.accept()
+            return
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self.list_widget.select_current():
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -1009,9 +1364,9 @@ class WinUIFlyoutMenu(QWidget):
         is_dusk = self.theme.name == "dusk"
         bg = QColor(self.theme.mist_white)
         if self.backdrop_material == "acrylic":
-            bg.setAlpha(208 if is_dusk else 220)
+            bg.setAlpha(216 if is_dusk else 226)
         elif self.backdrop_material == "mica":
-            bg.setAlpha(234 if is_dusk else 244)
+            bg.setAlpha(236 if is_dusk else 246)
         else:
             bg.setAlpha(255)
 
@@ -1021,32 +1376,6 @@ class WinUIFlyoutMenu(QWidget):
             border_col = QColor(255, 255, 255, 45) if is_dusk else QColor(0, 0, 0, 30)
         painter.setPen(QPen(border_col, 1.0))
         painter.drawPath(path)
-
-        row_h = 34.0
-        for i, (act_id, icon_kind, label) in enumerate(self.items):
-            r = QRectF(6.0, 6.0 + i * row_h, self.width() - 12.0, row_h)
-            is_hov = i == self.hovered_idx
-            if is_hov:
-                hp = QPainterPath()
-                hp.addRoundedRect(r, 6.0, 6.0)
-                painter.fillPath(hp, self.theme.sage_soft)
-
-            ic_col = self.theme.sage_accent if is_hov else self.theme.slate_dark
-            draw_nordic_icon(
-                painter,
-                icon_kind,
-                QRectF(r.left() + 8.0, r.center().y() - 8.0, 16.0, 16.0),
-                ic_col,
-                stroke_w=1.35,
-            )
-
-            painter.setPen(self.theme.charcoal if is_hov else self.theme.slate_dark)
-            painter.setFont(get_nordic_font(12, QFont.Weight.Medium if is_hov else QFont.Weight.Normal))
-            painter.drawText(
-                QRectF(r.left() + 32.0, r.top(), r.width() - 38.0, r.height()),
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                label,
-            )
 
 
 class WinUIModalDialog(QDialog):

@@ -1143,37 +1143,69 @@ class NavigationPane(QWidget):
                 self.prompt_create_playlist()
                 return
             items = [(f"pl:{name}", "music_file", f"{name} ({len(ids)})") for name, ids in self.custom_playlists.items()]
-            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
+            menu = WinUIFlyoutMenu(
+                items,
+                theme=self.theme,
+                backdrop_material=getattr(self, "backdrop_material", "mica"),
+                searchable=(len(items) > 10),
+                search_placeholder="搜索本地歌单...",
+                max_height=420,
+                parent=self.window(),
+            )
             menu.actionTriggered.connect(self._on_playlist_menu_selected)
-            menu.popup_animated(pos)
+            menu.popup_animated(pos, anchor_widget=self.btn_sub_selector)
         elif self.view_mode == 3:
             items = [
                 ("grp:artist", "sparkle", "按歌手分组"),
                 ("grp:album", "music_file", "按专辑分组"),
                 ("grp:folder", "folder", "按文件夹分组"),
             ]
-            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
+            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), searchable=False, parent=self.window())
             menu.actionTriggered.connect(self._on_group_menu_selected)
-            menu.popup_animated(pos)
+            menu.popup_animated(pos, anchor_widget=self.btn_sub_selector)
         elif self.view_mode == 4:
             items = [
                 ("ne:daily", "sparkle", "每日推荐"),
             ]
             if netease_manager.user_playlists:
-                for pl in netease_manager.user_playlists:
-                    icon = "heart" if pl.get("is_liked") else "music_file"
-                    name = pl.get("name", "歌单")
+                liked_pls = [pl for pl in netease_manager.user_playlists if pl.get("is_liked")]
+                created_pls = [pl for pl in netease_manager.user_playlists if not pl.get("is_liked") and not pl.get("subscribed")]
+                sub_pls = [pl for pl in netease_manager.user_playlists if pl.get("subscribed")]
+
+                for pl in liked_pls:
                     cnt = pl.get("track_count", 0)
-                    items.append((f"ne_pl:{pl['id']}", icon, f"{name} ({cnt})"))
+                    items.append((f"ne_pl:{pl['id']}", "heart", f"{pl.get('name', '我喜欢的音乐')} ({cnt})"))
+
+                if created_pls:
+                    items.append((f"header:created", "", f"创建的歌单 ({len(created_pls)})"))
+                    for pl in created_pls:
+                        cnt = pl.get("track_count", 0)
+                        items.append((f"ne_pl:{pl['id']}", "music_file", f"{pl.get('name', '歌单')} ({cnt})"))
+
+                if sub_pls:
+                    items.append((f"header:sub", "", f"收藏的歌单 ({len(sub_pls)})"))
+                    for pl in sub_pls:
+                        cnt = pl.get("track_count", 0)
+                        items.append((f"ne_pl:{pl['id']}", "folder", f"{pl.get('name', '歌单')} ({cnt})"))
+
+            items.append(("separator", "", ""))
             cur_q_lbl = netease_manager.QUALITY_LABELS.get(netease_manager.preferred_quality, "无损 FLAC")
             items.append(("ne:quality", "equalizer", f"音质选择 (当前: {cur_q_lbl}) ▾"))
             items.append(("ne:refresh", "sparkle", "刷新歌单列表"))
             nickname = netease_manager.user_profile.get("nickname", "已登录账号")
             items.append(("ne:logout", "cross", f"退出登录 ({nickname})"))
 
-            menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
+            menu = WinUIFlyoutMenu(
+                items,
+                theme=self.theme,
+                backdrop_material=getattr(self, "backdrop_material", "mica"),
+                searchable=(len(items) > 10),
+                search_placeholder="搜索歌单名称...",
+                max_height=420,
+                parent=self.window(),
+            )
             menu.actionTriggered.connect(self._on_netease_menu_selected)
-            menu.popup_animated(pos)
+            menu.popup_animated(pos, anchor_widget=self.btn_sub_selector)
 
     def _open_netease_quality_menu(self) -> None:
         pos = self.btn_sub_selector.mapToGlobal(QPoint(0, self.btn_sub_selector.height() + 4))
@@ -1195,7 +1227,7 @@ class NavigationPane(QWidget):
                     win.lyrics_stage._show_toast(f"网易云播放音质已设为：{netease_manager.QUALITY_LABELS.get(nk)}")
 
         menu.actionTriggered.connect(_on_q)
-        menu.popup_animated(pos)
+        menu.popup_animated(pos, anchor_widget=self.btn_sub_selector)
 
     def _on_netease_menu_selected(self, act: str) -> None:
         if self.is_netease_searching:
@@ -1252,7 +1284,7 @@ class NavigationPane(QWidget):
         ]
         menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
         menu.actionTriggered.connect(self._on_sort_selected)
-        menu.popup_animated(pos)
+        menu.popup_animated(pos, anchor_widget=self.btn_sort)
 
     def _on_sort_selected(self, mode: str) -> None:
         if mode in self._SORT_LABELS:

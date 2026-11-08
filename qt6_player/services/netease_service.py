@@ -499,7 +499,7 @@ class NeteaseCloudManager(QObject):
 
         def _do_fetch():
             try:
-                res = user.GetUserPlaylists(user_id=user_id, limit=50)
+                res = user.GetUserPlaylists(user_id=user_id, limit=200)
                 if res.get("code") == 200:
                     raw_plists = res.get("playlist", [])
                     cleaned = []
@@ -511,6 +511,8 @@ class NeteaseCloudManager(QObject):
                             "track_count": pl.get("trackCount", 0),
                             "play_count": pl.get("playCount", 0),
                             "is_liked": bool(pl.get("specialType") == 5),
+                            "subscribed": bool(pl.get("subscribed", False)),
+                            "creator_id": pl.get("userId"),
                         })
                     self.user_playlists = cleaned
                     self.playlistsLoaded.emit(cleaned)
