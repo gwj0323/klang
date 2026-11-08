@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Klang.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Klang.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
