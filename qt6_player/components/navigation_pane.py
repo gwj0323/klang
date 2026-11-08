@@ -888,6 +888,7 @@ class NavigationPane(QWidget):
     playlistsChanged = pyqtSignal()
     neteaseTrackSelected = pyqtSignal(object, list, int)  # selected_track, playlist_tracks, index_in_playlist
     _thumbnailsRefreshed = pyqtSignal()
+    _cloudSearchDone = pyqtSignal(str, list)
 
     EXPANDED_WIDTH = 276
 
@@ -947,6 +948,7 @@ class NavigationPane(QWidget):
         netease_manager.dailyRecommendLoaded.connect(self._on_daily_recommend_loaded)
         netease_manager.playlistTracksLoaded.connect(self._on_playlist_tracks_loaded)
         self._thumbnailsRefreshed.connect(self._refresh_item_thumbnails)
+        self._cloudSearchDone.connect(self._on_cloud_search_done)
 
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.backdrop_material: str = "mica"
@@ -967,6 +969,7 @@ class NavigationPane(QWidget):
         # 2. 搜索框
         self.search_box = WinUISearchBox("搜索歌名 / 歌手 / 专辑…", self)
         self.search_box.textChanged.connect(self._on_search_changed)
+        self.search_box.returnPressed.connect(self._on_search_return_pressed)
         layout.addWidget(self.search_box)
 
         # 3. 辅助工具栏（排序 / 歌单选择与新建 / 分类切换）
@@ -1530,6 +1533,12 @@ class NavigationPane(QWidget):
             self._apply_visibility_filter()
             self._trigger_list_transition()
 
+    def _on_search_return_pressed(self) -> None:
+        if self.view_mode == 4:
+            if self._netease_search_timer.isActive():
+                self._netease_search_timer.stop()
+            self._do_netease_cloud_search()
+
     def _do_netease_cloud_search(self) -> None:
         kw = self.search_box.text().strip()
         if not kw or self.view_mode != 4:
@@ -1541,20 +1550,24 @@ class NavigationPane(QWidget):
         self.rebuild_list([], active_index=-1)
 
         def _worker():
-            results = netease_manager.search_tracks(kw, limit=30)
-            def _on_done():
-                cur_kw = self.search_box.text().strip()
-                if cur_kw != kw or self.view_mode != 4:
-                    return
-                self.is_netease_loading = False
-                self.netease_tracks = results
-                self.rebuild_list(self.netease_tracks, active_index=-1)
-                self.lbl_count.setText(f"共找到 {len(results)} 首在线歌曲")
-                self._trigger_list_transition()
-                self._prefetch_thumbnails_for_tracks(results)
-            QTimer.singleShot(0, _on_done)
+            try:
+                results = netease_manager.search_tracks(kw, limit=30)
+            except Exception:
+                results = []
+            self._cloudSearchDone.emit(kw, results)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_cloud_search_done(self, kw: str, results: list) -> None:
+        cur_kw = self.search_box.text().strip()
+        if cur_kw != kw or self.view_mode != 4:
+            return
+        self.is_netease_loading = False
+        self.netease_tracks = list(results)
+        self.rebuild_list(self.netease_tracks, active_index=-1)
+        self.lbl_count.setText(f"共找到 {len(results)} 首在线歌曲")
+        self._trigger_list_transition()
+        self._prefetch_thumbnails_for_tracks(results)
 
     def _matches_search(self, t: NordicTrack) -> bool:
         if not self.search_keyword:
@@ -1571,7 +1584,7 @@ class NavigationPane(QWidget):
         for btn in self.item_buttons:
             t = btn.track
             match_fav = (not self.filter_favorites_only) or t.is_favorite
-            match_kw = self._matches_search(t)
+            match_kw = True if self.view_mode == 4 else self._matches_search(t)
             group_key = getattr(btn, "_group_key", None)
             match_grp = (group_key is None) or (group_key not in self.collapsed_groups)
             vis = match_fav and match_kw and match_grp
