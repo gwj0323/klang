@@ -4,11 +4,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# 在 Windows 平台显式注册 AppUserModelID，使 Windows 任务栏与 SMTC 媒体浮窗正确绑定 Klang 应用图标与名称
+# 在 Windows 平台显式注册 AppUserModelID 与单实例互斥锁，彻底杜绝多开冲突
+_instance_mutex = None
 if sys.platform == "win32":
     try:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Klang.MusicPlayer")
+        
+        # 单实例检测：创建 Win32 命名互斥体
+        _MUTEX_NAME = "Local\\Klang.MusicPlayer.SingleInstance.Mutex"
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        _instance_mutex = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            hwnd = user32.FindWindowW(None, "Klang")
+            if hwnd:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE = 9
+                user32.SetForegroundWindow(hwnd)
+            sys.exit(0)
     except Exception:
         pass
 

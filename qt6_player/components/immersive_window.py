@@ -2054,6 +2054,9 @@ class ImmersiveFullscreenWindow(QWidget):
         self.volume = vol
         self.artwork_view.set_volume(vol)
 
+    def set_volume(self, vol: float) -> None:
+        self.update_volume(vol)
+
     def _on_idle_timeout(self) -> None:
         if not (self.artwork_view.is_dragging_progress or self.artwork_view.is_dragging_volume):
             self._hud_target_opacity = 0.0

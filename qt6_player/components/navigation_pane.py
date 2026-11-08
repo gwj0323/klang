@@ -1259,6 +1259,7 @@ class NavigationPane(QWidget):
             self.sort_mode = mode
             self._update_sub_bar_ui()
             self.rebuild_list(active_index=self.active_index)
+            self.set_active_index(self.active_index, track_id=self._active_track_id)
             self._trigger_list_transition()
 
     def _update_sub_bar_ui(self) -> None:
@@ -1551,7 +1552,7 @@ class NavigationPane(QWidget):
 
         def _worker():
             try:
-                results = netease_manager.search_tracks(kw, limit=30)
+                results = netease_manager.search_tracks(kw, limit=50)
             except Exception:
                 results = []
             self._cloudSearchDone.emit(kw, results)

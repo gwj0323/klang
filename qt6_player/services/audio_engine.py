@@ -1170,6 +1170,10 @@ class NordicAudioEngine(QObject):
         self._cached_output_devices: List[Tuple[str, str]] = []
         self._known_device_ids = set()
         self._refresh_output_devices_cache()
+        _init_def = QMediaDevices.defaultAudioOutput()
+        self._last_default_device_id: str = (
+            bytes(_init_def.id()).decode("utf-8", errors="ignore") if not _init_def.isNull() else "default"
+        )
         self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
 
         # 提升 Windows 进程与音频调度优先级，锁定 1ms 高精度多媒体计时器，杜绝窗口切换与后台节流时的爆音断流
@@ -1348,6 +1352,16 @@ class NordicAudioEngine(QObject):
         removed_ids = old_ids - new_ids
         added_ids = new_ids - old_ids
 
+        # 检查系统默认音频设备是否实际发生变更
+        default_dev = QMediaDevices.defaultAudioOutput()
+        cur_default_id = bytes(default_dev.id()).decode("utf-8", errors="ignore") if not default_dev.isNull() else "default"
+        default_changed = (self.selected_device_id == "default" and getattr(self, "_last_default_device_id", None) != cur_default_id)
+        self._last_default_device_id = cur_default_id
+
+        # 若设备 ID 列表与默认设备均未发生实质变动（如调节系统音量/静音引发的伪事件），直接忽略，避免误重构 Sink 产生杂音/重音
+        if not removed_ids and not added_ids and not default_changed:
+            return
+
         if removed_ids and self.is_playing:
             if self.selected_device_id == "default" or self.selected_device_id in removed_ids:
                 self.pause()
@@ -1470,7 +1484,8 @@ class NordicAudioEngine(QObject):
         st = self._audio_sink.state()
         if st == st.SuspendedState:
             self._audio_sink.resume()
-        elif st in (st.StoppedState, st.IdleState) or self._push_io is None:
+        elif self._push_io is None or st == st.StoppedState:
+            # 仅在初次启动或已停止时调用 start()；在 Push 写入模式下，IdleState 表示缓冲短暂排空，切勿重复 start()，直接写入即可自动恢复 ActiveState
             self._stream_device.start_stream()
             self._push_io = self._audio_sink.start()
 

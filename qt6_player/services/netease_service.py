@@ -576,7 +576,7 @@ class NeteaseCloudManager(QObject):
                 self.playlistTracksLoaded.emit(int(playlist_id), [])
         threading.Thread(target=_worker, daemon=True).start()
 
-    def search_tracks(self, keyword: str, limit: int = 30) -> List[NordicTrack]:
+    def search_tracks(self, keyword: str, limit: int = 50) -> List[NordicTrack]:
         """通过网易云云端接口搜索单曲"""
         kw = (keyword or "").strip()
         if not kw:
@@ -591,7 +591,7 @@ class NeteaseCloudManager(QObject):
             logger.warning(f"网易云在线搜索异常 [{kw}]: {e}")
         return []
 
-    def search_tracks_async(self, keyword: str, limit: int = 30) -> None:
+    def search_tracks_async(self, keyword: str, limit: int = 50) -> None:
         """异步搜索单曲并在主线程发射 searchResultsLoaded"""
         def _worker():
             try:

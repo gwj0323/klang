@@ -376,7 +376,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 current_time=self.audio.current_time,
                 duration=self.audio.duration,
                 play_mode=self.play_mode,
-                volume=self.audio.volume,
+                volume=0.0 if self.audio.is_muted else self.audio.volume,
                 target_screen=scr,
                 show_translation=self.lyrics_stage.show_translation,
                 syllable_mode=self.lyrics_stage.syllable_mode,
@@ -390,6 +390,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self.showNormal() if not self._saved_state.get("is_maximized") else self.showMaximized()
         self.raise_()
         self.activateWindow()
+        self.setFocus()
 
     def schedule_save(self) -> None:
         """防抖自动保存设置到本地磁盘，避免卡顿 I/O"""
@@ -828,6 +829,10 @@ class NordicWinUI3Window(AcrylicWindow):
         self.audio.playStateChanged.connect(self._on_play_state_changed)
         self.audio.timeUpdated.connect(self._on_time_updated)
         self.audio.volumeChanged.connect(self.transport_bar.update_volume)
+        self.audio.volumeChanged.connect(
+            lambda v, m: self.immersive_window.update_volume(0.0 if m else v)
+            if hasattr(self, "immersive_window") else None
+        )
         self.audio.volumeChanged.connect(lambda _v, _m: self.schedule_save())
         self.audio.playbackRateChanged.connect(self.transport_bar.set_playback_rate)
         self.audio.playbackRateChanged.connect(lambda _r: self.schedule_save())
@@ -1538,19 +1543,40 @@ class NordicWinUI3Window(AcrylicWindow):
 
     def _on_nav_track_selected(self, idx: int) -> None:
         if self.nav_pane.view_mode == 2:
+            # 自定义歌单模式：播放队列严格锁定在当前歌单内
             local_ids = {x.track_id for x in self.local_tracks}
             all_candidates = list(self.local_tracks) + [t for t in self.nav_pane.netease_tracks if t.track_id not in local_ids]
+            id_map = {t.track_id: t for t in all_candidates}
+            cur_pl_name = getattr(self.nav_pane, "active_playlist_name", "")
+            pl_ids = self.nav_pane.custom_playlists.get(cur_pl_name, [])
+            pl_tracks = [id_map[tid] for tid in pl_ids if tid in id_map]
             if 0 <= idx < len(all_candidates):
                 target = all_candidates[idx]
-                if target in self.local_tracks:
-                    self.tracks = self.local_tracks
-                    real_idx = self.local_tracks.index(target)
-                    self._last_local_track_index = real_idx
+                if pl_tracks and target in pl_tracks:
+                    self.tracks = list(pl_tracks)
+                    real_idx = self.tracks.index(target)
                     self.select_track(real_idx, auto_play=True)
+                    return
+                elif target in self.local_tracks:
+                    self.tracks = self.local_tracks
+                    self.select_track(self.local_tracks.index(target), auto_play=True)
+                    return
                 else:
                     self.tracks = [target]
                     self.select_track(0, auto_play=True)
-                return
+                    return
+
+        elif self.nav_pane.view_mode == 1:
+            # 「喜欢」收藏模式：播放队列严格锁定在喜欢的曲目中
+            fav_tracks = [t for t in self.local_tracks if t.is_favorite]
+            if 0 <= idx < len(self.local_tracks):
+                target = self.local_tracks[idx]
+                if fav_tracks and target in fav_tracks:
+                    self.tracks = list(fav_tracks)
+                    real_idx = self.tracks.index(target)
+                    self.select_track(real_idx, auto_play=True)
+                    return
+
         self.tracks = self.local_tracks
         self._last_local_track_index = idx
         self.select_track(idx, auto_play=True)
