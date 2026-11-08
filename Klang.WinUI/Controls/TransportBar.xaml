@@ -191,13 +191,24 @@
                 </Grid>
             </StackPanel>
 
-            <!-- 3. 右侧：DSP 均衡器入口、音量与沉浸模式按钮 -->
+            <!-- 3. 右侧：歌词入口、DSP 均衡器入口与音量调节 -->
             <StackPanel
                 Grid.Column="2"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="8">
+                <Button
+                    x:Name="LyricsBtn"
+                    Width="34"
+                    Height="34"
+                    Padding="0"
+                    Click="LyricsBtn_Click"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="沉浸歌词舞台">
+                    <FontIcon FontSize="15" Glyph="&#xEC4A;" />
+                </Button>
+
                 <Button
                     x:Name="EqBtn"
                     Width="34"

@@ -15,6 +15,7 @@ public sealed partial class TransportBar : UserControl
     public event EventHandler? ShuffleClicked;
     public event EventHandler? RepeatClicked;
     public event EventHandler? EqualizerClicked;
+    public event EventHandler? LyricsClicked;
     public event EventHandler<double>? UserSeekRequested;
     public event EventHandler<float>? UserVolumeChanged;
 
@@ -122,6 +123,11 @@ public sealed partial class TransportBar : UserControl
     private void RepeatBtn_Click(object sender, RoutedEventArgs e)
     {
         RepeatClicked?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void LyricsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        LyricsClicked?.Invoke(this, EventArgs.Empty);
     }
 
     private void EqBtn_Click(object sender, RoutedEventArgs e)

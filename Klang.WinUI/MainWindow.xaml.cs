@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -18,6 +19,8 @@ public sealed partial class MainWindow : Window
     private LyricsPage? _lyricsPage;
     private SettingsPage? _settingsPage;
 
+    private TrackItem? _currentTrack;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -36,6 +39,7 @@ public sealed partial class MainWindow : Window
         AudioEngineService.Instance.PositionChanged += (current, total) =>
         {
             BottomTransportBar.UpdateProgress(current, total);
+            _lyricsPage?.UpdatePlaybackTime(current);
         };
 
         AudioEngineService.Instance.StateChanged += (state) =>
@@ -52,6 +56,7 @@ public sealed partial class MainWindow : Window
         BottomTransportBar.UserSeekRequested += (s, pos) =>
         {
             AudioEngineService.Instance.Seek(pos);
+            _lyricsPage?.UpdatePlaybackTime(pos);
         };
 
         BottomTransportBar.UserVolumeChanged += (s, vol) =>
@@ -59,8 +64,27 @@ public sealed partial class MainWindow : Window
             AudioEngineService.Instance.Volume = vol;
         };
 
+        BottomTransportBar.LyricsClicked += (s, e) =>
+        {
+            // 点击底栏歌词图标，一键切入沉浸歌词舞台
+            SelectNavItem("lyrics");
+            NavigateTo("lyrics");
+        };
+
         // 默认定位到本地曲库
         NavigateTo("library");
+    }
+
+    private void SelectNavItem(string tag)
+    {
+        foreach (var item in NavView.MenuItems.OfType<NavigationViewItem>())
+        {
+            if (item.Tag as string == tag)
+            {
+                NavView.SelectedItem = item;
+                break;
+            }
+        }
     }
 
     private void TitleBar_PaneToggleRequested(TitleBar sender, object args)
@@ -113,6 +137,11 @@ public sealed partial class MainWindow : Window
 
             case "lyrics":
                 _lyricsPage ??= new LyricsPage();
+                _lyricsPage.SetCurrentTrack(_currentTrack);
+                if (AudioEngineService.Instance.IsPlaying)
+                {
+                    _lyricsPage.UpdatePlaybackTime(AudioEngineService.Instance.CurrentTime);
+                }
                 NavFrame.Content = _lyricsPage;
                 break;
 
@@ -125,12 +154,16 @@ public sealed partial class MainWindow : Window
 
     private void OnTrackSelected(object? sender, TrackItem track)
     {
+        _currentTrack = track;
+
         BottomTransportBar.UpdateTrackInfo(
             track.Title,
             $"{track.Artist} · {track.Album}",
             track.FormatBadge,
             track.CoverPath
         );
+
+        _lyricsPage?.SetCurrentTrack(track);
 
         if (!string.IsNullOrEmpty(track.FilePath))
         {

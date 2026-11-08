@@ -7,107 +7,147 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Padding="36,24,36,24">
+    <Grid Padding="36,20,36,24">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="420" />
+            <ColumnDefinition Width="380" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <!-- 左侧：唱盘黑胶 / 专辑大图封面 -->
-        <StackPanel
-            Grid.Column="0"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Spacing="24">
-            <Border
-                Width="320"
-                Height="320"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="16">
-                <Grid>
-                    <FontIcon
-                        FontSize="88"
-                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                        Glyph="&#xE8D6;" />
-                    <Image
-                        x:Name="StageCoverImage"
-                        Stretch="UniformToFill"
-                        Visibility="Collapsed" />
-                </Grid>
-            </Border>
+        <!-- 左侧：黑胶唱盘与专辑艺术封面 -->
+        <Grid Grid.Column="0" VerticalAlignment="Center">
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="20">
+                <!-- 封面容器 -->
+                <Border
+                    Width="300"
+                    Height="300"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="16">
+                    <Grid>
+                        <FontIcon
+                            x:Name="StageFallbackIcon"
+                            FontSize="76"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Glyph="&#xE8D6;" />
+                        <Image
+                            x:Name="StageCoverImage"
+                            Stretch="UniformToFill"
+                            Visibility="Collapsed" />
+                    </Grid>
+                </Border>
 
-            <StackPanel HorizontalAlignment="Center" Spacing="6">
-                <TextBlock
-                    x:Name="StageTitleText"
-                    HorizontalAlignment="Center"
-                    FontSize="20"
-                    FontWeight="Bold"
-                    Text="Arrival of the Birds" />
-                <TextBlock
-                    x:Name="StageArtistText"
-                    HorizontalAlignment="Center"
-                    FontSize="14"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="The Cinematic Orchestra · The Crimson Wing" />
-                <StackPanel
-                    Margin="0,4,0,0"
-                    HorizontalAlignment="Center"
-                    Orientation="Horizontal"
-                    Spacing="8">
-                    <Border
-                        Padding="6,2,6,2"
-                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                        CornerRadius="4">
-                        <TextBlock
-                            FontSize="11"
-                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                            Text="FLAC 24bit / 96kHz" />
-                    </Border>
-                    <Border
-                        Padding="6,2,6,2"
-                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                        CornerRadius="4">
-                        <TextBlock
-                            FontSize="11"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="120 FPS 极速刷新" />
-                    </Border>
+                <!-- 曲目元数据信息 -->
+                <StackPanel HorizontalAlignment="Center" Spacing="6">
+                    <TextBlock
+                        x:Name="StageTitleText"
+                        HorizontalAlignment="Center"
+                        FontSize="20"
+                        FontWeight="Bold"
+                        Text="未播放曲目"
+                        TextTrimming="CharacterEllipsis" />
+
+                    <TextBlock
+                        x:Name="StageArtistText"
+                        HorizontalAlignment="Center"
+                        FontSize="14"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="Klang - 沉浸式听音空间"
+                        TextTrimming="CharacterEllipsis" />
+
+                    <StackPanel
+                        Margin="0,6,0,0"
+                        HorizontalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <Border
+                            Padding="7,2,7,2"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                            <TextBlock
+                                x:Name="StageBadgeText"
+                                FontSize="11"
+                                FontWeight="Medium"
+                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                Text="WASAPI · 0ms" />
+                        </Border>
+
+                        <Border
+                            Padding="7,2,7,2"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                            <TextBlock
+                                FontSize="11"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="毫秒级同步" />
+                        </Border>
+                    </StackPanel>
                 </StackPanel>
             </StackPanel>
-        </StackPanel>
+        </Grid>
 
-        <!-- 右侧：居中丝滑歌词舞台 -->
+        <!-- 右侧：动态丝滑居中滚动歌词舞台 -->
         <ScrollViewer
+            x:Name="LyricsScrollViewer"
             Grid.Column="1"
-            Padding="20,0,20,0"
+            Padding="24,0,24,0"
+            HorizontalScrollBarVisibility="Disabled"
+            IsScrollInertiaEnabled="True"
             VerticalScrollBarVisibility="Hidden">
-            <StackPanel
-                VerticalAlignment="Center"
-                Spacing="24">
-                <TextBlock
-                    FontSize="16"
-                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                    Text="♪ ~ 钢琴纯音乐前奏 ~ ♪" />
-                <TextBlock
-                    FontSize="18"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="The wings of hope carry through the storm" />
-                <TextBlock
-                    FontSize="26"
-                    FontWeight="Bold"
-                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                    Text="Arrival of the birds, rising high above" />
-                <TextBlock
-                    FontSize="18"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Where sunlight kisses the edge of the sky" />
-                <TextBlock
-                    FontSize="16"
-                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                    Text="And echoes fade into endless serenity" />
-            </StackPanel>
+
+            <ItemsControl
+                x:Name="LyricsItemsControl"
+                Padding="0,260,0,260">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button
+                            Margin="0,4,0,4"
+                            Padding="14,10,14,10"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Center"
+                            Click="LyricLine_Click"
+                            CornerRadius="10"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="点击跳转到此时刻播放">
+                            <Button.RenderTransform>
+                                <ScaleTransform
+                                    ScaleX="{Binding ScaleX}"
+                                    ScaleY="{Binding ScaleY}" />
+                            </Button.RenderTransform>
+
+                            <StackPanel
+                                HorizontalAlignment="Center"
+                                Spacing="4">
+                                <!-- 主歌词 -->
+                                <TextBlock
+                                    FontSize="{Binding MainFontSize}"
+                                    FontWeight="{Binding FontWeight}"
+                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                    Opacity="{Binding LineOpacity}"
+                                    Text="{Binding Text}"
+                                    TextAlignment="Center"
+                                    TextWrapping="Wrap" />
+
+                                <!-- 翻译 / 副歌词 -->
+                                <TextBlock
+                                    FontSize="{Binding SubFontSize}"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Opacity="{Binding LineOpacity}"
+                                    Text="{Binding Sub}"
+                                    TextAlignment="Center"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </ScrollViewer>
     </Grid>
 </Page>
