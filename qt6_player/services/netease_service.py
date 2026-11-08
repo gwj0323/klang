@@ -83,7 +83,7 @@ class NeteaseCloudManager(QObject):
     qrStatusChecked = pyqtSignal(int, str, dict) # code, msg, profile
     cookieLoginChecked = pyqtSignal(bool, str, dict) # success, msg, profile
     dailyRecommendLoaded = pyqtSignal(list)      # list of NordicTrack
-    playlistTracksLoaded = pyqtSignal(int, list) # playlist_id, list of NordicTrack
+    playlistTracksLoaded = pyqtSignal(object, list) # playlist_id, list of NordicTrack
     searchResultsLoaded = pyqtSignal(str, list)  # keyword, list of NordicTrack
 
     QUALITY_LABELS = {
@@ -568,14 +568,15 @@ class NeteaseCloudManager(QObject):
                 self.dailyRecommendLoaded.emit([])
         threading.Thread(target=_worker, daemon=True).start()
 
-    def fetch_playlist_tracks_async(self, playlist_id: int) -> None:
+    def fetch_playlist_tracks_async(self, playlist_id: Any) -> None:
         """异步获取歌单并在主线程发射 playlistTracksLoaded"""
         def _worker():
             try:
-                tracks = self.get_playlist_tracks(playlist_id)
-                self.playlistTracksLoaded.emit(int(playlist_id), tracks)
-            except Exception:
-                self.playlistTracksLoaded.emit(int(playlist_id), [])
+                tracks = self.get_playlist_tracks(int(playlist_id))
+                self.playlistTracksLoaded.emit(playlist_id, tracks)
+            except Exception as e:
+                logger.warning(f"获取歌单 [{playlist_id}] 异常: {e}")
+                self.playlistTracksLoaded.emit(playlist_id, [])
         threading.Thread(target=_worker, daemon=True).start()
 
     def search_tracks(self, keyword: str, limit: int = 50) -> List[NordicTrack]:

@@ -19,6 +19,7 @@ from PyQt6.QtGui import (
     QPen,
     QColor,
     QFont,
+    QFontMetrics,
     QPainterPath,
     QLinearGradient,
     QPixmap,
@@ -943,6 +944,10 @@ class NavigationPane(QWidget):
         self._netease_search_timer.setInterval(400)
         self._netease_search_timer.timeout.connect(self._do_netease_cloud_search)
 
+        self._netease_load_timeout_timer = QTimer(self)
+        self._netease_load_timeout_timer.setSingleShot(True)
+        self._netease_load_timeout_timer.timeout.connect(self._on_netease_load_timeout)
+
         netease_manager.loginStatusChanged.connect(self._on_netease_login_status_changed)
         netease_manager.playlistsLoaded.connect(self._on_netease_playlists_loaded)
         netease_manager.dailyRecommendLoaded.connect(self._on_daily_recommend_loaded)
@@ -1344,7 +1349,9 @@ class NavigationPane(QWidget):
             self.lbl_count.hide()
             self.btn_sub_selector.show()
             pl_label = self.active_playlist_name if self.active_playlist_name else "未建歌单"
-            self.btn_sub_selector.setText(f"{pl_label} ▾")
+            metrics = QFontMetrics(self.btn_sub_selector.font())
+            self.btn_sub_selector.setText(metrics.elidedText(f"{pl_label} ▾", Qt.TextElideMode.ElideRight, 136))
+            self.btn_sub_selector.setToolTip(f"当前本地歌单：{pl_label}")
             self.btn_new_playlist.show()
             self.btn_del_playlist.setVisible(bool(self.active_playlist_name))
             self.btn_sort.hide()
@@ -1353,7 +1360,10 @@ class NavigationPane(QWidget):
         elif self.view_mode == 3:
             self.lbl_count.hide()
             self.btn_sub_selector.show()
-            self.btn_sub_selector.setText(f"{self._GROUP_LABELS.get(self.group_mode, '按歌手分组')} ▾")
+            grp_name = self._GROUP_LABELS.get(self.group_mode, "按歌手分组")
+            metrics = QFontMetrics(self.btn_sub_selector.font())
+            self.btn_sub_selector.setText(metrics.elidedText(f"{grp_name} ▾", Qt.TextElideMode.ElideRight, 136))
+            self.btn_sub_selector.setToolTip(f"当前分组：{grp_name}")
             self.btn_new_playlist.hide()
             self.btn_del_playlist.hide()
             self.btn_sort.show()
@@ -1372,7 +1382,9 @@ class NavigationPane(QWidget):
             else:
                 self.lbl_count.hide()
                 self.btn_sub_selector.show()
-                self.btn_sub_selector.setText(f"{self.netease_sub_name} ▾")
+                metrics = QFontMetrics(self.btn_sub_selector.font())
+                self.btn_sub_selector.setText(metrics.elidedText(f"{self.netease_sub_name} ▾", Qt.TextElideMode.ElideRight, 136))
+                self.btn_sub_selector.setToolTip(f"当前云歌单：{self.netease_sub_name}")
                 self.btn_new_playlist.hide()
                 self.btn_del_playlist.hide()
                 self.btn_sort.show()
@@ -1474,13 +1486,26 @@ class NavigationPane(QWidget):
             return
         self.is_netease_loading = True
         self.rebuild_list([], active_index=-1)
+        if hasattr(self, "_netease_load_timeout_timer"):
+            self._netease_load_timeout_timer.start(12000)
         if self.netease_sub_mode == "daily":
             netease_manager.fetch_daily_recommend_async()
         elif self.netease_sub_mode.startswith("pl:"):
             pl_id = int(self.netease_sub_mode[3:])
             netease_manager.fetch_playlist_tracks_async(pl_id)
 
+    def _on_netease_load_timeout(self) -> None:
+        if self.is_netease_loading:
+            self.is_netease_loading = False
+            if self.view_mode == 4 and not self.is_netease_searching:
+                self.rebuild_list(self.netease_tracks, active_index=self.active_index)
+            win = self.window()
+            if hasattr(win, "lyrics_stage") and hasattr(win.lyrics_stage, "_show_toast"):
+                win.lyrics_stage._show_toast(f"同步「{self.netease_sub_name}」超时，请点击刷新重试")
+
     def _on_daily_recommend_loaded(self, tracks: List[NordicTrack]) -> None:
+        if hasattr(self, "_netease_load_timeout_timer"):
+            self._netease_load_timeout_timer.stop()
         if self.netease_sub_mode == "daily":
             self.is_netease_loading = False
             self.netease_tracks = list(tracks)
@@ -1489,8 +1514,11 @@ class NavigationPane(QWidget):
                 self.rebuild_list(self.netease_tracks, active_index=self.active_index)
             self._prefetch_thumbnails_for_tracks(tracks)
 
-    def _on_playlist_tracks_loaded(self, pl_id: int, tracks: List[NordicTrack]) -> None:
-        if self.netease_sub_mode == f"pl:{pl_id}":
+    def _on_playlist_tracks_loaded(self, pl_id: Any, tracks: List[NordicTrack]) -> None:
+        if hasattr(self, "_netease_load_timeout_timer"):
+            self._netease_load_timeout_timer.stop()
+        # 兼容 64 位大整数与字符串格式歌单 ID
+        if str(self.netease_sub_mode) == f"pl:{pl_id}":
             self.is_netease_loading = False
             self.netease_tracks = list(tracks)
             self._netease_playlist_tracks = list(tracks)
