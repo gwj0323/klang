@@ -1,9 +1,7 @@
 using System;
-using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Klang_WinUI.Controls;
 
@@ -15,7 +13,6 @@ public sealed partial class TransportBar : UserControl
     public event EventHandler? ShuffleClicked;
     public event EventHandler? RepeatClicked;
     public event EventHandler? EqualizerClicked;
-    public event EventHandler? LyricsClicked;
     public event EventHandler<double>? UserSeekRequested;
     public event EventHandler<float>? UserVolumeChanged;
 
@@ -24,9 +21,28 @@ public sealed partial class TransportBar : UserControl
     private bool _isUserDragging = false;
     private double _previousVolume = 85;
 
+    private DispatcherTimer? _waveTimer;
+    private readonly Random _rand = new();
+
     public TransportBar()
     {
         InitializeComponent();
+        InitWaveTimer();
+    }
+
+    private void InitWaveTimer()
+    {
+        _waveTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _waveTimer.Tick += (s, e) =>
+        {
+            MiniWave1.Height = _rand.Next(4, 14);
+            MiniWave2.Height = _rand.Next(8, 20);
+            MiniWave3.Height = _rand.Next(6, 18);
+            MiniWave4.Height = _rand.Next(4, 12);
+        };
     }
 
     public bool IsPlaying
@@ -37,39 +53,17 @@ public sealed partial class TransportBar : UserControl
             _isPlaying = value;
             PlayPauseIcon.Glyph = _isPlaying ? "\uE769" : "\uE768";
             PlayPauseBtn.SetValue(ToolTipService.ToolTipProperty, _isPlaying ? "暂停 (Space)" : "播放 (Space)");
+
+            if (_isPlaying) _waveTimer?.Start();
+            else _waveTimer?.Stop();
         }
     }
 
-    public void UpdateTrackInfo(string title, string artist, string badge = "FLAC 24bit", string? coverPath = null)
+    public void UpdateLyricSnippet(string text)
     {
-        TrackTitleText.Text = string.IsNullOrWhiteSpace(title) ? "未播放曲目" : title;
-        ArtistText.Text = string.IsNullOrWhiteSpace(artist) ? "Klang" : artist;
-        BadgeFormat.Text = badge;
-
-        if (!string.IsNullOrEmpty(coverPath) && File.Exists(coverPath))
-        {
-            try
-            {
-                CoverImage.Source = new BitmapImage(new Uri(coverPath));
-                CoverImage.Visibility = Visibility.Visible;
-                FallbackCoverIcon.Visibility = Visibility.Collapsed;
-            }
-            catch
-            {
-                ShowFallbackIcon();
-            }
-        }
-        else
-        {
-            ShowFallbackIcon();
-        }
-    }
-
-    private void ShowFallbackIcon()
-    {
-        CoverImage.Source = null;
-        CoverImage.Visibility = Visibility.Collapsed;
-        FallbackCoverIcon.Visibility = Visibility.Visible;
+        LyricSnippetText.Text = string.IsNullOrWhiteSpace(text)
+            ? "♪ 享受纯粹音乐沉浸 ♪"
+            : text;
     }
 
     public void UpdateProgress(double currentSec, double totalSec)
@@ -125,11 +119,6 @@ public sealed partial class TransportBar : UserControl
         RepeatClicked?.Invoke(this, EventArgs.Empty);
     }
 
-    private void LyricsBtn_Click(object sender, RoutedEventArgs e)
-    {
-        LyricsClicked?.Invoke(this, EventArgs.Empty);
-    }
-
     private void EqBtn_Click(object sender, RoutedEventArgs e)
     {
         EqualizerClicked?.Invoke(this, EventArgs.Empty);
@@ -154,7 +143,6 @@ public sealed partial class TransportBar : UserControl
 
     private void TimelineSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        // 如果是用户点击跳转
         if (Math.Abs(e.NewValue - e.OldValue) > 1.5)
         {
             UserSeekRequested?.Invoke(this, e.NewValue);

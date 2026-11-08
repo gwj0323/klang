@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Klang_WinUI.Controls.NavigationPane"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:Klang_WinUI.Models"
+    mc:Ignorable="d">
+
+    <Border
+        Width="286"
+        Background="{ThemeResource LayerFillColorDefaultBrush}"
+        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+        BorderThickness="0,0,1,0">
+
+        <Grid Padding="12,14,12,12" RowSpacing="10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- 1. 顶部五栏分类胶囊 (全部 / 喜欢 / 歌单 / 网易云) -->
+            <Border
+                Grid.Row="0"
+                Padding="3"
+                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid ColumnDefinitions="*,*,*,*">
+                    <Button
+                        x:Name="TabAllBtn"
+                        Grid.Column="0"
+                        Height="28"
+                        Padding="0"
+                        HorizontalAlignment="Stretch"
+                        Click="TabBtn_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Tag="all">
+                        <TextBlock FontSize="12" Text="全部" />
+                    </Button>
+
+                    <Button
+                        x:Name="TabFavBtn"
+                        Grid.Column="1"
+                        Height="28"
+                        Padding="0"
+                        HorizontalAlignment="Stretch"
+                        Click="TabBtn_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        Tag="fav">
+                        <TextBlock FontSize="12" Text="喜欢" />
+                    </Button>
+
+                    <Button
+                        x:Name="TabPlaylistsBtn"
+                        Grid.Column="2"
+                        Height="28"
+                        Padding="0"
+                        HorizontalAlignment="Stretch"
+                        Click="TabBtn_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        Tag="playlists">
+                        <TextBlock FontSize="12" Text="歌单" />
+                    </Button>
+
+                    <Button
+                        x:Name="TabNeteaseBtn"
+                        Grid.Column="3"
+                        Height="28"
+                        Padding="0"
+                        HorizontalAlignment="Stretch"
+                        Click="TabBtn_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        Tag="netease">
+                        <TextBlock FontSize="12" Text="云端" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- 2. 搜索框 -->
+            <AutoSuggestBox
+                x:Name="SearchBox"
+                Grid.Row="1"
+                PlaceholderText="搜索歌名 / 歌手 / 专辑…"
+                QueryIcon="Find"
+                TextChanged="SearchBox_TextChanged" />
+
+            <!-- 3. 辅助工具栏 (数量统计 + 添加 + 排序) -->
+            <Grid Grid.Row="2" Margin="2,0,2,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    x:Name="TrackCountText"
+                    Grid.Column="0"
+                    VerticalAlignment="Center"
+                    FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="共 0 首" />
+
+                <Button
+                    x:Name="AddFolderBtn"
+                    Grid.Column="2"
+                    Height="26"
+                    Margin="0,0,6,0"
+                    Padding="8,0,8,0"
+                    VerticalAlignment="Center"
+                    Click="AddFolderBtn_Click"
+                    CornerRadius="4"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="添加本地音乐文件夹">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <FontIcon FontSize="12" Glyph="&#xED25;" />
+                        <TextBlock FontSize="11" Text="添加" />
+                    </StackPanel>
+                </Button>
+
+                <!-- 排序菜单按钮 -->
+                <DropDownButton
+                    x:Name="SortDropDownBtn"
+                    Grid.Column="3"
+                    Height="26"
+                    Padding="8,0,8,0"
+                    VerticalAlignment="Center"
+                    Content="排序 ▾"
+                    CornerRadius="4"
+                    FontSize="11">
+                    <DropDownButton.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Click="SortItem_Click" Tag="default" Text="默认排序" />
+                            <MenuFlyoutItem Click="SortItem_Click" Tag="title" Text="按歌名" />
+                            <MenuFlyoutItem Click="SortItem_Click" Tag="artist" Text="按歌手" />
+                            <MenuFlyoutItem Click="SortItem_Click" Tag="album" Text="按专辑" />
+                            <MenuFlyoutItem Click="SortItem_Click" Tag="duration" Text="按时长" />
+                        </MenuFlyout>
+                    </DropDownButton.Flyout>
+                </DropDownButton>
+            </Grid>
+
+            <!-- 4. 歌曲列表与空状态 -->
+            <Grid Grid.Row="3">
+                <ListView
+                    x:Name="TracksListView"
+                    DoubleTapped="TracksListView_DoubleTapped"
+                    IsItemClickEnabled="True"
+                    ItemClick="TracksListView_ItemClick"
+                    SelectionMode="Single">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="models:TrackItem">
+                            <Grid
+                                Height="48"
+                                Margin="-4,2,-4,2"
+                                Padding="8,4,8,4"
+                                ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 序号 -->
+                                <TextBlock
+                                    Grid.Column="0"
+                                    Width="20"
+                                    VerticalAlignment="Center"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind Index}" />
+
+                                <!-- 标题与歌手 -->
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                    <TextBlock
+                                        FontSize="13"
+                                        FontWeight="Medium"
+                                        Text="{x:Bind Title}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{x:Bind Artist}"
+                                        TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+
+                                <!-- 格式标签 -->
+                                <Border
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Padding="4,1,4,1"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="3">
+                                    <TextBlock
+                                        FontSize="9"
+                                        FontWeight="Medium"
+                                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                        Text="{x:Bind FormatBadge}" />
+                                </Border>
+
+                                <!-- 时长 -->
+                                <TextBlock
+                                    Grid.Column="3"
+                                    Width="36"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind DurationStr}"
+                                    TextAlignment="Right" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <!-- 空状态提示 -->
+                <StackPanel
+                    x:Name="EmptyStatePanel"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="8"
+                    Visibility="Collapsed">
+                    <FontIcon
+                        FontSize="32"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Glyph="&#xE8D6;" />
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="曲库暂无音乐" />
+                    <Button
+                        HorizontalAlignment="Center"
+                        Click="AddFolderBtn_Click"
+                        Content="导入音乐"
+                        FontSize="11"
+                        Style="{StaticResource AccentButtonStyle}" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

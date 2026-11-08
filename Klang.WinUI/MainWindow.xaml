@@ -15,72 +15,159 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="48" />
+            <RowDefinition Height="46" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 1. 原生 Fluent 自定义标题栏 -->
-        <TitleBar
+        <!-- 1. 深度对标 Qt 版 WinUITitleBar (高度 46px，保留右侧 140px 给系统最小化/最大化/关闭按钮) -->
+        <Grid
             x:Name="AppTitleBar"
-            Title="Klang"
-            BackRequested="TitleBar_BackRequested"
-            IsBackButtonVisible="{x:Bind NavFrame.CanGoBack, Mode=OneWay}"
-            IsPaneToggleButtonVisible="True"
-            PaneToggleRequested="TitleBar_PaneToggleRequested">
-            <TitleBar.IconSource>
-                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
-            </TitleBar.IconSource>
-        </TitleBar>
+            Grid.Row="0"
+            Height="46"
+            Padding="12,0,140,0"
+            Background="Transparent">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-        <!-- 2. 左侧导航与主内容区 -->
-        <NavigationView
-            x:Name="NavView"
-            Grid.Row="1"
-            IsBackButtonVisible="Collapsed"
-            IsPaneToggleButtonVisible="False"
-            PaneDisplayMode="Left"
-            OpenPaneLength="220"
-            SelectionChanged="NavView_SelectionChanged">
-            <NavigationView.MenuItems>
-                <NavigationViewItem
-                    Content="本地曲库"
-                    IsSelected="True"
-                    Tag="library">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8D6;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
+            <!-- 左侧：侧栏折叠开关 + 品牌图标与文字 -->
+            <StackPanel
+                Grid.Column="0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="8">
+                <Button
+                    x:Name="SidebarToggleBtn"
+                    Width="32"
+                    Height="32"
+                    Padding="0"
+                    Click="SidebarToggleBtn_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="折叠 / 展开曲库侧栏">
+                    <FontIcon FontSize="14" Glyph="&#xE700;" />
+                </Button>
 
-                <NavigationViewItem
-                    Content="我喜欢的音乐"
-                    Tag="favorites">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xEB51;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
+                <Image
+                    Width="20"
+                    Height="20"
+                    VerticalAlignment="Center"
+                    Source="Assets/AppIcon.ico" />
 
-                <NavigationViewItem
-                    Content="网易云音乐"
-                    Tag="netease">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE753;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
+                <TextBlock
+                    Margin="2,0,0,0"
+                    VerticalAlignment="Center"
+                    FontSize="13"
+                    FontWeight="SemiBold"
+                    Text="Klang" />
+            </StackPanel>
 
-                <NavigationViewItem
-                    Content="沉浸歌词"
-                    Tag="lyrics">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xEC4A;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-            </NavigationView.MenuItems>
+            <!-- 中间拖拽空白区 -->
+            <Border Grid.Column="1" Background="Transparent" />
 
-            <Frame x:Name="NavFrame" />
-        </NavigationView>
+            <!-- 右侧精炼工具胶囊组 (Qt 原版特性) -->
+            <StackPanel
+                Grid.Column="2"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="6">
+                <Button
+                    x:Name="DesktopLyricBtn"
+                    Height="28"
+                    Padding="10,0,10,0"
+                    Click="DesktopLyricBtn_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="桌面歌词 (Ctrl+D)">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <FontIcon FontSize="12" Glyph="&#xE7F4;" />
+                        <TextBlock FontSize="12" Text="桌面词" />
+                    </StackPanel>
+                </Button>
 
-        <!-- 3. 底部 WinUI 3 毛玻璃播放控制栏 -->
+                <Button
+                    x:Name="MiniPlayerBtn"
+                    Height="28"
+                    Padding="10,0,10,0"
+                    Click="MiniPlayerBtn_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="迷你窗口 (Ctrl+M)">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <FontIcon FontSize="12" Glyph="&#xE8A7;" />
+                        <TextBlock FontSize="12" Text="迷你窗" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    x:Name="FullscreenBtn"
+                    Height="28"
+                    Padding="10,0,10,0"
+                    Click="FullscreenBtn_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="全屏模式 (F11)">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <FontIcon FontSize="12" Glyph="&#xE740;" />
+                        <TextBlock FontSize="12" Text="全屏" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    x:Name="SettingsBtn"
+                    Height="28"
+                    Padding="10,0,10,0"
+                    Click="SettingsBtn_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="偏好设置">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <FontIcon FontSize="12" Glyph="&#xE713;" />
+                        <TextBlock FontSize="12" Text="设置" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- 2. 中央核心工作区 (Workspace)：Qt 1:1 三栏一体化布局 -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="SidebarColumn" Width="286" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左侧：NavigationPane (曲库分类、即时搜索、排序、歌曲列表) -->
+            <controls:NavigationPane
+                x:Name="LeftNavPane"
+                Grid.Column="0" />
+
+            <!-- 右侧舞台：stage_container (VinylCoverCard + LyricsStageControl) -->
+            <Grid
+                Grid.Column="1"
+                Padding="46,24,42,24"
+                ColumnSpacing="48">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 黑胶艺术封面与声学规格 -->
+                <controls:VinylCoverCard
+                    x:Name="StageCoverCard"
+                    Grid.Column="0"
+                    VerticalAlignment="Center" />
+
+                <!-- 实时丝滑居中歌词舞台 -->
+                <controls:LyricsStageControl
+                    x:Name="StageLyricsControl"
+                    Grid.Column="1" />
+            </Grid>
+        </Grid>
+
+        <!-- 3. 底部：TransportBar (毛玻璃磨砂播放控制栏) -->
         <controls:TransportBar
             x:Name="BottomTransportBar"
             Grid.Row="2" />
