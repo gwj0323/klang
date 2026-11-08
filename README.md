@@ -111,6 +111,4 @@ Klang 的实现借鉴和使用了以下优秀的开源项目，特此致谢：
 
 ## 开源协议
 
-本项目自身代码采用 [MIT License](LICENSE) 开源。
-
-> **合规说明**：因项目集成了遵循 GPL-3.0 的 `PyNCM`、`PyQt6` 及遵循 LGPL-3.0 的 `PyQt-Frameless-Window` 等库，任何基于本项目源码重新编译、分发二进制包或进行二次开发发布作品的个人与机构，请务必遵守上述各依赖组件对应的开源许可证条款。
+本项目采用 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 协议开源。
