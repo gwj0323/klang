@@ -1,9 +1,13 @@
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.Storage.Pickers;
+using WinRT.Interop;
 using Klang_WinUI.Models;
+using Klang_WinUI.Services;
 
 namespace Klang_WinUI.Pages;
 
@@ -11,6 +15,7 @@ public sealed partial class LibraryPage : Page
 {
     public ObservableCollection<TrackItem> Tracks { get; } = new();
     private ObservableCollection<TrackItem> _allTracks = new();
+    private string? _lastScannedFolder;
 
     public event EventHandler<TrackItem>? TrackSelected;
 
@@ -29,32 +34,71 @@ public sealed partial class LibraryPage : Page
         TrackCountText.Text = $"{Tracks.Count} 首曲目";
     }
 
-    private void AddFolderBtn_Click(object sender, RoutedEventArgs e)
+    private async void AddFolderBtn_Click(object sender, RoutedEventArgs e)
     {
-        // 示例数据展示
-        if (_allTracks.Count == 0)
+        try
         {
-            var samples = new[]
-            {
-                new TrackItem { Index = 1, Title = "Arrival of the Birds", Artist = "The Cinematic Orchestra", Album = "The Crimson Wing", Duration = 162, FormatBadge = "FLAC 24bit" },
-                new TrackItem { Index = 2, Title = "Experience", Artist = "Ludovico Einaudi", Album = "In a Time Lapse", Duration = 315, FormatBadge = "Hi-Res 96kHz" },
-                new TrackItem { Index = 3, Title = "Cornfield Chase", Artist = "Hans Zimmer", Album = "Interstellar OST", Duration = 126, FormatBadge = "Master" },
-                new TrackItem { Index = 4, Title = "Nuvole Bianche", Artist = "Ludovico Einaudi", Album = "Una Mattina", Duration = 357, FormatBadge = "FLAC" },
-                new TrackItem { Index = 5, Title = "Time", Artist = "Hans Zimmer", Album = "Inception OST", Duration = 275, FormatBadge = "DSD 2.8MHz" }
-            };
+            var folderPicker = new FolderPicker();
+            folderPicker.SuggestedStartLocation = PickerLocationId.MusicLibrary;
+            folderPicker.FileTypeFilter.Add("*");
 
-            foreach (var item in samples)
+            if (App.MainWindowInstance != null)
             {
-                _allTracks.Add(item);
-                Tracks.Add(item);
+                IntPtr hwnd = WindowNative.GetWindowHandle(App.MainWindowInstance);
+                InitializeWithWindow.Initialize(folderPicker, hwnd);
             }
-            UpdateEmptyState();
+
+            var folder = await folderPicker.PickSingleFolderAsync();
+            if (folder != null)
+            {
+                _lastScannedFolder = folder.Path;
+                await ScanAndLoadFolder(folder.Path);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"FolderPicker error: {ex.Message}");
         }
     }
 
-    private void ScanBtn_Click(object sender, RoutedEventArgs e)
+    private async void ScanBtn_Click(object sender, RoutedEventArgs e)
     {
+        if (!string.IsNullOrEmpty(_lastScannedFolder) && Directory.Exists(_lastScannedFolder))
+        {
+            await ScanAndLoadFolder(_lastScannedFolder);
+        }
+        else
+        {
+            // 如果未选择过文件夹，尝试扫描系统「音乐」目录
+            string myMusic = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
+            if (Directory.Exists(myMusic))
+            {
+                _lastScannedFolder = myMusic;
+                await ScanAndLoadFolder(myMusic);
+            }
+        }
+    }
+
+    private async System.Threading.Tasks.Task ScanAndLoadFolder(string folderPath)
+    {
+        ScanBtn.IsEnabled = false;
+        AddFolderBtn.IsEnabled = false;
+
+        var scanned = await LibraryService.Instance.ScanFolderAsync(folderPath);
+
+        _allTracks.Clear();
+        Tracks.Clear();
+
+        foreach (var t in scanned)
+        {
+            _allTracks.Add(t);
+            Tracks.Add(t);
+        }
+
         UpdateEmptyState();
+
+        ScanBtn.IsEnabled = true;
+        AddFolderBtn.IsEnabled = true;
     }
 
     private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)

@@ -12,7 +12,11 @@ public class TrackItem
     public double Duration { get; set; } = 0.0;
     public string DurationStr => FormatDuration(Duration);
     public string FilePath { get; set; } = string.Empty;
+    public string? CoverPath { get; set; }
     public string FormatBadge { get; set; } = "FLAC";
+    public int SampleRate { get; set; } = 44100;
+    public int BitDepth { get; set; } = 16;
+    public int Bitrate { get; set; } = 0;
     public bool IsFavorite { get; set; } = false;
 
     private static string FormatDuration(double seconds)

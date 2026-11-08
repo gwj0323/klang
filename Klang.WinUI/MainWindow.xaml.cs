@@ -2,9 +2,11 @@ using System;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using NAudio.Wave;
 using Windows.Graphics;
 using Klang_WinUI.Models;
 using Klang_WinUI.Pages;
+using Klang_WinUI.Services;
 
 namespace Klang_WinUI;
 
@@ -25,8 +27,37 @@ public sealed partial class MainWindow : Window
         AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
         AppWindow.SetIcon("Assets/AppIcon.ico");
 
-        // 设置合理的默认窗口尺寸 (1120 x 740)
-        AppWindow.Resize(new SizeInt32(1120, 740));
+        AppWindow.Resize(new SizeInt32(1140, 750));
+
+        // 初始化音频引擎调度器
+        AudioEngineService.Instance.InitializeDispatcher(this.DispatcherQueue);
+
+        // 监听音频播放引擎状态与进度
+        AudioEngineService.Instance.PositionChanged += (current, total) =>
+        {
+            BottomTransportBar.UpdateProgress(current, total);
+        };
+
+        AudioEngineService.Instance.StateChanged += (state) =>
+        {
+            BottomTransportBar.IsPlaying = (state == PlaybackState.Playing);
+        };
+
+        // 绑定底栏控制事件
+        BottomTransportBar.PlayPauseClicked += (s, e) =>
+        {
+            AudioEngineService.Instance.TogglePlayPause();
+        };
+
+        BottomTransportBar.UserSeekRequested += (s, pos) =>
+        {
+            AudioEngineService.Instance.Seek(pos);
+        };
+
+        BottomTransportBar.UserVolumeChanged += (s, vol) =>
+        {
+            AudioEngineService.Instance.Volume = vol;
+        };
 
         // 默认定位到本地曲库
         NavigateTo("library");
@@ -94,8 +125,16 @@ public sealed partial class MainWindow : Window
 
     private void OnTrackSelected(object? sender, TrackItem track)
     {
-        BottomTransportBar.UpdateTrackInfo(track.Title, $"{track.Artist} · {track.Album}", track.FormatBadge);
-        BottomTransportBar.UpdateProgress(0, track.Duration);
-        BottomTransportBar.IsPlaying = true;
+        BottomTransportBar.UpdateTrackInfo(
+            track.Title,
+            $"{track.Artist} · {track.Album}",
+            track.FormatBadge,
+            track.CoverPath
+        );
+
+        if (!string.IsNullOrEmpty(track.FilePath))
+        {
+            AudioEngineService.Instance.Play(track.FilePath);
+        }
     }
 }
