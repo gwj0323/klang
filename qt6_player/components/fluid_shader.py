@@ -82,27 +82,34 @@ vec3 cover_layer(sampler2D tex, vec2 p, vec2 center, float scale, float angle) {
     return texture(tex, q).rgb;
 }
 
-vec3 cover_stack(sampler2D tex, vec2 p, float t) {
-    // 底层：整屏铺满，最慢
-    vec3 col = cover_layer(tex, p, vec2(0.0), 2.4, t * 0.05);
+vec3 cover_stack(sampler2D tex, vec2 p, float t, float e) {
+    // 底层：铺满全屏，自转并缓慢呼吸缩放
+    float base_scale = 2.0 + 0.25 * sin(t * 0.11);
+    vec3 col = cover_layer(tex, p, vec2(0.0), base_scale, t * 0.09);
 
-    // 三个较小的层，各自绕着屏幕上不同位置缓慢公转、自转
-    vec2 c2 = vec2(-0.45, 0.20) + 0.18 * vec2(sin(t * 0.21), cos(t * 0.17));
-    vec2 c3 = vec2(0.55, -0.15) + 0.20 * vec2(cos(t * 0.19), sin(t * 0.23));
-    vec2 c4 = vec2(0.10, 0.35) + 0.16 * vec2(sin(t * 0.15 + 1.3), cos(t * 0.27));
+    // 四个较小的层：每层只露出封面的一小块，所以颜色彼此不同；
+    // 各自沿不同轨道公转、以不同速度自转，随低频能量轻微放大
+    vec2 c2 = vec2(-0.55, 0.15) + vec2(0.40 * sin(t * 0.23), 0.28 * cos(t * 0.19));
+    vec2 c3 = vec2(0.60, -0.10) + vec2(0.38 * cos(t * 0.21), 0.30 * sin(t * 0.27));
+    vec2 c4 = vec2(0.05, 0.30) + vec2(0.45 * sin(t * 0.17 + 1.3), 0.22 * cos(t * 0.31));
+    vec2 c5 = vec2(-0.10, -0.35) + vec2(0.50 * cos(t * 0.15 + 2.1), 0.20 * sin(t * 0.25));
 
-    vec3 l2 = cover_layer(tex, p, c2, 1.6, -t * 0.08 + 1.1);
-    vec3 l3 = cover_layer(tex, p, c3, 1.4, t * 0.10 + 2.3);
-    vec3 l4 = cover_layer(tex, p, c4, 1.1, -t * 0.12 + 4.0);
+    float pulse = 1.0 + e * 0.12;
+    vec3 l2 = cover_layer(tex, p, c2, 1.25 * pulse, -t * 0.22 + 1.1);
+    vec3 l3 = cover_layer(tex, p, c3, 1.10 * pulse, t * 0.26 + 2.3);
+    vec3 l4 = cover_layer(tex, p, c4, 0.95 * pulse, -t * 0.30 + 4.0);
+    vec3 l5 = cover_layer(tex, p, c5, 1.05 * pulse, t * 0.19 + 5.2);
 
-    // 圆形软遮罩，层与层之间没有任何硬边
-    float m2 = 1.0 - smoothstep(0.15, 0.85, length(p - c2));
-    float m3 = 1.0 - smoothstep(0.15, 0.80, length(p - c3));
-    float m4 = 1.0 - smoothstep(0.10, 0.60, length(p - c4));
+    // 圆形软遮罩，层与层之间没有硬边
+    float m2 = 1.0 - smoothstep(0.10, 0.75 * pulse, length(p - c2));
+    float m3 = 1.0 - smoothstep(0.10, 0.70 * pulse, length(p - c3));
+    float m4 = 1.0 - smoothstep(0.05, 0.60 * pulse, length(p - c4));
+    float m5 = 1.0 - smoothstep(0.05, 0.65 * pulse, length(p - c5));
 
-    col = mix(col, l2, m2 * 0.85);
-    col = mix(col, l3, m3 * 0.80);
-    col = mix(col, l4, m4 * 0.70);
+    col = mix(col, l2, m2 * 0.90);
+    col = mix(col, l3, m3 * 0.90);
+    col = mix(col, l4, m4 * 0.85);
+    col = mix(col, l5, m5 * 0.80);
     return col;
 }
 
@@ -126,14 +133,15 @@ void main() {
 
     float t = u_time;
 
-    // 轻微的流体扰动，让纹理像液体一样缓慢涌动
-    vec2 warp = vec2(noise(p * 1.3 + t * 0.06), noise(p * 1.3 + vec2(5.2, 1.3) - t * 0.05));
-    p += warp * (0.10 + u_energy * 0.06);
+    // 两级流体扰动：大尺度慢涌 + 小尺度快涌，让颜色边界像液体一样翻卷
+    vec2 warp = vec2(noise(p * 1.2 + t * 0.12), noise(p * 1.2 + vec2(5.2, 1.3) - t * 0.10));
+    warp += 0.5 * vec2(noise(p * 2.6 - t * 0.20 + 3.7), noise(p * 2.6 + t * 0.18 + 8.1));
+    p += warp * (0.16 + u_energy * 0.10);
 
     vec3 col;
     if (u_has_cover > 0.5) {
-        vec3 a = cover_stack(u_tex_prev, p, t);
-        vec3 b = cover_stack(u_tex_cur, p, t);
+        vec3 a = cover_stack(u_tex_prev, p, t, u_energy);
+        vec3 b = cover_stack(u_tex_cur, p, t, u_energy);
         col = mix(a, b, u_tex_mix);
     } else {
         col = palette_field(p, t);
@@ -203,7 +211,7 @@ def make_blurred_cover(pixmap: Optional[QPixmap], size: int = 64) -> Optional[QI
         stride = img.bytesPerLine() // 4
         arr = np.frombuffer(ptr, dtype=np.uint8).reshape(size, stride, 4)[:, :size, :3].astype(np.float32)
 
-        kernel = _gaussian_kernel(size * 0.06)
+        kernel = _gaussian_kernel(size * 0.035)
         for _ in range(2):
             arr = _blur_axis(arr, kernel, 0)
             arr = _blur_axis(arr, kernel, 1)

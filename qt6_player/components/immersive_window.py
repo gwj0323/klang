@@ -1358,8 +1358,8 @@ class ImmersiveLyricsView(QWidget):
             focus_raw = max(0.0, 1.0 - d)
             focus_eased = focus_raw * focus_raw * (3.0 - 2.0 * focus_raw)
 
-            # 字号：当前行 1.0，其余 0.92（Apple 的做法是字号差很小，靠透明度区分）
-            line_scale = 0.92 + 0.08 * focus_eased
+            # 字号：当前行 1.0，其余 0.80
+            line_scale = 0.80 + 0.20 * focus_eased
 
             # 透明度：当前行不透明，相邻行约 40%，越远越淡
             if d < 1.0:
