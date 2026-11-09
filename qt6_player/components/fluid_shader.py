@@ -1,11 +1,12 @@
 """
-沉浸模式 GPU 背景（Apple Music 做法）
+沉浸模式 GPU 背景（Apple Music 新版做法：封面取色 + 流动网格渐变）
 
-背景不是凭空合成的色块，而是专辑封面本身：
-- CPU 端把封面缩到 64x64 并做重度高斯模糊，作为纹理上传；
-- 片元着色器把这张纹理放大成四层，各自以不同中心、尺度、速度缓慢旋转，再叠加轻微的流体扰动；
+- CPU 端用 k-means 从封面提取至多 6 种区分明显的主色，按占比分配到若干种子点，
+  做 Voronoi 分区后模糊，生成一张 64x64 的色块图作为纹理上传；
+- 片元着色器把色块图放大成五层，各自以不同中心、尺度、速度旋转，再叠加两级流体扰动；
 - 最后整体提饱和、压亮度，让白色歌词在任何封面上都清楚。
-切歌时新旧两张封面纹理交叉淡入。没有封面时退回到调色盘渐变。
+切歌时新旧色块图交叉淡入。拿不到封面时退回到调色盘渐变。
+(make_blurred_cover 保留，供需要旧版"模糊封面"效果时使用。)
 """
 
 import logging
@@ -226,6 +227,95 @@ def make_blurred_cover(pixmap: Optional[QPixmap], size: int = 64) -> Optional[QI
         return None
 
 
+def extract_cover_colors(pixmap: Optional[QPixmap], k: int = 6) -> Optional[np.ndarray]:
+    """用 k-means 从封面提取主色，返回 (n, 4) 数组：RGB(0~255) + 占比，按占比降序。"""
+    if pixmap is None or pixmap.isNull():
+        return None
+    try:
+        img = pixmap.toImage().scaled(48, 48, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                      Qt.TransformationMode.SmoothTransformation)
+        img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+        ptr = img.constBits()
+        ptr.setsize(img.sizeInBytes())
+        stride = img.bytesPerLine() // 4
+        px = np.frombuffer(ptr, dtype=np.uint8).reshape(48, stride, 4)[:, :48, :3]
+        px = px.reshape(-1, 3).astype(np.float32)
+
+        # k-means++ 初始化（固定随机种子，同一张封面每次结果一致）
+        rng = np.random.default_rng(int(px.sum()) % (2 ** 32))
+        centers = [px[rng.integers(len(px))]]
+        for _ in range(1, k):
+            d = np.min(((px[:, None, :] - np.array(centers)[None]) ** 2).sum(-1), axis=1)
+            centers.append(px[rng.choice(len(px), p=d / max(d.sum(), 1e-6))])
+        centers = np.array(centers)
+
+        for _ in range(12):
+            labels = np.argmin(((px[:, None, :] - centers[None]) ** 2).sum(-1), axis=1)
+            for i in range(k):
+                sel = px[labels == i]
+                if len(sel):
+                    centers[i] = sel.mean(0)
+
+        counts = np.bincount(labels, minlength=k).astype(np.float32)
+        order = np.argsort(-counts)
+        result = []
+        for i in order:
+            if counts[i] < len(px) * 0.02:
+                continue
+            c = centers[i]
+            # 和已选颜色太接近的合并掉，保证颜色之间有区分度
+            if any(np.linalg.norm(c - r[:3]) < 38.0 for r in result):
+                continue
+            result.append(np.array([c[0], c[1], c[2], counts[i] / len(px)], dtype=np.float32))
+        return np.array(result) if result else None
+    except Exception as e:
+        logger.debug(f"[FluidShader] color extraction failed: {e}")
+        return None
+
+
+def make_color_field(pixmap: Optional[QPixmap], size: int = 64) -> Optional[QImage]:
+    """用封面主色生成一张色块图：主色按占比分配种子点，做 Voronoi 分区后重度模糊。
+    着色器再把它多层旋转、扰动，得到流动的网格渐变。"""
+    colors = extract_cover_colors(pixmap)
+    if colors is None:
+        return None
+    try:
+        rng = np.random.default_rng(int(colors[:, :3].sum() * 1000) % (2 ** 32))
+        n_seeds = 9
+        weights = colors[:, 3] / colors[:, 3].sum()
+        # 每种颜色至少一个种子点，其余按占比分
+        seed_colors = list(range(len(colors)))
+        seed_colors += list(rng.choice(len(colors), size=max(0, n_seeds - len(colors)), p=weights))
+        seeds = rng.random((len(seed_colors), 2)) * size
+
+        yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+        # 纹理是镜像平铺的，种子也按镜像考虑，避免边缘出现接缝
+        best = np.full((size, size), np.inf, dtype=np.float32)
+        owner = np.zeros((size, size), dtype=np.int32)
+        for i, (sx, sy) in enumerate(seeds):
+            for mx in (sx, -sx, 2 * size - sx):
+                for my in (sy, -sy, 2 * size - sy):
+                    d = (xx - mx) ** 2 + (yy - my) ** 2
+                    m = d < best
+                    best[m] = d[m]
+                    owner[m] = i
+        rgb = colors[np.array(seed_colors)][:, :3][owner]
+
+        kernel = _gaussian_kernel(size * 0.045)
+        for _ in range(2):
+            rgb = _blur_axis(rgb, kernel, 0)
+            rgb = _blur_axis(rgb, kernel, 1)
+
+        out = np.empty((size, size, 4), dtype=np.uint8)
+        out[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+        out[:, :, 3] = 255
+        out = np.ascontiguousarray(out)
+        return QImage(out.data, size, size, size * 4, QImage.Format.Format_RGBA8888).copy()
+    except Exception as e:
+        logger.debug(f"[FluidShader] color field failed: {e}")
+        return None
+
+
 class FluidMeshShaderWidget(QOpenGLWidget):
     """沉浸模式全屏背景：模糊封面多层旋转（GPU）。"""
 
@@ -286,8 +376,8 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         self._target_energy = max(0.0, min(1.0, float(energy)))
 
     def set_cover(self, pixmap: Optional[QPixmap]):
-        """设置当前封面。纹理在下一帧 paintGL 中上传（需要 GL 上下文）。"""
-        img = make_blurred_cover(pixmap)
+        """设置当前封面：提取主色生成色块图，纹理在下一帧 paintGL 中上传（需要 GL 上下文）。"""
+        img = make_color_field(pixmap)
         if img is None:
             self._pending_cover = None
             self._pending_clear = True
