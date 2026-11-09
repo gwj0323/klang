@@ -1250,7 +1250,7 @@ class ImmersiveLyricsView(QWidget):
                 h += 30.0
             self._line_y_tops.append(cur_y)
             self._line_heights.append(h)
-            cur_y += h + 22.0
+            cur_y += h + 32.0
 
     def _ensure_text_metrics_cache(self, max_text_w: float) -> None:
         w_key = int(round(max_text_w))
@@ -1322,8 +1322,7 @@ class ImmersiveLyricsView(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setRenderHint(QPainter.RenderHint.VerticalSubpixelPositioning)
 
-        # 歌词区背景由全屏流体着色器（FluidMeshShaderWidget）在右侧平滑衰减为午夜微光阅读底色，
-        # 无需在歌词视口上填充任何生硬的矩形遮罩，确保全屏流体有机一体、无缝通透。
+        # 歌词直接画在模糊封面背景上，不加任何遮罩层；可读性由着色器统一压暗保证。
 
         viewport_center = h * 0.48
         pad_left = 36.0
@@ -1359,14 +1358,14 @@ class ImmersiveLyricsView(QWidget):
             focus_raw = max(0.0, 1.0 - d)
             focus_eased = focus_raw * focus_raw * (3.0 - 2.0 * focus_raw)
 
-            # 非线性字号缩放 (0.84 ~ 1.0 连续平滑无级变焦)
-            line_scale = 0.84 + 0.16 * focus_eased
+            # 字号：当前行 1.0，其余 0.92（Apple 的做法是字号差很小，靠透明度区分）
+            line_scale = 0.92 + 0.08 * focus_eased
 
-            # 非线性透明度过渡 (景深衰减，保证非活跃歌词清澈清晰不刺眼)
+            # 透明度：当前行不透明，相邻行约 40%，越远越淡
             if d < 1.0:
-                base_alpha = 0.46 + 0.54 * focus_eased
+                base_alpha = 0.40 + 0.60 * focus_eased
             else:
-                base_alpha = max(0.22, 0.46 * math.pow(0.75, max(0.0, d - 1.0)))
+                base_alpha = max(0.16, 0.40 * math.pow(0.80, max(0.0, d - 1.0)))
 
             final_alpha = base_alpha * edge_curve
             if final_alpha <= 0.02:
@@ -2134,6 +2133,7 @@ class ImmersiveFullscreenWindow(QWidget):
             self._col_base_target = c_base
             if hasattr(self, "fluid_shader"):
                 self.fluid_shader.set_palette(c1, c2, c3, c4, c_base)
+                self.fluid_shader.set_cover(track.get_cover_pixmap())
         else:
             self.lyrics_view.set_lyrics([], offset=0.0)
 
