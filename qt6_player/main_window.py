@@ -81,6 +81,7 @@ from qt6_player.services.window_effects import (
     suppress_native_caption_buttons,
 )
 from qt6_player.services.media_control_service import WindowsMediaControlService
+from qt6_player.services.taskbar_service import TaskbarThumbnailService
 
 
 def _lerp_color(c_from: QColor, c_to: QColor, t: float) -> QColor:
@@ -482,6 +483,14 @@ class NordicWinUI3Window(AcrylicWindow):
         QTimer.singleShot(0, self._handle_window_state_change)
         self._apply_backdrop_to_window()
         QTimer.singleShot(50, self._apply_backdrop_to_window)
+        if hasattr(self, "taskbar_service") and self.taskbar_service:
+            self.taskbar_service.init_toolbar(int(self.winId()), self.audio.is_playing)
+
+    def nativeEvent(self, eventType, message):
+        if hasattr(self, "taskbar_service") and self.taskbar_service:
+            if self.taskbar_service.handle_native_event(message, self):
+                return True, 0
+        return super().nativeEvent(eventType, message)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -700,6 +709,8 @@ class NordicWinUI3Window(AcrylicWindow):
         save_player_state(self.local_tracks, settings, sync=sync)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if hasattr(self, "taskbar_service") and self.taskbar_service:
+            self.taskbar_service.cleanup()
         self.audio.pause()
         self.audio._decoder.stop()
         if hasattr(self.audio, "_pre_decoder"):
@@ -854,6 +865,11 @@ class NordicWinUI3Window(AcrylicWindow):
         self.media_control.nextRequested.connect(self._on_next_track)
         self.media_control.previousRequested.connect(self._on_prev_track)
         self.media_control.stopRequested.connect(self.audio.pause)
+
+        # Windows 任务栏缩略图控制 (Taskbar Thumbnail Toolbar)
+        self.taskbar_service = TaskbarThumbnailService()
+        self.taskbar_service.register_window(int(self.winId()))
+        self.audio.playStateChanged.connect(self.taskbar_service.update_play_state)
 
     def _on_sidebar_anim_val(self, val: float) -> None:
         w = int(round(float(val)))

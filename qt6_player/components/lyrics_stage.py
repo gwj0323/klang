@@ -72,6 +72,7 @@ class LyricsStage(QWidget):
         self.lyric_offset: float = 0.0
         self.syllable_mode: bool = True
         self.show_translation: bool = True
+        self.show_romaji: bool = True
         self.align_center: bool = False
         self.lyric_font_size: int = 20
 
@@ -212,6 +213,15 @@ class LyricsStage(QWidget):
             self.center_line_smoothly(self.active_index, immediate=False)
         self.update()
 
+    def set_show_romaji(self, show: bool) -> None:
+        if getattr(self, "show_romaji", True) == bool(show):
+            return
+        self.show_romaji = bool(show)
+        self._recalculate_layout(snap_immediately=False)
+        if self.active_index >= 0 and not self.user_scrolling:
+            self.center_line_smoothly(self.active_index, immediate=False)
+        self.update()
+
     def set_align_center(self, center: bool) -> None:
         self.align_center = bool(center)
         self._update_target_states()
@@ -273,15 +283,20 @@ class LyricsStage(QWidget):
         primary_line_h = round(self.lyric_font_size * 1.68)
         sub_font_size = max(11, round(self.lyric_font_size * 0.65))
         sub_line_h = round(sub_font_size * 1.65)
+        roma_font_size = max(10, round(self.lyric_font_size * 0.58))
+        roma_line_h = round(roma_font_size * 1.55)
         pad_v = round(self.lyric_font_size * 0.62)
 
         y_cursor = 0.0
         for idx, line in enumerate(self.lyrics):
             has_sub = bool(line.sub and self.show_translation)
+            has_roma = bool(getattr(line, "roma", "") and getattr(self, "show_romaji", True))
+            extra_h = 0.0
+            if has_roma and not line.is_interlude:
+                extra_h += roma_line_h + 2.0
             if has_sub:
-                row_height = float(pad_v * 2 + primary_line_h + sub_line_h + 4)
-            else:
-                row_height = float(pad_v * 2 + primary_line_h)
+                extra_h += sub_line_h + 2.0
+            row_height = float(pad_v * 2 + primary_line_h + extra_h)
             st = self.visual_states[idx]
             st.y_top = y_cursor
             st.height = row_height
@@ -542,6 +557,8 @@ class LyricsStage(QWidget):
         primary_line_h = round(self.lyric_font_size * 1.68)
         sub_font_size = max(11, round(self.lyric_font_size * 0.65))
         sub_line_h = round(sub_font_size * 1.65)
+        roma_font_size = max(10, round(self.lyric_font_size * 0.58))
+        roma_line_h = round(roma_font_size * 1.55)
         pad_v = round(self.lyric_font_size * 0.62)
 
         active_font = get_nordic_font(self.lyric_font_size + 1, QFont.Weight.DemiBold)
@@ -550,6 +567,8 @@ class LyricsStage(QWidget):
         inactive_fm = QFontMetricsF(inactive_font)
         sub_font = get_nordic_font(sub_font_size, QFont.Weight.Normal)
         sub_fm = QFontMetricsF(sub_font)
+        roma_font = get_nordic_font(roma_font_size, QFont.Weight.Medium)
+        roma_fm = QFontMetricsF(roma_font)
 
         align_flag = Qt.AlignmentFlag.AlignHCenter if self.align_center else Qt.AlignmentFlag.AlignLeft
         fade_zone = max(24.0, h * 0.20)
@@ -631,10 +650,23 @@ class LyricsStage(QWidget):
                     bp.setBrush(dot_col)
                     bp.drawEllipse(QPointF(base_x + d_i * 16.0, screen_y + st.height / 2.0), dot_r, dot_r)
             else:
+                has_roma = bool(getattr(line, "roma", "") and getattr(self, "show_romaji", True))
+                cur_line_y = screen_y + pad_v
+
+                if has_roma:
+                    bp.setFont(roma_font)
+                    roma_col = QColor(self.theme.sage_accent if is_active else self.theme.slate_muted)
+                    roma_col.setAlphaF(0.85 if is_active else 0.55)
+                    bp.setPen(roma_col)
+                    roma_rect = QRectF(text_left, cur_line_y, max_text_w, float(roma_line_h))
+                    elided_roma = roma_fm.elidedText(line.roma, Qt.TextElideMode.ElideRight, max_text_w)
+                    bp.drawText(roma_rect, int(align_flag | Qt.AlignmentFlag.AlignVCenter), elided_roma)
+                    cur_line_y += roma_line_h + 2.0
+
                 primary_font = active_font if is_active else inactive_font
                 fm = active_fm if is_active else inactive_fm
                 bp.setFont(primary_font)
-                primary_rect = QRectF(text_left, screen_y + pad_v, max_text_w, float(primary_line_h))
+                primary_rect = QRectF(text_left, cur_line_y, max_text_w, float(primary_line_h))
                 elided_main = fm.elidedText(line.text, Qt.TextElideMode.ElideRight, max_text_w)
                 text_flags = int(align_flag | Qt.AlignmentFlag.AlignVCenter)
 
@@ -664,10 +696,12 @@ class LyricsStage(QWidget):
                     bp.setPen(self.theme.charcoal)
                     bp.drawText(primary_rect, text_flags, elided_main)
 
+                cur_line_y += primary_line_h + 2.0
+
             if line.sub and self.show_translation:
                 bp.setFont(sub_font)
                 bp.setPen(self.theme.slate_dark if is_active else self.theme.slate_muted)
-                sub_rect = QRectF(text_left, screen_y + pad_v + primary_line_h + 2.0, max_text_w, float(sub_line_h))
+                sub_rect = QRectF(text_left, cur_line_y, max_text_w, float(sub_line_h))
                 elided_sub = sub_fm.elidedText(line.sub, Qt.TextElideMode.ElideRight, max_text_w)
                 bp.drawText(
                     sub_rect,
@@ -823,6 +857,7 @@ class LyricsStage(QWidget):
         menu.addSeparator()
         act_align = menu.addAction("切换对齐方式 (居中 / 居左)")
         act_trans = menu.addAction("切换双语翻译显示")
+        act_roma = menu.addAction("切换罗马音 / 假名注音显示")
         selected = menu.exec(global_pos)
         if selected == act_poster:
             self.posterRequested.emit(line_idx)
@@ -831,6 +866,10 @@ class LyricsStage(QWidget):
             self._show_toast("居中对齐" if self.align_center else "左对齐")
         elif selected == act_trans:
             self.set_show_translation(not self.show_translation)
+            self._show_toast("显示译文" if self.show_translation else "隐藏译文")
+        elif selected == act_roma:
+            self.set_show_romaji(not getattr(self, "show_romaji", True))
+            self._show_toast("显示注音" if self.show_romaji else "隐藏注音")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.RightButton:

@@ -830,8 +830,9 @@ class NeteaseCloudManager(QObject):
             if res.get("code") == 200:
                 lrc_text = res.get("lrc", {}).get("lyric", "")
                 tlyric_text = res.get("tlyric", {}).get("lyric", "")
+                romalrc_text = res.get("romalrc", {}).get("lyric", "")
                 if lrc_text:
-                    parsed = parse_lrc_text(lrc_text, trans_lrc=tlyric_text)
+                    parsed = parse_lrc_text(lrc_text, trans_lrc=tlyric_text, roma_lrc=romalrc_text)
                     track_obj.lyrics = parsed
                     return parsed
         except Exception:

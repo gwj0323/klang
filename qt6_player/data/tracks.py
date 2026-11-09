@@ -18,6 +18,7 @@ class LyricLine:
     end_time: float
     text: str
     sub: str = ""
+    roma: str = ""
     is_interlude: bool = False
     syllables: List[SyllableToken] = field(default_factory=list)
 
@@ -208,6 +209,7 @@ def create_lyric_lines(raw_items: List[dict]) -> List[LyricLine]:
         is_interlude = bool(item.get("is_interlude", False))
         text = item["text"]
         sub = item.get("sub", "")
+        roma = item.get("roma", "")
         syllables = [] if is_interlude else build_syllables(text, start_t, end_t)
         result.append(
             LyricLine(
@@ -216,6 +218,7 @@ def create_lyric_lines(raw_items: List[dict]) -> List[LyricLine]:
                 end_time=end_t,
                 text=text,
                 sub=sub,
+                roma=roma,
                 is_interlude=is_interlude,
                 syllables=syllables,
             )
@@ -316,7 +319,7 @@ def _parse_raw_lrc_map(lrc_content: str) -> List[Tuple[float, str]]:
     return entries
 
 
-def parse_lrc_text(primary_lrc: str, trans_lrc: str = "") -> List[LyricLine]:
+def parse_lrc_text(primary_lrc: str, trans_lrc: str = "", roma_lrc: str = "") -> List[LyricLine]:
     primary_entries = _parse_raw_lrc_map(primary_lrc)
     if not primary_entries:
         plain_lines = [ln.strip() for ln in (primary_lrc or "").splitlines() if ln.strip()]
@@ -325,7 +328,7 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "") -> List[LyricLine]:
         raw_items = []
         for idx, raw_t in enumerate(plain_lines):
             p_txt, s_txt = _split_inline_bilingual(raw_t)
-            raw_items.append({"time": idx * 4.0, "text": p_txt, "sub": s_txt})
+            raw_items.append({"time": idx * 4.0, "text": p_txt, "sub": s_txt, "roma": ""})
         return create_lyric_lines(raw_items)
 
     clean_trans: List[Tuple[float, str]] = []
@@ -334,6 +337,13 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "") -> List[LyricLine]:
             st = txt.strip()
             if st and not _HEADER_NOISE_PATTERN.match(st):
                 clean_trans.append((t, st))
+
+    clean_roma: List[Tuple[float, str]] = []
+    if roma_lrc:
+        for t, txt in _parse_raw_lrc_map(roma_lrc):
+            st = txt.strip()
+            if st and not _HEADER_NOISE_PATTERN.match(st):
+                clean_roma.append((t, st))
 
     merged_raw: List[dict] = []
     i = 0
@@ -369,12 +379,26 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "") -> List[LyricLine]:
             if best_d <= 2.8 and best_sub and best_sub != p_txt:
                 s_txt = best_sub
 
+        # 4. 匹配罗马音 / 多语言注音 (roma_lrc)
+        r_txt = ""
+        if clean_roma:
+            best_roma = ""
+            best_rd = 999.0
+            for rt, rtxt in clean_roma:
+                rd = abs(rt - t)
+                if rd < best_rd:
+                    best_rd = rd
+                    best_roma = rtxt
+            if best_rd <= 2.8 and best_roma and best_roma != p_txt:
+                r_txt = best_roma
+
         is_dots = p_txt in ("...", "· · ·", "•••", "~~~")
         merged_raw.append(
             {
                 "time": t,
                 "text": "· · ·" if is_dots else p_txt,
                 "sub": s_txt,
+                "roma": r_txt,
                 "is_interlude": is_dots,
             }
         )

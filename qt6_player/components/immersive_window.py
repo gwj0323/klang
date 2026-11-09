@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 
 from qt6_player.data.tracks import NordicTrack, LyricLine, format_timecode
 from qt6_player.theme.nordic_palette import get_nordic_font
+from qt6_player.components.fluid_shader import FluidMeshShaderWidget
 
 
 def extract_aurora_palette(pixmap: Optional[QPixmap], track: Optional[NordicTrack]) -> Tuple[QColor, QColor, QColor, QColor, QColor]:
@@ -1091,12 +1092,17 @@ class ImmersiveLyricsView(QWidget):
         self._empty_font = get_nordic_font(26, QFont.Weight.Medium)
         self._fm_main = QFontMetricsF(self._main_font)
         self._fm_sub = QFontMetricsF(self._sub_font)
+        self._roma_font = get_nordic_font(15, QFont.Weight.Medium)
+        self._roma_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+        self._fm_roma = QFontMetricsF(self._roma_font)
+        self.show_romaji: bool = True
         self._main_baseline_y: float = (48.0 + self._fm_main.ascent() - self._fm_main.descent()) * 0.5
         self._sub_baseline_y: float = 50.0 + (28.0 + self._fm_sub.ascent() - self._fm_sub.descent()) * 0.5
         self._cached_layout_w: int = -1
         self._elided_main_cache: List[str] = []
         self._adv_main_cache: List[float] = []
         self._elided_sub_cache: List[str] = []
+        self._elided_roma_cache: List[str] = []
 
     def set_lyrics(self, lyrics: List[LyricLine], offset: float = 0.0) -> None:
         self.lyrics = list(lyrics)
@@ -1193,6 +1199,13 @@ class ImmersiveLyricsView(QWidget):
         self._recompute_layout()
         self.update()
 
+    def set_show_romaji(self, show: bool) -> None:
+        if getattr(self, "show_romaji", True) == bool(show):
+            return
+        self.show_romaji = bool(show)
+        self._recompute_layout()
+        self.update()
+
     def set_syllable_mode(self, enabled: bool) -> None:
         self.syllable_mode = bool(enabled)
         self.update()
@@ -1203,7 +1216,11 @@ class ImmersiveLyricsView(QWidget):
         self._cached_layout_w = -1
         cur_y = 0.0
         for line in self.lyrics:
-            h = 92.0 if (line.sub and self.show_translation) else 62.0
+            h = 62.0
+            if getattr(line, "roma", "") and getattr(self, "show_romaji", True) and not line.is_interlude:
+                h += 24.0
+            if line.sub and self.show_translation:
+                h += 30.0
             self._line_y_tops.append(cur_y)
             self._line_heights.append(h)
             cur_y += h + 22.0
@@ -1216,13 +1233,22 @@ class ImmersiveLyricsView(QWidget):
         self._elided_main_cache = []
         self._adv_main_cache = []
         self._elided_sub_cache = []
+        self._elided_roma_cache = []
         fm_main = self._fm_main
         fm_sub = self._fm_sub
+        fm_roma = getattr(self, "_fm_roma", QFontMetricsF(self._sub_font))
         for line in self.lyrics:
             elided_m = fm_main.elidedText(line.text, Qt.TextElideMode.ElideRight, max_text_w)
             adv_m = min(max_text_w, fm_main.horizontalAdvance(elided_m))
             self._elided_main_cache.append(elided_m)
             self._adv_main_cache.append(adv_m)
+            if getattr(line, "roma", ""):
+                roma_str = str(line.roma).strip()
+                self._elided_roma_cache.append(
+                    fm_roma.elidedText(roma_str, Qt.TextElideMode.ElideRight, max_text_w) if roma_str else ""
+                )
+            else:
+                self._elided_roma_cache.append("")
             if line.sub:
                 sub_str = str(line.sub).strip()
                 self._elided_sub_cache.append(
@@ -1323,6 +1349,21 @@ class ImmersiveLyricsView(QWidget):
             p.setOpacity(final_alpha)
             p.translate(pad_left + drift_x, screen_y)
 
+            has_roma = bool(getattr(line, "roma", "") and getattr(self, "show_romaji", True) and not line.is_interlude)
+            y_shift = 22.0 if has_roma else 0.0
+
+            if has_roma:
+                elided_roma = self._elided_roma_cache[idx]
+                if elided_roma:
+                    p.setFont(self._roma_font)
+                    roma_alpha = int(round(225 * focus_eased + 90 * (1.0 - focus_eased)))
+                    p.setPen(QColor(255, 255, 255, roma_alpha))
+                    p.drawText(QPointF(0.0, 18.0), elided_roma)
+
+            cur_main_base = QPointF(0.0, self._main_baseline_y + y_shift)
+            cur_main_glow = QPointF(0.0, self._main_baseline_y + y_shift + 1.0)
+            cur_sub_base = QPointF(0.0, self._sub_baseline_y + y_shift)
+
             # 缩放歌词本体
             p.save()
             p.scale(line_scale, line_scale)
@@ -1352,29 +1393,29 @@ class ImmersiveLyricsView(QWidget):
 
                     # 1. 绘制暗部未唱到的半透明歌词底色 (使用浮点 QPointF 基线，实现 DirectWrite 亚像素定位)
                     p.setPen(QColor(255, 255, 255, 105))
-                    p.drawText(main_base_pt, elided_str)
+                    p.drawText(cur_main_base, elided_str)
 
                     # 2. 液态流光亮部
                     if prog > 0.002:
                         fill_w = adv_w * prog
                         p.save()
-                        clip_rect = QRectF(-4.0, -10.0, fill_w + 4.0, main_text_h + 20.0)
+                        clip_rect = QRectF(-4.0, -10.0 + y_shift, fill_w + 4.0, main_text_h + 20.0)
                         p.setClipRect(clip_rect, Qt.ClipOperation.IntersectClip)
 
                         # 底层热点柔光光晕 (Bloom Glow)
                         glow_col = QColor(self.accent_color)
                         glow_col.setAlpha(int(round(90 * focus_eased)))
                         p.setPen(glow_col)
-                        p.drawText(main_glow_pt, elided_str)
+                        p.drawText(cur_main_glow, elided_str)
 
                         # 表层纯白流光高亮
                         p.setPen(QColor(255, 255, 255, 255))
-                        p.drawText(main_base_pt, elided_str)
+                        p.drawText(cur_main_base, elided_str)
                         p.restore()
                 else:
                     p_alpha = int(round(255 * focus_eased + 130 * (1.0 - focus_eased)))
                     p.setPen(QColor(255, 255, 255, p_alpha))
-                    p.drawText(main_base_pt, elided_str)
+                    p.drawText(cur_main_base, elided_str)
 
             p.restore()
 
@@ -1385,7 +1426,7 @@ class ImmersiveLyricsView(QWidget):
                     p.setFont(sub_font)
                     sub_alpha = int(round(195 * focus_eased + 90 * (1.0 - focus_eased)))
                     p.setPen(QColor(255, 255, 255, sub_alpha))
-                    p.drawText(sub_base_pt, elided_sub)
+                    p.drawText(cur_sub_base, elided_sub)
 
             p.restore()
 
@@ -1717,6 +1758,9 @@ class ImmersiveFullscreenWindow(QWidget):
         self._render_timer.timeout.connect(self._on_animation_frame)
 
         self._setup_ui()
+        self.fluid_shader = FluidMeshShaderWidget(self)
+        self.fluid_shader.setGeometry(self.rect())
+        self.fluid_shader.lower()
 
     def _setup_ui(self) -> None:
         root_vbox = QVBoxLayout(self)
@@ -1751,6 +1795,20 @@ class ImmersiveFullscreenWindow(QWidget):
         )
         self.btn_trans.clicked.connect(self._on_toggle_translation)
         top_hbox.addWidget(self.btn_trans)
+
+        # 假名注音 / 罗马音开关
+        self.btn_roma = QPushButton("音", self.top_bar_widget)
+        self.btn_roma.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.btn_roma.setFixedSize(36, 30)
+        self.btn_roma.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_roma.setToolTip("显示 / 隐藏假名注音与罗马音")
+        self.btn_roma.setStyleSheet(
+            "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
+            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
+            "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
+        )
+        self.btn_roma.clicked.connect(self._on_toggle_romaji)
+        top_hbox.addWidget(self.btn_roma)
 
         # 设置入口按钮 (统一配置帧率、封面、动效与音频)
         self.btn_settings = QPushButton("设置", self.top_bar_widget)
@@ -1893,6 +1951,14 @@ class ImmersiveFullscreenWindow(QWidget):
             if not any(l.sub for l in self.current_track.lyrics):
                 self.translationFetchRequested.emit(self.current_track)
 
+    def _on_toggle_romaji(self) -> None:
+        self.show_romaji = not getattr(self, "show_romaji", True)
+        self.btn_roma.setStyleSheet(
+            f"QPushButton {{ background: {'rgba(255, 255, 255, 0.32)' if self.show_romaji else 'rgba(255, 255, 255, 0.10)'}; "
+            "border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; }"
+        )
+        self.lyrics_view.set_show_romaji(self.show_romaji)
+
     def _on_toggle_syllable(self) -> None:
         self.syllable_mode = not self.syllable_mode
         self.btn_syllable.setStyleSheet(
@@ -1929,6 +1995,8 @@ class ImmersiveFullscreenWindow(QWidget):
         self.target_fps = 120 if fps >= 100 else 60
         interval = 7 if self.target_fps == 120 else 15
         self._render_timer.setInterval(interval)
+        if hasattr(self, "fluid_shader"):
+            self.fluid_shader.set_fps(self.target_fps)
         self._update_fps_btn_style()
 
     def _update_fps_btn_style(self) -> None:
@@ -1994,6 +2062,10 @@ class ImmersiveFullscreenWindow(QWidget):
 
         if hasattr(self, "_frame_clock"):
             self._frame_clock.restart()
+        if hasattr(self, "fluid_shader"):
+            self.fluid_shader.setGeometry(self.rect())
+            self.fluid_shader.lower()
+            self.fluid_shader.start_animation()
         if not self._render_timer.isActive():
             self._render_timer.start()
 
@@ -2003,6 +2075,8 @@ class ImmersiveFullscreenWindow(QWidget):
         self.artwork_view.update()
 
     def exit_immersive(self) -> None:
+        if hasattr(self, "fluid_shader"):
+            self.fluid_shader.stop_animation()
         self._render_timer.stop()
         self._idle_timer.stop()
         self.unsetCursor()
@@ -2023,6 +2097,8 @@ class ImmersiveFullscreenWindow(QWidget):
             self._col3_target = c3
             self._col4_target = c4
             self._col_base_target = c_base
+            if hasattr(self, "fluid_shader"):
+                self.fluid_shader.set_palette(c1, c2, c3, c4)
         else:
             self.lyrics_view.set_lyrics([], offset=0.0)
 
@@ -2045,6 +2121,8 @@ class ImmersiveFullscreenWindow(QWidget):
             else:
                 self._audio_energy += (low_energy - self._audio_energy) * 0.09
             self.artwork_view.audio_energy = self._audio_energy
+            if hasattr(self, "fluid_shader"):
+                self.fluid_shader.set_energy(self._audio_energy)
 
     def update_play_mode(self, mode: str) -> None:
         self.play_mode = mode
@@ -2064,9 +2142,19 @@ class ImmersiveFullscreenWindow(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        if hasattr(self, "fluid_shader"):
+            self.fluid_shader.setGeometry(self.rect())
+            self.fluid_shader.lower()
         if hasattr(self, "top_bar_widget"):
             self.top_bar_widget.setGeometry(0, 26, self.width(), 48)
             self.top_bar_widget.raise_()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if hasattr(self, "fluid_shader"):
+            self.fluid_shader.setGeometry(self.rect())
+            self.fluid_shader.lower()
+            self.fluid_shader.start_animation()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         self._wake_hud()
@@ -2153,11 +2241,13 @@ class ImmersiveFullscreenWindow(QWidget):
                 self._top_opacity_eff.setOpacity(self._hud_opacity)
         self.artwork_view.controls_opacity = self._hud_opacity
 
-        # 极光慢速等离子流背景限频 ~30Hz 更新，前景歌词/黑胶/粒子保持完整 120 FPS
-        now_ms = self._clock.elapsed()
-        if self._aurora_pixmap is None or (now_ms - self._last_aurora_ms) >= 32:
-            self._last_aurora_ms = now_ms
-            self._render_aurora_buffer(240, 135)
+        # 极光慢速等离子流背景限频 ~30Hz 更新（当 GPU Fluid 着色器未激活时作为纯 CPU 降级保底）
+        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.isVisible()
+        if not has_gpu:
+            now_ms = self._clock.elapsed()
+            if self._aurora_pixmap is None or (now_ms - self._last_aurora_ms) >= 32:
+                self._last_aurora_ms = now_ms
+                self._render_aurora_buffer(240, 135)
 
         self.update()
 
@@ -2242,11 +2332,13 @@ class ImmersiveFullscreenWindow(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # 1. 绘制预缓存极光+暗角纹理 (240x135 硬件双线性平滑放大，单帧耗时 < 0.2ms)
-        if self._aurora_pixmap is None:
-            self._render_aurora_buffer(240, 135)
-        if self._aurora_pixmap is not None:
-            p.drawPixmap(self.rect(), self._aurora_pixmap)
+        # 1. 绘制预缓存极光+暗角纹理 (仅当 GPU Fluid 着色器未激活时作为纯 CPU 降级保底)
+        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.isVisible()
+        if not has_gpu:
+            if self._aurora_pixmap is None:
+                self._render_aurora_buffer(240, 135)
+            if self._aurora_pixmap is not None:
+                p.drawPixmap(self.rect(), self._aurora_pixmap)
 
         # 1.5 绘制封面背后无界 Ambilight 动态氛围溢彩 (全屏画布渲染，彻底消除子控件边界裁切生硬分割线)
         if hasattr(self, "artwork_view"):
