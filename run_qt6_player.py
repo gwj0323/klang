@@ -10,6 +10,12 @@ if sys.platform == "win32":
     try:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Klang.MusicPlayer")
+
+        # 显式声明 Windows 10/11 Per-Monitor DPI Aware v2 (-4)，保证 2K/4K/非整数高缩放比下绝对清晰
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except Exception:
+            pass
         
         # 单实例检测：创建 Win32 命名互斥体
         _MUTEX_NAME = "Local\\Klang.MusicPlayer.SingleInstance.Mutex"
