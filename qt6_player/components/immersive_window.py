@@ -48,47 +48,74 @@ from qt6_player.components.fluid_shader import FluidMeshShaderWidget
 
 
 def extract_aurora_palette(pixmap: Optional[QPixmap], track: Optional[NordicTrack]) -> Tuple[QColor, QColor, QColor, QColor, QColor]:
-    """从封面中提取用于全景流体极光的高动态 5 阶调色盘：主极光、副极光、暖阳流金、深海极光、午夜丝绒底色"""
+    """从封面中提取用于 Apple Music 全景流体极光的高动态 5 阶调色盘：主极光、副极光、暖阳流金、深海极光、午夜黑曜底色"""
     if pixmap is not None and not pixmap.isNull():
         try:
-            small = pixmap.scaled(20, 20, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+            small = pixmap.scaled(24, 24, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
             img = small.toImage().convertToFormat(QImage.Format.Format_RGB32)
             c1_r = c1_g = c1_b = c1_cnt = 0
             c2_r = c2_g = c2_b = c2_cnt = 0
             c3_r = c3_g = c3_b = c3_cnt = 0
             c4_r = c4_g = c4_b = c4_cnt = 0
-            for y in range(20):
-                for x in range(20):
+            all_r = all_g = all_b = all_cnt = 0
+            for y in range(24):
+                for x in range(24):
                     c = img.pixelColor(x, y)
-                    if x < 10 and y < 10:
-                        c1_r += c.red(); c1_g += c.green(); c1_b += c.blue(); c1_cnt += 1
-                    elif x >= 10 and y < 10:
-                        c2_r += c.red(); c2_g += c.green(); c2_b += c.blue(); c2_cnt += 1
-                    elif x < 10 and y >= 10:
-                        c3_r += c.red(); c3_g += c.green(); c3_b += c.blue(); c3_cnt += 1
+                    r, g, b = c.red(), c.green(), c.blue()
+                    all_r += r; all_g += g; all_b += b; all_cnt += 1
+                    if x < 12 and y < 12:
+                        c1_r += r; c1_g += g; c1_b += b; c1_cnt += 1
+                    elif x >= 12 and y < 12:
+                        c2_r += r; c2_g += g; c2_b += b; c2_cnt += 1
+                    elif x < 12 and y >= 12:
+                        c3_r += r; c3_g += g; c3_b += b; c3_cnt += 1
                     else:
-                        c4_r += c.red(); c4_g += c.green(); c4_b += c.blue(); c4_cnt += 1
+                        c4_r += r; c4_g += g; c4_b += b; c4_cnt += 1
 
             if c1_cnt > 0 and c2_cnt > 0 and c3_cnt > 0 and c4_cnt > 0:
-                col1 = QColor(c1_r // c1_cnt, c1_g // c1_cnt, c1_b // c1_cnt)
-                col2 = QColor(c2_r // c2_cnt, c2_g // c2_cnt, c2_b // c2_cnt)
-                col3 = QColor(c3_r // c3_cnt, c3_g // c3_cnt, c3_b // c3_cnt)
-                col4 = QColor(c4_r // c4_cnt, c4_g // c4_cnt, c4_b // c4_cnt)
+                raw_c1 = QColor(c1_r // c1_cnt, c1_g // c1_cnt, c1_b // c1_cnt)
+                raw_c2 = QColor(c2_r // c2_cnt, c2_g // c2_cnt, c2_b // c2_cnt)
+                raw_c3 = QColor(c3_r // c3_cnt, c3_g // c3_cnt, c3_b // c3_cnt)
+                raw_c4 = QColor(c4_r // c4_cnt, c4_g // c4_cnt, c4_b // c4_cnt)
 
-                # 增强色彩的通透度与饱和度
-                h1, s1, l1, _ = col1.getHslF()
-                h2, s2, l2, _ = col2.getHslF()
-                h3, s3, l3, _ = col3.getHslF()
-                h4, s4, l4, _ = col4.getHslF()
+                # 全局主色调与饱和度分析
+                dom_color = QColor(all_r // all_cnt, all_g // all_cnt, all_b // all_cnt)
+                h_dom, s_dom, l_dom, _ = dom_color.getHslF()
 
-                col1.setHslF(max(0.0, h1), min(0.92, max(0.50, s1 * 1.45)), min(0.64, max(0.40, l1 * 1.20)))
-                col2.setHslF(max(0.0, h2), min(0.88, max(0.45, s2 * 1.35)), min(0.58, max(0.35, l2 * 1.15)))
-                col3.setHslF(max(0.0, h3), min(0.85, max(0.40, s3 * 1.30)), min(0.68, max(0.42, l3 * 1.25)))
-                col4.setHslF(max(0.0, h4), min(0.80, max(0.38, s4 * 1.25)), min(0.52, max(0.30, l4 * 1.10)))
+                h1, s1, l1, _ = raw_c1.getHslF()
+                h2, s2, l2, _ = raw_c2.getHslF()
+                h3, s3, l3, _ = raw_c3.getHslF()
+                h4, s4, l4, _ = raw_c4.getHslF()
 
-                # 纯净午夜深底（带微弱主色调）
-                c_base = QColor()
-                c_base.setHslF(max(0.0, h1), min(0.24, s1 * 0.35), 0.065)
+                hue_diff = max(abs(h1 - h2), abs(h1 - h3), abs(h1 - h4), abs(h2 - h3), abs(h2 - h4), abs(h3 - h4))
+
+                if hue_diff < 0.15 or s_dom > 0.40:
+                    # 单主色调主导的专辑封面（如纯红、纯橙、高饱和单色封面）：
+                    # 采用 Apple Music 风格色彩扩展体系，构建高动态珠宝色系（主极光红、暖金、雅玫、深夜幽蓝），拒绝混浊成泥
+                    col1 = QColor()
+                    col1.setHslF(max(0.0, h_dom), min(0.95, max(0.70, s_dom * 1.35)), 0.50)
+
+                    col2 = QColor()
+                    col2.setHslF((h_dom + 0.08) % 1.0, min(0.92, max(0.65, s_dom * 1.25)), 0.54)
+
+                    col3 = QColor()
+                    col3.setHslF((h_dom - 0.07 + 1.0) % 1.0, min(0.88, max(0.60, s_dom * 1.20)), 0.46)
+
+                    col4 = QColor()
+                    col4.setHslF((h_dom + 0.55) % 1.0, 0.40, 0.28)
+                else:
+                    # 封面本身色彩丰富，各象限保留自身色相并提升通透度与饱和度
+                    col1 = QColor()
+                    col1.setHslF(max(0.0, h1), min(0.92, max(0.50, s1 * 1.45)), min(0.64, max(0.42, l1 * 1.20)))
+                    col2 = QColor()
+                    col2.setHslF(max(0.0, h2), min(0.88, max(0.45, s2 * 1.35)), min(0.58, max(0.38, l2 * 1.15)))
+                    col3 = QColor()
+                    col3.setHslF(max(0.0, h3), min(0.85, max(0.40, s3 * 1.30)), min(0.68, max(0.44, l3 * 1.25)))
+                    col4 = QColor()
+                    col4.setHslF(max(0.0, h4), min(0.80, max(0.38, s4 * 1.25)), min(0.52, max(0.32, l4 * 1.10)))
+
+                # 纯净午夜黑曜岩底色（纯正深黑，保证暗部沉稳清澈）
+                c_base = QColor(8, 10, 16)
                 return col1, col2, col3, col4, c_base
         except Exception:
             pass
@@ -97,8 +124,8 @@ def extract_aurora_palette(pixmap: Optional[QPixmap], track: Optional[NordicTrac
     c1 = QColor(pal.get("accent", "#3D7A63"))
     c2 = QColor(pal.get("wood", "#7D6B5C"))
     c3 = QColor(pal.get("highlight", "#BFA78A"))
-    c4 = QColor("#304A5E")
-    c_base = QColor("#0A0D12")
+    c4 = QColor("#223348")
+    c_base = QColor(8, 10, 16)
     return c1, c2, c3, c4, c_base
 
 
@@ -1295,15 +1322,8 @@ class ImmersiveLyricsView(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setRenderHint(QPainter.RenderHint.VerticalSubpixelPositioning)
 
-        # 0. 绘制歌词区与背景物理分离层 (Ambient Scrim / 护眼微透深景背板)
-        # 建立独立光学景深平面：使右侧歌词阅读区域与底层动态流光彻底解耦分离，背景流动变化绝不干扰歌词识别度
-        scrim_grad = QLinearGradient(0.0, 0.0, float(w), 0.0)
-        scrim_grad.setColorAt(0.0, QColor(6, 8, 12, 0))
-        scrim_grad.setColorAt(0.12, QColor(6, 8, 12, 45))
-        scrim_grad.setColorAt(0.35, QColor(6, 8, 12, 110))
-        scrim_grad.setColorAt(0.85, QColor(6, 8, 12, 145))
-        scrim_grad.setColorAt(1.0, QColor(6, 8, 12, 165))
-        p.fillRect(self.rect(), scrim_grad)
+        # 歌词区背景由全屏流体着色器（FluidMeshShaderWidget）在右侧平滑衰减为午夜微光阅读底色，
+        # 无需在歌词视口上填充任何生硬的矩形遮罩，确保全屏流体有机一体、无缝通透。
 
         viewport_center = h * 0.48
         pad_left = 36.0
@@ -1339,14 +1359,14 @@ class ImmersiveLyricsView(QWidget):
             focus_raw = max(0.0, 1.0 - d)
             focus_eased = focus_raw * focus_raw * (3.0 - 2.0 * focus_raw)
 
-            # 非线性字号缩放 (0.76 ~ 1.0 连续平滑无级变焦)
-            line_scale = 0.76 + 0.24 * focus_eased
+            # 非线性字号缩放 (0.84 ~ 1.0 连续平滑无级变焦)
+            line_scale = 0.84 + 0.16 * focus_eased
 
-            # 非线性透明度过渡 (景深衰减)
+            # 非线性透明度过渡 (景深衰减，保证非活跃歌词清澈清晰不刺眼)
             if d < 1.0:
-                base_alpha = 0.36 + 0.64 * focus_eased
+                base_alpha = 0.46 + 0.54 * focus_eased
             else:
-                base_alpha = max(0.10, 0.36 * math.pow(0.56, max(0.0, d - 1.0)))
+                base_alpha = max(0.22, 0.46 * math.pow(0.75, max(0.0, d - 1.0)))
 
             final_alpha = base_alpha * edge_curve
             if final_alpha <= 0.02:
@@ -1392,11 +1412,6 @@ class ImmersiveLyricsView(QWidget):
                     dot_r = 5.0 * line_scale
                     p.drawEllipse(QPointF(dot_i * 20.0 + 10.0, main_text_h * 0.5), dot_r, dot_r)
             else:
-                # 绘制文字与背景深景分离阴影 (防止背景流光穿透文字笔画)
-                shadow_alpha = int(round(160 * focus_eased + 70 * (1.0 - focus_eased)))
-                p.setPen(QColor(0, 0, 0, shadow_alpha))
-                p.drawText(cur_main_base + QPointF(0.0, 1.8), elided_str)
-
                 is_current_line = (idx == self.active_index)
                 if is_current_line and self.syllable_mode and focus_eased > 0.05:
                     eff_time = max(0.0, self.current_time + self.lyric_offset)
@@ -1431,8 +1446,7 @@ class ImmersiveLyricsView(QWidget):
                         p.drawText(cur_main_base, elided_str)
                         p.restore()
                 else:
-                    p_alpha = int(round(255 * focus_eased + 130 * (1.0 - focus_eased)))
-                    p.setPen(QColor(255, 255, 255, p_alpha))
+                    p.setPen(QColor(255, 255, 255, 255))
                     p.drawText(cur_main_base, elided_str)
 
             p.restore()

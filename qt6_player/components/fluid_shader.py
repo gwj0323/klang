@@ -75,36 +75,65 @@ void main() {
     float aspect = u_resolution.x / max(1.0, u_resolution.y);
     vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
 
-    float t = u_time * 0.16;
-    float energy_boost = u_energy * 0.35;
+    float t = u_time * 0.18;
+    float energy_pulse = u_energy * 0.35;
 
     // Apple Music style Domain Warping: liquid coordinate deformation
-    vec2 q = vec2(fbm(p + vec2(0.0, 0.0) + t * 0.18),
-                  fbm(p + vec2(5.2, 1.3) + t * 0.22));
+    vec2 warp = vec2(
+        fbm(p * 1.2 + vec2(0.0, 0.0) + t * 0.20),
+        fbm(p * 1.2 + vec2(4.3, 1.8) + t * 0.24)
+    );
+    vec2 p_warped = p + warp * 0.45;
 
-    vec2 r = vec2(fbm(p + 3.2 * q + vec2(1.7, 9.2) + t * 0.14 + energy_boost * 0.20),
-                  fbm(p + 3.2 * q + vec2(8.3, 2.8) + t * 0.18));
+    // 4 discrete spatial Lissajous color cores:
+    // Core 1 (primary vivid hue): dynamic orbit centered around album art
+    vec2 p1 = vec2(-0.35 * aspect + 0.14 * sin(t * 0.95), -0.05 + 0.18 * cos(t * 0.72));
+    // Core 2 (warm golden luminous glow): lower-left area under album art & title
+    vec2 p2 = vec2(-0.25 * aspect + 0.16 * cos(t * 0.82), -0.32 + 0.14 * sin(t * 1.10));
+    // Core 3 (ruby / rose luminous highlight): upper-left area above album art
+    vec2 p3 = vec2(-0.20 * aspect + 0.15 * sin(t * 0.68), 0.30 + 0.16 * cos(t * 0.88));
+    // Core 4 (deep contrast navy / twilight): gentle atmospheric depth on the right
+    vec2 p4 = vec2(0.25 * aspect + 0.15 * cos(t * 0.52), 0.04 + 0.16 * sin(t * 0.78));
 
-    float f = fbm(p + 3.4 * r + energy_boost * 0.25);
+    // Dynamic radii responding organically to sound energy
+    float r1 = 1.05 + energy_pulse * 0.22;
+    float r2 = 0.95 + energy_pulse * 0.18;
+    float r3 = 0.90 + energy_pulse * 0.18;
+    float r4 = 0.95 + energy_pulse * 0.16;
 
-    // Liquid organic color blending
-    vec3 fluid = mix(u_color1, u_color2, clamp(f * f * 2.8, 0.0, 1.0));
-    fluid = mix(fluid, u_color3, clamp(length(q) * 1.15, 0.0, 1.0));
-    fluid = mix(fluid, u_color4, clamp(length(r.x) * 1.25, 0.0, 1.0));
+    float d1 = length(p_warped - p1);
+    float d2 = length(p_warped - p2);
+    float d3 = length(p_warped - p3);
+    float d4 = length(p_warped - p4);
 
-    // Gentle tone mapping: preserves vibrant chroma and luminous midtones without harsh clipping
-    fluid = fluid / (vec3(1.0) + fluid * 0.18);
+    float w1 = pow(clamp(1.0 - d1 / r1, 0.0, 1.0), 1.8);
+    float w2 = pow(clamp(1.0 - d2 / r2, 0.0, 1.0), 1.8);
+    float w3 = pow(clamp(1.0 - d3 / r3, 0.0, 1.0), 1.8);
+    float w4 = pow(clamp(1.0 - d4 / r4, 0.0, 1.0), 1.8);
 
-    // Deep midnight anchor: ribbon fluids flowing with rich vibrancy over velvet midnight base
-    float fluid_mask = clamp(0.40 + 0.55 * f + energy_boost * 0.22, 0.0, 1.0);
-    vec3 col = mix(u_color_base, fluid * 0.85 + u_color_base * 0.15, fluid_mask);
+    float sum_w = w1 + w2 + w3 + w4;
+    vec3 fluid = (u_color1 * w1 + u_color2 * w2 + u_color3 * w3 + u_color4 * w4) / max(0.001, sum_w);
 
-    // Audio-reactive dynamic vitality swell (natural breathing modulation)
-    col *= (1.0 + u_energy * 0.20);
+    // Tone map fluid to retain jewel-like clarity without overexposure
+    fluid = fluid / (vec3(1.0) + fluid * 0.10);
 
-    // Apple Music style midnight vignette (smooth center roll-off, deep edges)
-    float vig = 1.0 - smoothstep(0.40, 1.45, length(p * 1.10));
-    col = mix(u_color_base * 0.65, col, clamp(0.42 + 0.58 * vig, 0.0, 1.0));
+    // Blend fluid over deep midnight base
+    float fluid_presence = clamp(sum_w * 0.96 + energy_pulse * 0.15, 0.0, 1.0);
+    vec3 col = mix(u_color_base, fluid, fluid_presence);
+
+    // Fullscreen seamless optical transition into right-side lyrics reading bed
+    // Fluid light radiates beautifully from album artwork and dissolves naturally into deep velvet night
+    // 100% continuous cubic Hermite curve, zero harsh boxes or split edges
+    float lyrics_bed = smoothstep(0.24, 0.54, uv.x);
+    col = mix(col, u_color_base, lyrics_bed * 0.86);
+
+    // Audio-reactive dynamic vitality swell
+    col *= (1.0 + u_energy * 0.18);
+
+    // Apple Music style midnight edge vignette (gentle center roll-off)
+    float dist_center = length(p * vec2(0.95, 1.15));
+    float vig = 1.0 - smoothstep(0.50, 1.55, dist_center);
+    col = mix(u_color_base * 0.70, col, clamp(0.38 + 0.62 * vig, 0.0, 1.0));
 
     // Velvet micro-dither grain to eradicate 8-bit banding on dark gradients
     float grain = (fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.012;
