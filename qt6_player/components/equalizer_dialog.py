@@ -1,6 +1,20 @@
 from typing import List, Optional, Tuple
 import re
-from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QSize, QVariantAnimation, QEasingCurve, pyqtSignal
+import threading
+import urllib.request
+import json
+from pathlib import Path
+from PyQt6.QtCore import (
+    Qt,
+    QRectF,
+    QPointF,
+    QPoint,
+    QSize,
+    QVariantAnimation,
+    QEasingCurve,
+    pyqtSignal,
+    QUrl,
+)
 from PyQt6.QtGui import (
     QPainter,
     QPen,
@@ -9,6 +23,8 @@ from PyQt6.QtGui import (
     QPainterPath,
     QLinearGradient,
     QMouseEvent,
+    QPixmap,
+    QDesktopServices,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -282,6 +298,10 @@ class AudioSettingsDialog(WinUIModalDialog):
     backdropMaterialChanged = pyqtSignal(str)
     scrapeRequested = pyqtSignal()
 
+    # 软件更新信号
+    updateCheckResult = pyqtSignal(bool, str, str)  # has_update, latest_tag, release_url
+    updateCheckFailed = pyqtSignal(str)              # error_msg
+
     _PRESET_NAMES = ["默认原声", "流行人声", "低音增强", "清澈高音", "现场空间"]
     _RATE_VALUES = [0.75, 1.0, 1.25, 1.5, 2.0]
     _SLEEP_MINS = [0, 15, 30, 60]
@@ -463,8 +483,8 @@ class AudioSettingsDialog(WinUIModalDialog):
         vbox = self._root_vbox
         vbox.setSpacing(14)
 
-        # 顶部三栏分类切换：将音效、播放输出、界面外观拆分为独立标签页，告别拥挤
-        self.category_tabs = WinUISegmentedControl(["音效调节", "播放与输出", "外观与歌词"], self)
+        # 顶部四栏分类切换：将音效、播放输出、界面外观与关于拆分为独立标签页
+        self.category_tabs = WinUISegmentedControl(["音效调节", "播放与输出", "外观与歌词", "关于"], self)
         self.category_tabs.set_theme(self.theme)
         vbox.addWidget(self.category_tabs)
 
@@ -1226,10 +1246,205 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.scroll_ui = self._wrap_tab_in_scroll(self.tab_ui)
         self.stacked_layout.addWidget(self.scroll_ui)
 
+        # ----------------- Tab 3: 关于 -----------------
+        self._latest_release_url: str = ""
+        self.tab_about = QWidget(self.tab_container)
+        about_vbox = QVBoxLayout(self.tab_about)
+        about_vbox.setContentsMargins(6, 12, 12, 18)
+        about_vbox.setSpacing(16)
+
+        # 头部应用概览：图标、名称、版本胶囊与定位简述
+        app_header = QHBoxLayout()
+        app_header.setSpacing(14)
+
+        icon_path = Path(__file__).resolve().parent.parent / "assets" / "klang_icon.png"
+        self.lbl_about_icon = QLabel(self.tab_about)
+        if icon_path.exists():
+            pm = QPixmap(str(icon_path)).scaled(
+                52, 52, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            self.lbl_about_icon.setPixmap(pm)
+        self.lbl_about_icon.setFixedSize(52, 52)
+        self.lbl_about_icon.setStyleSheet("background: transparent;")
+        app_header.addWidget(self.lbl_about_icon)
+
+        app_title_box = QVBoxLayout()
+        app_title_box.setSpacing(4)
+        app_title_box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        self.lbl_about_app_name = QLabel("Klang", self.tab_about)
+        self.lbl_about_app_name.setFont(get_nordic_font(20, QFont.Weight.Bold))
+        self.lbl_about_app_name.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        title_row.addWidget(self.lbl_about_app_name)
+
+        self.lbl_about_version_badge = QLabel("v1.4.0", self.tab_about)
+        self.lbl_about_version_badge.setFont(get_nordic_font(10, QFont.Weight.DemiBold, mono=True))
+        self.lbl_about_version_badge.setFixedHeight(20)
+        self.lbl_about_version_badge.setContentsMargins(6, 2, 6, 2)
+        self.lbl_about_version_badge.setStyleSheet(
+            f"color: {self.theme.charcoal.name()}; background: rgba({self.theme.sage_soft.red()}, {self.theme.sage_soft.green()}, {self.theme.sage_soft.blue()}, 0.22); border-radius: 4px;"
+        )
+        title_row.addWidget(self.lbl_about_version_badge)
+        app_title_box.addLayout(title_row)
+
+        self.lbl_about_subtitle = QLabel("Windows 本地与网易云无损音乐播放器", self.tab_about)
+        self.lbl_about_subtitle.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_about_subtitle.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        app_title_box.addWidget(self.lbl_about_subtitle)
+
+        app_header.addLayout(app_title_box, 1)
+        about_vbox.addLayout(app_header)
+
+        # 分割线 1
+        self.div_about_1 = QFrame(self.tab_about)
+        self.div_about_1.setFrameShape(QFrame.Shape.HLine)
+        self.div_about_1.setFrameShadow(QFrame.Shadow.Plain)
+        self.div_about_1.setFixedHeight(1)
+        self.div_about_1.setStyleSheet(
+            f"background-color: rgba({self.theme.divider.red()}, {self.theme.divider.green()}, {self.theme.divider.blue()}, {self.theme.divider.alphaF():.3f}); border: none;"
+        )
+        about_vbox.addWidget(self.div_about_1)
+
+        # 1. 项目信息
+        proj_box = QVBoxLayout()
+        proj_box.setSpacing(10)
+
+        self.lbl_about_sec_proj = QLabel("项目信息", self.tab_about)
+        self.lbl_about_sec_proj.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.lbl_about_sec_proj.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        proj_box.addWidget(self.lbl_about_sec_proj)
+
+        # 开发者
+        author_row = QHBoxLayout()
+        self.lbl_author_title = QLabel("开发者", self.tab_about)
+        self.lbl_author_title.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.lbl_author_title.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        author_row.addWidget(self.lbl_author_title)
+        author_row.addStretch(1)
+
+        self.lbl_author_val = QLabel("gwj0323 (Wendgy)", self.tab_about)
+        self.lbl_author_val.setFont(get_nordic_font(11, QFont.Weight.Normal, mono=True))
+        self.lbl_author_val.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        author_row.addWidget(self.lbl_author_val)
+        proj_box.addLayout(author_row)
+
+        # 开源协议
+        lic_row = QHBoxLayout()
+        self.lbl_lic_title = QLabel("开源协议", self.tab_about)
+        self.lbl_lic_title.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.lbl_lic_title.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        lic_row.addWidget(self.lbl_lic_title)
+        lic_row.addStretch(1)
+
+        self.lbl_lic_val = QLabel("GNU General Public License v3.0 (GPL-3.0)", self.tab_about)
+        self.lbl_lic_val.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_lic_val.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        lic_row.addWidget(self.lbl_lic_val)
+        proj_box.addLayout(lic_row)
+
+        # 代码仓库
+        repo_row = QHBoxLayout()
+        repo_text_col = QVBoxLayout()
+        repo_text_col.setSpacing(2)
+        self.lbl_repo_title = QLabel("代码仓库", self.tab_about)
+        self.lbl_repo_title.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.lbl_repo_title.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        repo_text_col.addWidget(self.lbl_repo_title)
+
+        self.lbl_repo_desc = QLabel("github.com/gwj0323/klang", self.tab_about)
+        self.lbl_repo_desc.setFont(get_nordic_font(10, QFont.Weight.Normal, mono=True))
+        self.lbl_repo_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        repo_text_col.addWidget(self.lbl_repo_desc)
+        repo_row.addLayout(repo_text_col, 1)
+
+        self.btn_open_github = WinUIChipButton("访问 GitHub", fixed_w=100, parent=self.tab_about)
+        self.btn_open_github.set_theme(self.theme)
+        self.btn_open_github.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/gwj0323/klang")))
+        repo_row.addWidget(self.btn_open_github)
+        proj_box.addLayout(repo_row)
+
+        about_vbox.addLayout(proj_box)
+
+        # 分割线 2
+        self.div_about_2 = QFrame(self.tab_about)
+        self.div_about_2.setFrameShape(QFrame.Shape.HLine)
+        self.div_about_2.setFrameShadow(QFrame.Shadow.Plain)
+        self.div_about_2.setFixedHeight(1)
+        self.div_about_2.setStyleSheet(
+            f"background-color: rgba({self.theme.divider.red()}, {self.theme.divider.green()}, {self.theme.divider.blue()}, {self.theme.divider.alphaF():.3f}); border: none;"
+        )
+        about_vbox.addWidget(self.div_about_2)
+
+        # 2. 版本与检查更新
+        update_box = QVBoxLayout()
+        update_box.setSpacing(10)
+
+        self.lbl_about_sec_update = QLabel("软件更新", self.tab_about)
+        self.lbl_about_sec_update.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
+        self.lbl_about_sec_update.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        update_box.addWidget(self.lbl_about_sec_update)
+
+        update_row = QHBoxLayout()
+        update_text_col = QVBoxLayout()
+        update_text_col.setSpacing(2)
+
+        self.lbl_cur_ver = QLabel("当前版本: v1.4.0", self.tab_about)
+        self.lbl_cur_ver.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.lbl_cur_ver.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
+        update_text_col.addWidget(self.lbl_cur_ver)
+
+        self.lbl_update_status = QLabel("点击检查更新获取 GitHub 最新发布", self.tab_about)
+        self.lbl_update_status.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_update_status.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        update_text_col.addWidget(self.lbl_update_status)
+        update_row.addLayout(update_text_col, 1)
+
+        btn_group_row = QHBoxLayout()
+        btn_group_row.setSpacing(6)
+
+        self.btn_view_releases = WinUIChipButton("发布日志", fixed_w=78, parent=self.tab_about)
+        self.btn_view_releases.set_theme(self.theme)
+        self.btn_view_releases.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/gwj0323/klang/releases")))
+        btn_group_row.addWidget(self.btn_view_releases)
+
+        self.btn_download_update = WinUIChipButton("前往下载", fixed_w=78, parent=self.tab_about)
+        self.btn_download_update.set_theme(self.theme)
+        self.btn_download_update.setVisible(False)
+        self.btn_download_update.clicked.connect(self._on_download_update_clicked)
+        btn_group_row.addWidget(self.btn_download_update)
+
+        self.btn_check_update = WinUIChipButton("检查更新", fixed_w=78, parent=self.tab_about)
+        self.btn_check_update.set_theme(self.theme)
+        self.btn_check_update.clicked.connect(self._on_check_update_clicked)
+        btn_group_row.addWidget(self.btn_check_update)
+
+        update_row.addLayout(btn_group_row)
+        update_box.addLayout(update_row)
+
+        about_vbox.addLayout(update_box)
+
+        self.updateCheckResult.connect(self._on_update_check_result)
+        self.updateCheckFailed.connect(self._on_update_check_failed)
+
+        about_vbox.addStretch(1)
+
+        self.lbl_about_footer = QLabel("Copyright © 2026 gwj0323. All rights reserved.", self.tab_about)
+        self.lbl_about_footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_about_footer.setFont(get_nordic_font(10, QFont.Weight.Normal))
+        self.lbl_about_footer.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+        about_vbox.addWidget(self.lbl_about_footer)
+
+        self.scroll_about = self._wrap_tab_in_scroll(self.tab_about)
+        self.stacked_layout.addWidget(self.scroll_about)
+
         vbox.addWidget(self.tab_container, 1)
 
         # 切换到默认 Tab
-        safe_tab = max(0, min(2, int(default_tab)))
+        safe_tab = max(0, min(3, int(default_tab)))
         self.category_tabs.set_current_index(safe_tab, animate=False)
         self.stacked_layout.setCurrentIndex(safe_tab)
         self.category_tabs.currentIndexChanged.connect(self._on_category_changed)
@@ -1244,6 +1459,59 @@ class AudioSettingsDialog(WinUIModalDialog):
 
     def _on_scrape_clicked(self) -> None:
         self.scrapeRequested.emit()
+
+    def _on_check_update_clicked(self) -> None:
+        self.btn_check_update.setEnabled(False)
+        self.lbl_update_status.setText("正在连接 GitHub 检查最新版本…")
+        self.lbl_update_status.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+
+        def _fetch():
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/gwj0323/klang/releases/latest",
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Klang/1.4.0"}
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    raw = resp.read().decode("utf-8")
+                    data = json.loads(raw)
+                    tag_name = data.get("tag_name", "").strip()
+                    html_url = data.get("html_url", "https://github.com/gwj0323/klang/releases")
+
+                    def _parse_tag(t: str) -> List[int]:
+                        clean = re.sub(r"[^0-9.]", "", t)
+                        parts = [int(p) for p in clean.split(".") if p.isdigit()]
+                        return parts if parts else [0]
+
+                    curr_parts = _parse_tag("1.4.0")
+                    latest_parts = _parse_tag(tag_name)
+                    has_update = latest_parts > curr_parts
+                    self.updateCheckResult.emit(has_update, tag_name, html_url)
+            except Exception as e:
+                self.updateCheckFailed.emit(str(e))
+
+        t = threading.Thread(target=_fetch, daemon=True)
+        t.start()
+
+    def _on_update_check_result(self, has_update: bool, tag_name: str, release_url: str) -> None:
+        self.btn_check_update.setEnabled(True)
+        self._latest_release_url = release_url
+        if has_update:
+            self.lbl_update_status.setText(f"发现新版本 {tag_name}，可前往 GitHub 下载")
+            self.lbl_update_status.setStyleSheet(f"color: {self.theme.sage_accent.name()}; background: transparent;")
+            self.btn_download_update.setVisible(True)
+        else:
+            self.lbl_update_status.setText(f"当前已是最新版本 ({tag_name or 'v1.4.0'})")
+            self.lbl_update_status.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
+            self.btn_download_update.setVisible(False)
+
+    def _on_update_check_failed(self, error_msg: str) -> None:
+        self.btn_check_update.setEnabled(True)
+        self.lbl_update_status.setText("检查更新失败，请确认网络连接或访问 Releases 页面")
+        self.lbl_update_status.setStyleSheet(f"color: #D32F2F; background: transparent;")
+
+    def _on_download_update_clicked(self) -> None:
+        target = self._latest_release_url or "https://github.com/gwj0323/klang/releases"
+        QDesktopServices.openUrl(QUrl(target))
 
     def _on_preset_tab_changed(self, idx: int) -> None:
         if not (0 <= idx < len(self._PRESET_NAMES)):
@@ -1515,6 +1783,54 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.cover_mode_tabs.set_theme(theme)
         self.btn_scrape_action.set_theme(theme)
 
+        # Tab 3 (关于)
+        if hasattr(self, "lbl_about_app_name"):
+            self.lbl_about_app_name.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_about_version_badge"):
+            self.lbl_about_version_badge.setStyleSheet(
+                f"color: {theme.charcoal.name()}; background: rgba({theme.sage_soft.red()}, {theme.sage_soft.green()}, {theme.sage_soft.blue()}, 0.22); border-radius: 4px;"
+            )
+        if hasattr(self, "lbl_about_subtitle"):
+            self.lbl_about_subtitle.setStyleSheet(f"color: {theme.slate_muted.name()}; background: transparent;")
+        if hasattr(self, "lbl_about_sec_proj"):
+            self.lbl_about_sec_proj.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_author_title"):
+            self.lbl_author_title.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_author_val"):
+            self.lbl_author_val.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_lic_title"):
+            self.lbl_lic_title.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_lic_val"):
+            self.lbl_lic_val.setStyleSheet(f"color: {theme.slate_muted.name()}; background: transparent;")
+        if hasattr(self, "lbl_repo_title"):
+            self.lbl_repo_title.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_repo_desc"):
+            self.lbl_repo_desc.setStyleSheet(f"color: {theme.slate_muted.name()}; background: transparent;")
+        if hasattr(self, "lbl_about_sec_update"):
+            self.lbl_about_sec_update.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_cur_ver"):
+            self.lbl_cur_ver.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
+        if hasattr(self, "lbl_update_status"):
+            self.lbl_update_status.setStyleSheet(f"color: {theme.slate_muted.name()}; background: transparent;")
+        if hasattr(self, "lbl_about_footer"):
+            self.lbl_about_footer.setStyleSheet(f"color: {theme.slate_muted.name()}; background: transparent;")
+        if hasattr(self, "btn_open_github"):
+            self.btn_open_github.set_theme(theme)
+        if hasattr(self, "btn_view_releases"):
+            self.btn_view_releases.set_theme(theme)
+        if hasattr(self, "btn_check_update"):
+            self.btn_check_update.set_theme(theme)
+        if hasattr(self, "btn_download_update"):
+            self.btn_download_update.set_theme(theme)
+        if hasattr(self, "div_about_1"):
+            self.div_about_1.setStyleSheet(
+                f"background-color: rgba({theme.divider.red()}, {theme.divider.green()}, {theme.divider.blue()}, {theme.divider.alphaF():.3f}); border: none;"
+            )
+        if hasattr(self, "div_about_2"):
+            self.div_about_2.setStyleSheet(
+                f"background-color: rgba({theme.divider.red()}, {theme.divider.green()}, {theme.divider.blue()}, {theme.divider.alphaF():.3f}); border: none;"
+            )
+
         # Scrollbars
         if hasattr(self, "scroll_audio"):
             self._apply_scroll_style(self.scroll_audio)
@@ -1522,6 +1838,8 @@ class AudioSettingsDialog(WinUIModalDialog):
             self._apply_scroll_style(self.scroll_playback)
         if hasattr(self, "scroll_ui"):
             self._apply_scroll_style(self.scroll_ui)
+        if hasattr(self, "scroll_about"):
+            self._apply_scroll_style(self.scroll_about)
 
         if hasattr(self, "_device_flyout") and self._device_flyout:
             self._device_flyout.set_theme(theme)
@@ -1560,6 +1878,12 @@ class AudioSettingsDialog(WinUIModalDialog):
             getattr(self, "btn_output_device", None),
             getattr(self, "btn_vocal_reset", None),
             getattr(self, "btn_scrape_action", None),
+            getattr(self, "btn_ne_account_action", None),
+            getattr(self, "btn_clear_cache", None),
+            getattr(self, "btn_open_github", None),
+            getattr(self, "btn_view_releases", None),
+            getattr(self, "btn_check_update", None),
+            getattr(self, "btn_download_update", None),
         ):
             if btn and hasattr(btn, "set_backdrop_material"):
                 btn.set_backdrop_material(material)
@@ -1577,6 +1901,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             getattr(self, "scroll_audio", None),
             getattr(self, "scroll_playback", None),
             getattr(self, "scroll_ui", None),
+            getattr(self, "scroll_about", None),
         ):
             if scroll:
                 self._apply_scroll_style(scroll)
