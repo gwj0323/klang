@@ -1694,7 +1694,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.setWindowTitle("Klang — 极光沉浸视界")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setStyleSheet("background: #080B10; border: none;")
         self.setMouseTracking(True)
 
         self.setFont(get_nordic_font(14, QFont.Weight.Normal))
@@ -2065,6 +2065,7 @@ class ImmersiveFullscreenWindow(QWidget):
         if hasattr(self, "fluid_shader"):
             self.fluid_shader.setGeometry(self.rect())
             self.fluid_shader.lower()
+            self.fluid_shader.show()
             self.fluid_shader.start_animation()
         if not self._render_timer.isActive():
             self._render_timer.start()
@@ -2098,7 +2099,7 @@ class ImmersiveFullscreenWindow(QWidget):
             self._col4_target = c4
             self._col_base_target = c_base
             if hasattr(self, "fluid_shader"):
-                self.fluid_shader.set_palette(c1, c2, c3, c4)
+                self.fluid_shader.set_palette(c1, c2, c3, c4, c_base)
         else:
             self.lyrics_view.set_lyrics([], offset=0.0)
 
@@ -2328,17 +2329,19 @@ class ImmersiveFullscreenWindow(QWidget):
         if w < 10 or h < 10:
             return
 
+        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.isVisible()
+        if has_gpu:
+            return
+
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         # 1. 绘制预缓存极光+暗角纹理 (仅当 GPU Fluid 着色器未激活时作为纯 CPU 降级保底)
-        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.isVisible()
-        if not has_gpu:
-            if self._aurora_pixmap is None:
-                self._render_aurora_buffer(240, 135)
-            if self._aurora_pixmap is not None:
-                p.drawPixmap(self.rect(), self._aurora_pixmap)
+        if self._aurora_pixmap is None:
+            self._render_aurora_buffer(240, 135)
+        if self._aurora_pixmap is not None:
+            p.drawPixmap(self.rect(), self._aurora_pixmap)
 
         # 1.5 绘制封面背后无界 Ambilight 动态氛围溢彩 (全屏画布渲染，彻底消除子控件边界裁切生硬分割线)
         if hasattr(self, "artwork_view"):

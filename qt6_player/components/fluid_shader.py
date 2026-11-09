@@ -39,6 +39,7 @@ out vec4 fragColor;
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_energy;
+uniform vec3 u_color_base;
 uniform vec3 u_color1;
 uniform vec3 u_color2;
 uniform vec3 u_color3;
@@ -75,31 +76,38 @@ void main() {
     vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
 
     float t = u_time * 0.16;
-    float energy_boost = u_energy * 0.45;
+    float energy_boost = u_energy * 0.35;
 
     // Apple Music style Domain Warping: liquid coordinate deformation
     vec2 q = vec2(fbm(p + vec2(0.0, 0.0) + t * 0.18),
                   fbm(p + vec2(5.2, 1.3) + t * 0.22));
 
-    vec2 r = vec2(fbm(p + 3.2 * q + vec2(1.7, 9.2) + t * 0.14 + energy_boost * 0.25),
+    vec2 r = vec2(fbm(p + 3.2 * q + vec2(1.7, 9.2) + t * 0.14 + energy_boost * 0.20),
                   fbm(p + 3.2 * q + vec2(8.3, 2.8) + t * 0.18));
 
-    float f = fbm(p + 3.4 * r + energy_boost * 0.3);
+    float f = fbm(p + 3.4 * r + energy_boost * 0.25);
 
-    // Multi-core organic color blending
-    vec3 col = mix(u_color1, u_color2, clamp(f * f * 3.4, 0.0, 1.0));
-    col = mix(col, u_color3, clamp(length(q) * 1.25, 0.0, 1.0));
-    col = mix(col, u_color4, clamp(length(r.x) * 1.35, 0.0, 1.0));
+    // Liquid organic color blending
+    vec3 fluid = mix(u_color1, u_color2, clamp(f * f * 2.8, 0.0, 1.0));
+    fluid = mix(fluid, u_color3, clamp(length(q) * 1.15, 0.0, 1.0));
+    fluid = mix(fluid, u_color4, clamp(length(r.x) * 1.25, 0.0, 1.0));
 
-    // Audio-reactive dynamic luminance pulse on bass kick
-    col += u_color1 * (u_energy * 0.24);
+    // Perceptual tone mapping: prevents hyper-bright / pure white covers from blowing out
+    fluid = fluid / (vec3(1.0) + fluid * 0.60);
 
-    // Smooth midnight vignette
-    float vig = 1.0 - smoothstep(0.45, 1.45, length(p * 1.08));
-    col *= (0.32 + 0.68 * vig);
+    // Deep midnight anchor: ribbon fluids flowing smoothly over velvet midnight base
+    float fluid_mask = clamp(0.32 + 0.45 * f + energy_boost * 0.18, 0.0, 1.0);
+    vec3 col = mix(u_color_base, fluid * 0.55 + u_color_base * 0.45, fluid_mask);
+
+    // Audio-reactive dynamic vitality swell (no additive white blowout)
+    col *= (1.0 + u_energy * 0.16);
+
+    // Apple Music style midnight vignette (smooth center roll-off, deep edges)
+    float vig = 1.0 - smoothstep(0.35, 1.40, length(p * 1.15));
+    col = mix(u_color_base * 0.55, col, clamp(0.35 + 0.65 * vig, 0.0, 1.0));
 
     // Velvet micro-dither grain to eradicate 8-bit banding on dark gradients
-    float grain = (fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.016;
+    float grain = (fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.012;
     col += grain;
 
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -127,21 +135,24 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         self._target_energy: float = 0.0
 
         # Current interpolated colors (RGB 0.0 ~ 1.0)
-        self._c1_cur = [0.18, 0.22, 0.28]
-        self._c2_cur = [0.10, 0.14, 0.18]
-        self._c3_cur = [0.08, 0.12, 0.15]
-        self._c4_cur = [0.05, 0.07, 0.10]
+        self._c_base_cur = [0.03, 0.04, 0.06]
+        self._c1_cur = [0.12, 0.16, 0.20]
+        self._c2_cur = [0.08, 0.11, 0.14]
+        self._c3_cur = [0.06, 0.09, 0.12]
+        self._c4_cur = [0.04, 0.06, 0.08]
 
         # Target colors from cover palette
-        self._c1_target = [0.18, 0.22, 0.28]
-        self._c2_target = [0.10, 0.14, 0.18]
-        self._c3_target = [0.08, 0.12, 0.15]
-        self._c4_target = [0.05, 0.07, 0.10]
+        self._c_base_target = [0.03, 0.04, 0.06]
+        self._c1_target = [0.12, 0.16, 0.20]
+        self._c2_target = [0.08, 0.11, 0.14]
+        self._c3_target = [0.06, 0.09, 0.12]
+        self._c4_target = [0.04, 0.06, 0.08]
 
         # Uniform locations
         self._loc_res = -1
         self._loc_time = -1
         self._loc_energy = -1
+        self._loc_c_base = -1
         self._loc_c1 = -1
         self._loc_c2 = -1
         self._loc_c3 = -1
@@ -151,6 +162,7 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         self._anim_timer.setInterval(16)  # ~60 FPS
         self._anim_timer.timeout.connect(self._on_tick)
         self._initialized = False
+        self._first_palette = True
 
     def start_animation(self):
         if not self._anim_timer.isActive():
@@ -169,8 +181,8 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         """Set dynamic audio energy from acoustic DNA or spectrum (0.0 ~ 1.0)."""
         self._target_energy = max(0.0, min(1.0, float(energy)))
 
-    def set_palette(self, col1: QColor, col2: QColor, col3: QColor, col4: QColor):
-        """Set target 4-color palette extracted from album cover."""
+    def set_palette(self, col1: QColor, col2: QColor, col3: QColor, col4: QColor, col_base: Optional[QColor] = None):
+        """Set target 5-color palette extracted from album cover."""
         def to_rgb_vec(c: QColor):
             return [c.redF(), c.greenF(), c.blueF()]
 
@@ -178,6 +190,16 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         self._c2_target = to_rgb_vec(col2)
         self._c3_target = to_rgb_vec(col3)
         self._c4_target = to_rgb_vec(col4)
+        if col_base is not None:
+            self._c_base_target = to_rgb_vec(col_base)
+
+        if self._first_palette:
+            self._first_palette = False
+            self._c_base_cur = list(self._c_base_target)
+            self._c1_cur = list(self._c1_target)
+            self._c2_cur = list(self._c2_target)
+            self._c3_cur = list(self._c3_target)
+            self._c4_cur = list(self._c4_target)
 
     def _lerp_vec(self, v_cur, v_target, rate=0.08):
         return [
@@ -192,6 +214,7 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         self._target_energy *= 0.94
 
         # Smooth palette transition (prevents abrupt color jumps on song switch)
+        self._c_base_cur = self._lerp_vec(self._c_base_cur, self._c_base_target)
         self._c1_cur = self._lerp_vec(self._c1_cur, self._c1_target)
         self._c2_cur = self._lerp_vec(self._c2_cur, self._c2_target)
         self._c3_cur = self._lerp_vec(self._c3_cur, self._c3_target)
@@ -217,6 +240,7 @@ class FluidMeshShaderWidget(QOpenGLWidget):
             self._loc_res = self._program.uniformLocation("u_resolution")
             self._loc_time = self._program.uniformLocation("u_time")
             self._loc_energy = self._program.uniformLocation("u_energy")
+            self._loc_c_base = self._program.uniformLocation("u_color_base")
             self._loc_c1 = self._program.uniformLocation("u_color1")
             self._loc_c2 = self._program.uniformLocation("u_color2")
             self._loc_c3 = self._program.uniformLocation("u_color3")
@@ -263,6 +287,7 @@ class FluidMeshShaderWidget(QOpenGLWidget):
             self._program.setUniformValue(self._loc_time, float(self._time))
             self._program.setUniformValue(self._loc_energy, float(self._energy))
 
+            self._program.setUniformValue(self._loc_c_base, self._c_base_cur[0], self._c_base_cur[1], self._c_base_cur[2])
             self._program.setUniformValue(self._loc_c1, self._c1_cur[0], self._c1_cur[1], self._c1_cur[2])
             self._program.setUniformValue(self._loc_c2, self._c2_cur[0], self._c2_cur[1], self._c2_cur[2])
             self._program.setUniformValue(self._loc_c3, self._c3_cur[0], self._c3_cur[1], self._c3_cur[2])
