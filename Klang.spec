@@ -11,7 +11,9 @@ a = Analysis(
         'scipy.signal', 'qt6_player.services.headphone_eq',
         'pyncm', 'pyncm.apis', 'pyncm.apis.login', 'pyncm.apis.track', 'pyncm.apis.playlist', 'pyncm.apis.user',
         'qrcode', 'PIL', 'Crypto',
-        'qt6_player.services.netease_service', 'qt6_player.components.netease_login_dialog'
+        'qt6_player.services.netease_service', 'qt6_player.components.netease_login_dialog',
+        'qt6_player.components.fluid_shader', 'qt6_player.services.taskbar_service',
+        'PyQt6.QtOpenGL', 'PyQt6.QtOpenGLWidgets'
     ],
     hookspath=[],
     hooksconfig={},
