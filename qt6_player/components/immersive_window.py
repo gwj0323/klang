@@ -1295,6 +1295,16 @@ class ImmersiveLyricsView(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setRenderHint(QPainter.RenderHint.VerticalSubpixelPositioning)
 
+        # 0. 绘制歌词区与背景物理分离层 (Ambient Scrim / 护眼微透深景背板)
+        # 建立独立光学景深平面：使右侧歌词阅读区域与底层动态流光彻底解耦分离，背景流动变化绝不干扰歌词识别度
+        scrim_grad = QLinearGradient(0.0, 0.0, float(w), 0.0)
+        scrim_grad.setColorAt(0.0, QColor(6, 8, 12, 0))
+        scrim_grad.setColorAt(0.12, QColor(6, 8, 12, 45))
+        scrim_grad.setColorAt(0.35, QColor(6, 8, 12, 110))
+        scrim_grad.setColorAt(0.85, QColor(6, 8, 12, 145))
+        scrim_grad.setColorAt(1.0, QColor(6, 8, 12, 165))
+        p.fillRect(self.rect(), scrim_grad)
+
         viewport_center = h * 0.48
         pad_left = 36.0
         max_text_w = max(100.0, w - pad_left - 48.0)
@@ -1357,6 +1367,9 @@ class ImmersiveLyricsView(QWidget):
                 if elided_roma:
                     p.setFont(self._roma_font)
                     roma_alpha = int(round(225 * focus_eased + 90 * (1.0 - focus_eased)))
+                    # 微阴影增强立体分离感
+                    p.setPen(QColor(0, 0, 0, int(round(120 * focus_eased + 50 * (1.0 - focus_eased)))))
+                    p.drawText(QPointF(0.0, 19.2), elided_roma)
                     p.setPen(QColor(255, 255, 255, roma_alpha))
                     p.drawText(QPointF(0.0, 18.0), elided_roma)
 
@@ -1379,6 +1392,11 @@ class ImmersiveLyricsView(QWidget):
                     dot_r = 5.0 * line_scale
                     p.drawEllipse(QPointF(dot_i * 20.0 + 10.0, main_text_h * 0.5), dot_r, dot_r)
             else:
+                # 绘制文字与背景深景分离阴影 (防止背景流光穿透文字笔画)
+                shadow_alpha = int(round(160 * focus_eased + 70 * (1.0 - focus_eased)))
+                p.setPen(QColor(0, 0, 0, shadow_alpha))
+                p.drawText(cur_main_base + QPointF(0.0, 1.8), elided_str)
+
                 is_current_line = (idx == self.active_index)
                 if is_current_line and self.syllable_mode and focus_eased > 0.05:
                     eff_time = max(0.0, self.current_time + self.lyric_offset)
@@ -1425,6 +1443,8 @@ class ImmersiveLyricsView(QWidget):
                 if elided_sub:
                     p.setFont(sub_font)
                     sub_alpha = int(round(195 * focus_eased + 90 * (1.0 - focus_eased)))
+                    p.setPen(QColor(0, 0, 0, int(round(120 * focus_eased + 50 * (1.0 - focus_eased)))))
+                    p.drawText(cur_sub_base + QPointF(0.0, 1.4), elided_sub)
                     p.setPen(QColor(255, 255, 255, sub_alpha))
                     p.drawText(cur_sub_base, elided_sub)
 

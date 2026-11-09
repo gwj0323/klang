@@ -92,19 +92,19 @@ void main() {
     fluid = mix(fluid, u_color3, clamp(length(q) * 1.15, 0.0, 1.0));
     fluid = mix(fluid, u_color4, clamp(length(r.x) * 1.25, 0.0, 1.0));
 
-    // Perceptual tone mapping: prevents hyper-bright / pure white covers from blowing out
-    fluid = fluid / (vec3(1.0) + fluid * 0.60);
+    // Gentle tone mapping: preserves vibrant chroma and luminous midtones without harsh clipping
+    fluid = fluid / (vec3(1.0) + fluid * 0.18);
 
-    // Deep midnight anchor: ribbon fluids flowing smoothly over velvet midnight base
-    float fluid_mask = clamp(0.32 + 0.45 * f + energy_boost * 0.18, 0.0, 1.0);
-    vec3 col = mix(u_color_base, fluid * 0.55 + u_color_base * 0.45, fluid_mask);
+    // Deep midnight anchor: ribbon fluids flowing with rich vibrancy over velvet midnight base
+    float fluid_mask = clamp(0.40 + 0.55 * f + energy_boost * 0.22, 0.0, 1.0);
+    vec3 col = mix(u_color_base, fluid * 0.85 + u_color_base * 0.15, fluid_mask);
 
-    // Audio-reactive dynamic vitality swell (no additive white blowout)
-    col *= (1.0 + u_energy * 0.16);
+    // Audio-reactive dynamic vitality swell (natural breathing modulation)
+    col *= (1.0 + u_energy * 0.20);
 
     // Apple Music style midnight vignette (smooth center roll-off, deep edges)
-    float vig = 1.0 - smoothstep(0.35, 1.40, length(p * 1.15));
-    col = mix(u_color_base * 0.55, col, clamp(0.35 + 0.65 * vig, 0.0, 1.0));
+    float vig = 1.0 - smoothstep(0.40, 1.45, length(p * 1.10));
+    col = mix(u_color_base * 0.65, col, clamp(0.42 + 0.58 * vig, 0.0, 1.0));
 
     // Velvet micro-dither grain to eradicate 8-bit banding on dark gradients
     float grain = (fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.012;
