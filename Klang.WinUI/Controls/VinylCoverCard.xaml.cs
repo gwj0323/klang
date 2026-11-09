@@ -30,13 +30,13 @@ public sealed partial class VinylCoverCard : UserControl
         _bars[8] = Bar8; _bars[9] = Bar9; _bars[10] = Bar10; _bars[11] = Bar11;
         _bars[12] = Bar12; _bars[13] = Bar13; _bars[14] = Bar14; _bars[15] = Bar15;
 
-        // 1. 黑胶唱片匀速物理旋转计时器 (~30fps)
+        // 1. 黑胶唱片匀速物理旋转计时器 (~30fps，基于 0.5,0.5 轴心)
         _turntableTimer.Interval = TimeSpan.FromMilliseconds(33);
         _turntableTimer.Tick += (s, e) =>
         {
             if (_isPlaying)
             {
-                VinylRotateTransform.Angle = (VinylRotateTransform.Angle + 1.2) % 360.0;
+                VinylRotateTransform.Angle = (VinylRotateTransform.Angle + 1.0) % 360.0;
             }
         };
 
@@ -56,6 +56,12 @@ public sealed partial class VinylCoverCard : UserControl
                 _currentSlideX = _targetSlideX;
                 VinylSlideTransform.X = _currentSlideX;
                 VinylDisc.Opacity = _targetSlideX > 0 ? 1.0 : 0.0;
+
+                if (_targetSlideX == 0)
+                {
+                    VinylDisc.Visibility = Visibility.Collapsed;
+                }
+
                 _slideAnimTimer.Stop();
             }
         };
@@ -84,17 +90,19 @@ public sealed partial class VinylCoverCard : UserControl
     public void SetPlaying(bool isPlaying)
     {
         _isPlaying = isPlaying;
-        _targetSlideX = isPlaying ? 46.0 : 0.0;
-        _slideAnimTimer.Start();
+        _targetSlideX = isPlaying ? 48.0 : 0.0;
 
         if (isPlaying)
         {
+            VinylDisc.Visibility = Visibility.Visible;
             _turntableTimer.Start();
         }
         else
         {
             _turntableTimer.Stop();
         }
+
+        _slideAnimTimer.Start();
     }
 
     public void UpdateTrack(TrackItem? track)

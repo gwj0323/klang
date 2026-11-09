@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    UseLayoutRounding="True"
     mc:Ignorable="d">
 
     <Grid Width="340" VerticalAlignment="Center">
@@ -16,44 +17,48 @@
                 Height="270"
                 HorizontalAlignment="Center">
 
-                <!-- [底层] 真实黑胶唱片 (Vinyl LP Disc)：未播放时绝对隐藏在封套正后方，播放时阻尼滑出 46px 并旋转 -->
+                <!-- [底层] 真实黑胶唱片 (Vinyl LP Disc)：
+                     1. RenderTransformOrigin="0.5,0.5" 确保以圆心为自转轴心，绝不产生偏心乱转！
+                     2. RotateTransform 位于 TranslateTransform 之前，确保原地匀速自转后再向右平移！
+                     3. 未播放时绝对隐藏在封套后方，播放时丝滑滑出 48px -->
                 <Border
                     x:Name="VinylDisc"
-                    Width="244"
-                    Height="244"
-                    Margin="8,0,0,0"
+                    Width="240"
+                    Height="240"
+                    Margin="10,0,0,0"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
                     Background="#16171A"
                     BorderBrush="#25272B"
                     BorderThickness="1"
-                    CornerRadius="122"
-                    Opacity="0">
+                    CornerRadius="120"
+                    Opacity="0"
+                    Visibility="Collapsed">
                     <Border.RenderTransform>
                         <TransformGroup>
+                            <RotateTransform x:Name="VinylRotateTransform" Angle="0" CenterX="120" CenterY="120" />
                             <TranslateTransform x:Name="VinylSlideTransform" X="0" />
-                            <RotateTransform x:Name="VinylRotateTransform" Angle="0" CenterX="122" CenterY="122" />
                         </TransformGroup>
                     </Border.RenderTransform>
 
-                    <!-- 黑胶唱片同心纹路与中心标签 -->
+                    <!-- 黑胶唱片同心微凹槽与中心转轴 -->
                     <Grid>
                         <!-- 外圈同心微凹槽环 -->
-                        <Border Width="216" Height="216" BorderBrush="#30333A" BorderThickness="1" CornerRadius="108" Opacity="0.35" />
-                        <Border Width="186" Height="186" BorderBrush="#30333A" BorderThickness="1" CornerRadius="93" Opacity="0.30" />
-                        <Border Width="156" Height="156" BorderBrush="#30333A" BorderThickness="1" CornerRadius="78" Opacity="0.25" />
-                        <Border Width="126" Height="126" BorderBrush="#30333A" BorderThickness="1" CornerRadius="63" Opacity="0.20" />
+                        <Border Width="212" Height="212" BorderBrush="#30333A" BorderThickness="1" CornerRadius="106" Opacity="0.35" />
+                        <Border Width="182" Height="182" BorderBrush="#30333A" BorderThickness="1" CornerRadius="91" Opacity="0.30" />
+                        <Border Width="152" Height="152" BorderBrush="#30333A" BorderThickness="1" CornerRadius="76" Opacity="0.25" />
+                        <Border Width="122" Height="122" BorderBrush="#30333A" BorderThickness="1" CornerRadius="61" Opacity="0.20" />
 
                         <!-- 黑胶中心彩胶贴纸 (Label) -->
                         <Border
-                            Width="88"
-                            Height="88"
+                            Width="84"
+                            Height="84"
                             Background="{ThemeResource AccentFillColorDefaultBrush}"
                             BorderBrush="#111113"
                             BorderThickness="2"
-                            CornerRadius="44">
+                            CornerRadius="42">
                             <Grid>
-                                <FontIcon FontSize="18" Foreground="#FAF9F6" Glyph="&#xE8D6;" />
+                                <FontIcon FontSize="16" Foreground="#FAF9F6" Glyph="&#xEC4F;" />
                                 <!-- 中心转轴孔 (Spindle Hole) -->
                                 <Border
                                     Width="12"
@@ -65,14 +70,14 @@
                     </Grid>
                 </Border>
 
-                <!-- [顶层] 唱片封套 (Jacket Card)：实体圆角与平滑切换过渡 -->
+                <!-- [顶层] 唱片封套 (Jacket Card)：实心遮蔽底色，彻底杜绝底层黑胶透光穿帮 -->
                 <Border
                     x:Name="JacketCard"
                     Width="260"
                     Height="260"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="14">
@@ -81,7 +86,7 @@
                     </Border.RenderTransform>
 
                     <Grid>
-                        <!-- 默认未加载音乐占位 (Nordic 极简典雅封套风格，告别粗糙双重唱片大图标) -->
+                        <!-- 默认未加载音乐占位 (Nordic 极简典雅封套风格) -->
                         <Grid x:Name="FallbackPanel" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
                                 <Border
@@ -105,11 +110,13 @@
                             </StackPanel>
                         </Grid>
 
-                        <!-- 高清专辑封面图 (支持平滑淡入淡出动画) -->
-                        <Image
-                            x:Name="CoverImage"
-                            Stretch="UniformToFill"
-                            Visibility="Collapsed" />
+                        <!-- 高清专辑封面图 (圆角剪裁平滑淡入) -->
+                        <Border CornerRadius="13">
+                            <Image
+                                x:Name="CoverImage"
+                                Stretch="UniformToFill"
+                                Visibility="Collapsed" />
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>

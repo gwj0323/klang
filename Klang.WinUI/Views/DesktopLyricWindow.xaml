@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="Klang_WinUI.Views.DesktopLyricWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="Klang 桌面歌词"
+    mc:Ignorable="d">
+
+    <Grid
+        x:Name="RootGrid"
+        UseLayoutRounding="True">
+
+        <Border
+            x:Name="WindowCard"
+            Margin="6"
+            Padding="18,10,18,12"
+            Background="#E61A1C20"
+            BorderBrush="#3D414A"
+            BorderThickness="1"
+            CornerRadius="16">
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- 顶部快捷微型悬浮工具栏 -->
+                <Grid Grid.Row="0" Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="4">
+                        <FontIcon
+                            FontSize="11"
+                            Foreground="#8CA196"
+                            Glyph="&#xEC4F;" />
+                        <TextBlock
+                            FontSize="10"
+                            FontWeight="SemiBold"
+                            Foreground="#8CA196"
+                            Text="KLANG DESKTOP LYRICS" />
+                    </StackPanel>
+
+                    <!-- 控制按钮簇 -->
+                    <StackPanel
+                        Grid.Column="2"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="4">
+                        <Button
+                            x:Name="PrevBtn"
+                            Width="26"
+                            Height="26"
+                            Padding="0"
+                            Click="PrevBtn_Click"
+                            CornerRadius="13"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="上一曲">
+                            <FontIcon FontSize="11" Foreground="#FAF9F6" Glyph="&#xE892;" />
+                        </Button>
+
+                        <Button
+                            x:Name="PlayPauseBtn"
+                            Width="26"
+                            Height="26"
+                            Padding="0"
+                            Click="PlayPauseBtn_Click"
+                            CornerRadius="13"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="播放 / 暂停">
+                            <FontIcon
+                                x:Name="PlayPauseIcon"
+                                FontSize="11"
+                                Foreground="#FAF9F6"
+                                Glyph="&#xE768;" />
+                        </Button>
+
+                        <Button
+                            x:Name="NextBtn"
+                            Width="26"
+                            Height="26"
+                            Padding="0"
+                            Click="NextBtn_Click"
+                            CornerRadius="13"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="下一曲">
+                            <FontIcon FontSize="11" Foreground="#FAF9F6" Glyph="&#xE893;" />
+                        </Button>
+
+                        <Button
+                            x:Name="FontDecBtn"
+                            Width="26"
+                            Height="26"
+                            Padding="0"
+                            Click="FontDecBtn_Click"
+                            CornerRadius="13"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="缩小字号">
+                            <TextBlock FontSize="10" Foreground="#FAF9F6" Text="A-" />
+                        </Button>
+
+                        <Button
+                            x:Name="FontIncBtn"
+                            Width="26"
+                            Height="26"
+                            Padding="0"
+                            Click="FontIncBtn_Click"
+                            CornerRadius="13"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="放大字号">
+                            <TextBlock FontSize="10" Foreground="#FAF9F6" Text="A+" />
+                        </Button>
+
+                        <Button
+                            x:Name="CloseBtn"
+                            Width="26"
+                            Height="26"
+                            Padding="0"
+                            Click="CloseBtn_Click"
+                            CornerRadius="13"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="关闭桌面歌词">
+                            <FontIcon FontSize="10" Foreground="#FAF9F6" Glyph="&#xE711;" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- 居中双行歌词展示区 (主歌词 + 译文) -->
+                <StackPanel
+                    Grid.Row="1"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="4">
+                    <TextBlock
+                        x:Name="PrimaryLyricText"
+                        FontSize="20"
+                        FontWeight="Bold"
+                        Foreground="#FAF9F6"
+                        Text="Klang 极简发烧音乐"
+                        TextAlignment="Center"
+                        TextWrapping="NoWrap" />
+
+                    <TextBlock
+                        x:Name="SubLyricText"
+                        FontSize="12"
+                        FontWeight="Normal"
+                        Foreground="#8CA196"
+                        Text=""
+                        TextAlignment="Center"
+                        TextWrapping="NoWrap"
+                        Visibility="Collapsed" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

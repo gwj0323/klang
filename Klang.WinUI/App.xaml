@@ -10,6 +10,9 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- 统一全局字体：告别亚像素模糊渲染，确保 DirectWrite 清晰锐利 -->
+            <FontFamily x:Key="ContentControlThemeFontFamily">Segoe UI Variable Text, Microsoft YaHei UI</FontFamily>
+
             <!-- Nordic Sage 核心声学主题配色 (1:1 严格对标 Qt6 原版，告别 Windows 默认刺眼电光蓝) -->
             <Color x:Key="SystemAccentColor">#6E8277</Color>
             <Color x:Key="SystemAccentColorLight1">#7D9287</Color>

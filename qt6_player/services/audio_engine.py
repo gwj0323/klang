@@ -1732,6 +1732,13 @@ class NordicAudioEngine(QObject):
             self._stream_device._tt_speed = 1.0
             self._stream_device._last_tail_frame.fill(0.0)
             self._stream_device._crossfade_on_next_block = False
+            # 彻底重置 QAudioSink 硬件环形缓冲区，排空上一首残留的 PCM 音频，杜绝切歌泄漏重放
+            if self._audio_sink is not None:
+                try:
+                    self._audio_sink.reset()
+                    self._push_io = self._audio_sink.start()
+                except Exception:
+                    pass
         else:
             # 自动连续切歌 (Gapless / Crossfade)：保持音频管线连续，不截断输出缓冲
             self._stream_device._env_gain = 1.0
@@ -1839,6 +1846,22 @@ class NordicAudioEngine(QObject):
             self.pause()
         else:
             self.play()
+
+    def flush_hardware_sink(self) -> None:
+        """立即重置并排空 QAudioSink 硬件环形缓冲区及内部流队列，彻底清除残留音频"""
+        self.dsp.reset_state()
+        self._stream_device._out_fifo.clear()
+        self._stream_device._env_gain = 0.0
+        self._stream_device._last_tail_frame.fill(0.0)
+        self._crossfade_tail_pcm = None
+        self._crossfade_tail_cursor = 0
+        self._crossfade_tail_total_frames = 0
+        if self._audio_sink is not None:
+            try:
+                self._audio_sink.reset()
+                self._push_io = self._audio_sink.start()
+            except Exception:
+                pass
 
     def seek(self, target_seconds: float, auto_play_on_seek: bool = True, source: str = "seek") -> None:
         clamped = max(0.0, min(self.duration, float(target_seconds)))

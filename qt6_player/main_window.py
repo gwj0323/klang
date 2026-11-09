@@ -1645,9 +1645,10 @@ class NordicWinUI3Window(AcrylicWindow):
         self._netease_load_seq += 1
         req_seq = self._netease_load_seq
 
-        # 立即暂停或渐隐当前正在播放的曲目，避免旧曲目与等待下载发生重叠
+        # 立即暂停并彻底排空硬件音频缓冲区，杜绝上一首正在播放的残留音频泄漏
         if self.audio.is_playing:
             self.audio.pause()
+        self.audio.flush_hardware_sink()
 
         self.transport_bar.set_status_message(f"正在从云端加载: {track.title}…")
         self.transport_bar.set_track_info(track)
@@ -1673,7 +1674,8 @@ class NordicWinUI3Window(AcrylicWindow):
                         track.lyrics = lyrics
                     if track in self.tracks:
                         self.current_track_index = self.tracks.index(track)
-                    self.audio.load_track(track, auto_play=auto_play, is_auto_transition=is_auto_transition)
+                    # 异步下载完成后立即清空缓冲区并开始播放新曲，杜绝上一首音频重叠
+                    self.audio.load_track(track, auto_play=auto_play, is_auto_transition=False)
                     self.transport_bar.set_track_info(track)
                     self.cover_card.update_track(track)
                     self.lyrics_stage.load_lyrics(track.lyrics, lyric_offset=track.lyric_offset)

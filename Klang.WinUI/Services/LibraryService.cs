@@ -113,6 +113,25 @@ public class LibraryService
             {
                 coverPath = SaveCoverToCache(tag.Pictures[0], filePath);
             }
+
+            // 若无内嵌封面，检测同目录下常见封面图文件 (cover.jpg, folder.jpg 等)
+            if (string.IsNullOrEmpty(coverPath))
+            {
+                var dir = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                {
+                    string[] candidates = { "cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png" };
+                    foreach (var c in candidates)
+                    {
+                        var p = Path.Combine(dir, c);
+                        if (File.Exists(p))
+                        {
+                            coverPath = p;
+                            break;
+                        }
+                    }
+                }
+            }
         }
         catch
         {

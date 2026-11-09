@@ -245,9 +245,7 @@
                         IsThumbToolTipEnabled="False"
                         Maximum="100"
                         Minimum="0"
-                        PointerCaptureLost="TimelineSlider_PointerCaptureLost"
-                        PointerPressed="TimelineSlider_PointerPressed"
-                        PointerReleased="TimelineSlider_PointerReleased"
+                        ValueChanged="TimelineSlider_ValueChanged"
                         Value="0" />
 
                     <TextBlock

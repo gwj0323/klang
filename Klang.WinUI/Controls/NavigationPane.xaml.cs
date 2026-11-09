@@ -6,6 +6,7 @@ using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using WinRT.Interop;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
@@ -20,10 +21,6 @@ public sealed partial class NavigationPane : UserControl
     private string _currentSort = "default";
     private int _currentTabIndex = 0;
 
-    private readonly DispatcherTimer _pillAnimTimer = new();
-    private double _targetPillX = 0;
-    private double _currentPillX = 0;
-
     public event EventHandler<TrackItem>? TrackSelected;
 
     public NavigationPane()
@@ -31,32 +28,13 @@ public sealed partial class NavigationPane : UserControl
         InitializeComponent();
         TracksListView.ItemsSource = DisplayTracks;
         UpdateEmptyState();
-
-        _pillAnimTimer.Interval = TimeSpan.FromMilliseconds(16);
-        _pillAnimTimer.Tick += (s, e) =>
-        {
-            double diff = _targetPillX - _currentPillX;
-            if (Math.Abs(diff) > 0.4)
-            {
-                _currentPillX += diff * 0.28; // 阻尼物理逼近 (OutBack / cubic ease)
-                PillTranslate.X = _currentPillX;
-            }
-            else
-            {
-                _currentPillX = _targetPillX;
-                PillTranslate.X = _currentPillX;
-                _pillAnimTimer.Stop();
-            }
-        };
     }
 
     private void SegmentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         double colW = e.NewSize.Width / 4.0;
         SlidingPill.Width = colW;
-        _targetPillX = _currentTabIndex * colW;
-        _currentPillX = _targetPillX;
-        PillTranslate.X = _currentPillX;
+        PillTranslate.X = _currentTabIndex * colW;
     }
 
     public void LoadTracks(IEnumerable<TrackItem> tracks)
@@ -122,12 +100,29 @@ public sealed partial class NavigationPane : UserControl
             };
 
             double colW = SegmentGrid.ActualWidth / 4.0;
-            _targetPillX = _currentTabIndex * colW;
-            _pillAnimTimer.Start();
+            double targetX = _currentTabIndex * colW;
 
+            // 彻底告别计时器卡顿：采用 DirectComposition 硬件合成加速 Storyboard (满帧 120/144Hz 弹簧回弹)
+            AnimatePillTo(targetX);
             UpdateTabLabels(_currentTabIndex);
             ApplyFilterAndSort(_currentSort);
         }
+    }
+
+    private void AnimatePillTo(double targetX)
+    {
+        var anim = new DoubleAnimation
+        {
+            To = targetX,
+            Duration = TimeSpan.FromMilliseconds(240),
+            EasingFunction = new BackEase { Amplitude = 0.18, EasingMode = EasingMode.EaseOut }
+        };
+        Storyboard.SetTarget(anim, PillTranslate);
+        Storyboard.SetTargetProperty(anim, "X");
+
+        var sb = new Storyboard();
+        sb.Children.Add(anim);
+        sb.Begin();
     }
 
     private void UpdateTabLabels(int activeIdx)

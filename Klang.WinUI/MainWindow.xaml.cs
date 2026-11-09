@@ -9,6 +9,7 @@ using Windows.Graphics;
 using Klang_WinUI.Dialogs;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
+using Klang_WinUI.Views;
 
 namespace Klang_WinUI;
 
@@ -19,6 +20,10 @@ public sealed partial class MainWindow : Window
     private string _playMode = "loop_list"; // "loop_list" | "loop_single" | "random"
     private readonly Random _rand = new();
     private double _playbackRate = 1.0;
+
+    private DesktopLyricWindow? _desktopLyricWindow;
+    private MiniPlayerWindow? _miniPlayerWindow;
+    private bool _isDesktopLyricVisible = false;
 
     public MainWindow()
     {
@@ -46,6 +51,16 @@ public sealed partial class MainWindow : Window
             if (activeIdx >= 0 && activeIdx < StageLyricsControl.Lyrics.Count)
             {
                 BottomTransportBar.UpdateLyricSnippet(StageLyricsControl.Lyrics[activeIdx].Text);
+            }
+
+            // 同步桌面歌词与迷你播放器
+            if (_desktopLyricWindow != null && _isDesktopLyricVisible)
+            {
+                _desktopLyricWindow.UpdatePlaybackTime(current);
+            }
+            if (_miniPlayerWindow != null && _miniPlayerWindow.AppWindow.IsVisible)
+            {
+                _miniPlayerWindow.UpdateProgress(current, total);
             }
         };
 
@@ -166,6 +181,12 @@ public sealed partial class MainWindow : Window
         StageCoverCard.UpdateTrack(null);
         StageLyricsControl.LoadLyrics(null);
         BottomTransportBar.UpdateTrackState(null, null, null);
+
+        this.Closed += (s, e) =>
+        {
+            _desktopLyricWindow?.Close();
+            _miniPlayerWindow?.Close();
+        };
     }
 
     private void PlayTrack(TrackItem track)
@@ -176,6 +197,10 @@ public sealed partial class MainWindow : Window
         StageLyricsControl.LoadLyrics(track.FilePath);
         BottomTransportBar.UpdateTrackState(track.Title, track.Artist, track.CoverPath);
         BottomTransportBar.SetFavorite(track.IsFavorite);
+
+        // 同步桌面歌词与迷你播放器
+        _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
+        _miniPlayerWindow?.UpdateTrack(track);
 
         if (!string.IsNullOrEmpty(track.FilePath))
         {
@@ -256,12 +281,69 @@ public sealed partial class MainWindow : Window
 
     private void DesktopLyricBtn_Click(object sender, RoutedEventArgs e)
     {
-        // 桌面歌词暂留后续
+        _isDesktopLyricVisible = !_isDesktopLyricVisible;
+        if (_desktopLyricWindow == null)
+        {
+            _desktopLyricWindow = new DesktopLyricWindow();
+            _desktopLyricWindow.PrevRequested += (s, ev) => PlayPrev();
+            _desktopLyricWindow.NextRequested += (s, ev) => PlayNext();
+            _desktopLyricWindow.ClosedByUser += (s, ev) =>
+            {
+                _isDesktopLyricVisible = false;
+                UpdateDesktopLyricBtnState();
+            };
+        }
+
+        if (_isDesktopLyricVisible)
+        {
+            _desktopLyricWindow.UpdateLyrics(StageLyricsControl.Lyrics);
+            _desktopLyricWindow.UpdatePlayState(AudioEngineService.Instance.IsPlaying);
+            _desktopLyricWindow.AppWindow.Show();
+        }
+        else
+        {
+            _desktopLyricWindow.AppWindow.Hide();
+        }
+
+        UpdateDesktopLyricBtnState();
+    }
+
+    private void UpdateDesktopLyricBtnState()
+    {
+        DesktopLyricBtn.Foreground = _isDesktopLyricVisible
+            ? (Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush)
+            : (Application.Current.Resources["TextFillColorPrimaryBrush"] as Brush);
     }
 
     private void MiniPlayerBtn_Click(object sender, RoutedEventArgs e)
     {
-        // 迷你窗暂留后续
+        if (_miniPlayerWindow == null)
+        {
+            _miniPlayerWindow = new MiniPlayerWindow();
+            _miniPlayerWindow.PrevRequested += (s, ev) => PlayPrev();
+            _miniPlayerWindow.NextRequested += (s, ev) => PlayNext();
+            _miniPlayerWindow.SeekRequested += (s, pos) =>
+            {
+                AudioEngineService.Instance.Seek(pos);
+                StageLyricsControl.UpdatePlaybackTime(pos);
+            };
+            _miniPlayerWindow.RestoreRequested += (s, ev) =>
+            {
+                this.AppWindow.Show();
+                this.Activate();
+            };
+            _miniPlayerWindow.ClosedByUser += (s, ev) =>
+            {
+                this.AppWindow.Show();
+                this.Activate();
+            };
+        }
+
+        _miniPlayerWindow.UpdateTrack(_currentTrack);
+        _miniPlayerWindow.UpdatePlayState(AudioEngineService.Instance.IsPlaying);
+        _miniPlayerWindow.UpdateProgress(AudioEngineService.Instance.CurrentTime, AudioEngineService.Instance.TotalDuration);
+        _miniPlayerWindow.AppWindow.Show();
+        this.AppWindow.Hide();
     }
 
     private void FullscreenBtn_Click(object sender, RoutedEventArgs e)

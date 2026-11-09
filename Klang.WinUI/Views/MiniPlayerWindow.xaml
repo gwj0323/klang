@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="Klang_WinUI.Views.MiniPlayerWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="Klang 迷你播放器"
+    mc:Ignorable="d">
+
+    <Grid
+        x:Name="RootGrid"
+        UseLayoutRounding="True">
+
+        <Border
+            x:Name="WindowCard"
+            Margin="6"
+            Padding="12,10,12,10"
+            Background="#E61A1C20"
+            BorderBrush="#3D414A"
+            BorderThickness="1"
+            CornerRadius="16">
+
+            <Grid ColumnDefinitions="Auto,*">
+                <!-- 左侧：微型黑胶/专辑封面 (点击可还原主窗口) -->
+                <Button
+                    x:Name="CoverRestoreBtn"
+                    Grid.Column="0"
+                    Width="64"
+                    Height="64"
+                    Padding="0"
+                    Margin="0,0,12,0"
+                    Click="RestoreBtn_Click"
+                    CornerRadius="10"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="点击还原完整播放器">
+                    <Grid Width="64" Height="64">
+                        <Border
+                            x:Name="MiniCoverFallback"
+                            Background="#2A2C32"
+                            BorderBrush="#3D414A"
+                            BorderThickness="1"
+                            CornerRadius="10">
+                            <FontIcon FontSize="22" Foreground="#8CA196" Glyph="&#xEC4F;" />
+                        </Border>
+                        <Border CornerRadius="10">
+                            <Image
+                                x:Name="MiniCoverImage"
+                                Stretch="UniformToFill"
+                                Visibility="Collapsed" />
+                        </Border>
+                    </Grid>
+                </Button>
+
+                <!-- 右侧：元数据 + 进度条 + 控制按钮 -->
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 顶部：歌名、歌手与操作按钮 -->
+                    <Grid Grid.Row="0" Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="1">
+                            <TextBlock
+                                x:Name="MiniTitleText"
+                                FontSize="13"
+                                FontWeight="SemiBold"
+                                Foreground="#FAF9F6"
+                                Text="未加载曲目"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                x:Name="MiniArtistText"
+                                FontSize="10.5"
+                                Foreground="#8CA196"
+                                Text="Klang"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+
+                        <!-- 右上角：还原与关闭按钮 -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                            <Button
+                                x:Name="RestoreBtn"
+                                Width="24"
+                                Height="24"
+                                Padding="0"
+                                Click="RestoreBtn_Click"
+                                CornerRadius="12"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="还原主窗口">
+                                <FontIcon FontSize="10" Foreground="#FAF9F6" Glyph="&#xE740;" />
+                            </Button>
+                            <Button
+                                x:Name="CloseBtn"
+                                Width="24"
+                                Height="24"
+                                Padding="0"
+                                Click="CloseBtn_Click"
+                                CornerRadius="12"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="关闭迷你窗">
+                                <FontIcon FontSize="10" Foreground="#FAF9F6" Glyph="&#xE711;" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 中间：精简时间进度条 -->
+                    <Grid Grid.Row="1" Margin="0,2,0,4">
+                        <Slider
+                            x:Name="MiniTimelineSlider"
+                            Height="20"
+                            Padding="0"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center"
+                            IsThumbToolTipEnabled="False"
+                            Maximum="100"
+                            Minimum="0"
+                            ValueChanged="MiniTimelineSlider_ValueChanged"
+                            Value="0" />
+                    </Grid>
+
+                    <!-- 底部：控制核心 -->
+                    <Grid Grid.Row="2">
+                        <TextBlock
+                            x:Name="MiniTimeText"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            FontFamily="Consolas, Segoe UI"
+                            FontSize="9.5"
+                            Foreground="#8CA196"
+                            Text="00:00 / 00:00" />
+
+                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="4">
+                            <Button
+                                x:Name="MiniPrevBtn"
+                                Width="26"
+                                Height="26"
+                                Padding="0"
+                                Click="MiniPrevBtn_Click"
+                                CornerRadius="13"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="上一曲">
+                                <FontIcon FontSize="11" Foreground="#FAF9F6" Glyph="&#xE892;" />
+                            </Button>
+
+                            <Button
+                                x:Name="MiniPlayPauseBtn"
+                                Width="26"
+                                Height="26"
+                                Padding="0"
+                                Click="MiniPlayPauseBtn_Click"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                CornerRadius="13"
+                                ToolTipService.ToolTip="播放 / 暂停">
+                                <FontIcon
+                                    x:Name="MiniPlayPauseIcon"
+                                    FontSize="11"
+                                    Foreground="#FAF9F6"
+                                    Glyph="&#xE768;" />
+                            </Button>
+
+                            <Button
+                                x:Name="MiniNextBtn"
+                                Width="26"
+                                Height="26"
+                                Padding="0"
+                                Click="MiniNextBtn_Click"
+                                CornerRadius="13"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="下一曲">
+                                <FontIcon FontSize="11" Foreground="#FAF9F6" Glyph="&#xE893;" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

@@ -2,9 +2,9 @@ using System;
 using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Klang_WinUI.Controls;
@@ -40,6 +40,30 @@ public sealed partial class TransportBar : UserControl
             PlayPauseScale.ScaleX = 1.0;
             PlayPauseScale.ScaleY = 1.0;
         };
+
+        // 核心修复：通过 handledEventsToo=true 挂载，彻底突破 Slider Thumb 吞噬 Pointer 事件的问题
+        TimelineSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((s, e) =>
+        {
+            _isUserDragging = true;
+        }), true);
+
+        TimelineSlider.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((s, e) =>
+        {
+            if (_isUserDragging)
+            {
+                _isUserDragging = false;
+                UserSeekRequested?.Invoke(this, TimelineSlider.Value);
+            }
+        }), true);
+
+        TimelineSlider.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler((s, e) =>
+        {
+            if (_isUserDragging)
+            {
+                _isUserDragging = false;
+                UserSeekRequested?.Invoke(this, TimelineSlider.Value);
+            }
+        }), true);
     }
 
     public bool IsPlaying
@@ -91,6 +115,7 @@ public sealed partial class TransportBar : UserControl
 
     public void UpdateProgress(double currentSec, double totalSec)
     {
+        // 用户拖拽时坚决屏蔽计时器的倒灌覆盖
         if (_isUserDragging) return;
 
         CurrentTimeText.Text = FormatTime(currentSec);
@@ -122,7 +147,6 @@ public sealed partial class TransportBar : UserControl
 
     public void SetRepeatMode(string mode)
     {
-        // "loop_list" | "loop_single"
         if (mode == "loop_single")
         {
             RepeatIcon.Glyph = "\uE8ED";
@@ -157,7 +181,6 @@ public sealed partial class TransportBar : UserControl
 
     private void PlayPauseBtn_Click(object sender, RoutedEventArgs e)
     {
-        // 弹性微按压动画
         PlayPauseScale.ScaleX = 0.88;
         PlayPauseScale.ScaleY = 0.88;
         _bounceTimer.Start();
@@ -195,7 +218,7 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
-    private void VolumeSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         float vol = (float)(VolumeSlider.Value / 100.0);
         int pct = (int)VolumeSlider.Value;
@@ -228,22 +251,11 @@ public sealed partial class TransportBar : UserControl
         UserVolumeChanged?.Invoke(this, vol);
     }
 
-    private void TimelineSlider_PointerPressed(object sender, PointerRoutedEventArgs e)
-    {
-        _isUserDragging = true;
-    }
-
-    private void TimelineSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
+    private void TimelineSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if (_isUserDragging)
         {
-            _isUserDragging = false;
-            UserSeekRequested?.Invoke(this, TimelineSlider.Value);
+            CurrentTimeText.Text = FormatTime(e.NewValue);
         }
-    }
-
-    private void TimelineSlider_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
-    {
-        _isUserDragging = false;
     }
 }
