@@ -1,6 +1,8 @@
+using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
 using Windows.UI.Text;
 
 namespace Klang_WinUI.Models;
@@ -13,6 +15,7 @@ public class LyricLine : INotifyPropertyChanged
     public string Text { get; set; } = string.Empty;
     public string Sub { get; set; } = string.Empty;
     public bool HasSub => !string.IsNullOrWhiteSpace(Sub);
+    public Visibility SubVisibility => HasSub ? Visibility.Visible : Visibility.Collapsed;
 
     private bool _isActive;
     public bool IsActive
@@ -24,48 +27,57 @@ public class LyricLine : INotifyPropertyChanged
             {
                 _isActive = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(MainFontSize));
-                OnPropertyChanged(nameof(SubFontSize));
                 OnPropertyChanged(nameof(FontWeight));
-                OnPropertyChanged(nameof(LineOpacity));
-                OnPropertyChanged(nameof(ScaleX));
-                OnPropertyChanged(nameof(ScaleY));
             }
         }
     }
 
-    private double _distanceFromActive = 99;
-    public double DistanceFromActive
+    public FontWeight FontWeight => IsActive ? FontWeights.Bold : FontWeights.Normal;
+
+    private double _scaleX = 0.96;
+    public double ScaleX
     {
-        get => _distanceFromActive;
+        get => _scaleX;
         set
         {
-            if (Math.Abs(_distanceFromActive - value) > 0.05)
+            if (Math.Abs(_scaleX - value) > 0.001)
             {
-                _distanceFromActive = value;
+                _scaleX = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(LineOpacity));
             }
         }
     }
 
-    public double MainFontSize => IsActive ? 26.0 : 18.0;
-    public double SubFontSize => IsActive ? 15.0 : 13.0;
-    public FontWeight FontWeight => IsActive ? FontWeights.Bold : FontWeights.Normal;
-    public double ScaleX => IsActive ? 1.05 : 1.0;
-    public double ScaleY => IsActive ? 1.05 : 1.0;
-
-    public double LineOpacity
+    private double _scaleY = 0.96;
+    public double ScaleY
     {
-        get
+        get => _scaleY;
+        set
         {
-            if (IsActive) return 1.0;
-            if (DistanceFromActive <= 1) return 0.55;
-            if (DistanceFromActive <= 2) return 0.32;
-            if (DistanceFromActive <= 3) return 0.18;
-            return 0.10;
+            if (Math.Abs(_scaleY - value) > 0.001)
+            {
+                _scaleY = value;
+                OnPropertyChanged();
+            }
         }
     }
+
+    private double _lineOpacity = 0.15;
+    public double LineOpacity
+    {
+        get => _lineOpacity;
+        set
+        {
+            if (Math.Abs(_lineOpacity - value) > 0.003)
+            {
+                _lineOpacity = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public double TargetScale { get; set; } = 0.96;
+    public double TargetOpacity { get; set; } = 0.15;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null)

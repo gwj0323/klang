@@ -9,17 +9,24 @@ namespace Klang_WinUI.Controls;
 
 public sealed partial class VinylCoverCard : UserControl
 {
+    private const int NUM_BARS = 20;
+
     private readonly DispatcherTimer _turntableTimer = new();
     private readonly DispatcherTimer _slideAnimTimer = new();
     private readonly DispatcherTimer _fadeAnimTimer = new();
+    private readonly DispatcherTimer _spectrumPhysicsTimer = new();
 
     private double _targetSlideX = 0.0;
     private double _currentSlideX = 0.0;
-
     private double _animProg = 1.0;
     private bool _isPlaying = false;
 
-    private readonly Border[] _bars = new Border[16];
+    private readonly Border[] _bars = new Border[NUM_BARS];
+    private readonly float[] _targets = new float[NUM_BARS];
+    private readonly float[] _values = new float[NUM_BARS];
+    private readonly float[] _peaks = new float[NUM_BARS];
+    private readonly float[] _peakVels = new float[NUM_BARS];
+    private DateTime _lastSpectrumTick = DateTime.UtcNow;
 
     public VinylCoverCard()
     {
@@ -29,8 +36,16 @@ public sealed partial class VinylCoverCard : UserControl
         _bars[4] = Bar4; _bars[5] = Bar5; _bars[6] = Bar6; _bars[7] = Bar7;
         _bars[8] = Bar8; _bars[9] = Bar9; _bars[10] = Bar10; _bars[11] = Bar11;
         _bars[12] = Bar12; _bars[13] = Bar13; _bars[14] = Bar14; _bars[15] = Bar15;
+        _bars[16] = Bar16; _bars[17] = Bar17; _bars[18] = Bar18; _bars[19] = Bar19;
 
-        // 1. 黑胶唱片匀速物理旋转计时器 (~30fps，基于 0.5,0.5 轴心)
+        // 初始化频谱初始底衬状态
+        for (int i = 0; i < NUM_BARS; i++)
+        {
+            _values[i] = 0.04f;
+            _peaks[i] = 0.04f;
+        }
+
+        // 1. 黑胶唱片匀速自转计时器 (基于 (120, 120) 圆心精确自转，绝不偏心甩动)
         _turntableTimer.Interval = TimeSpan.FromMilliseconds(33);
         _turntableTimer.Tick += (s, e) =>
         {
@@ -47,7 +62,7 @@ public sealed partial class VinylCoverCard : UserControl
             double diff = _targetSlideX - _currentSlideX;
             if (Math.Abs(diff) > 0.3)
             {
-                _currentSlideX += diff * 0.18; // 阻尼物理逼近
+                _currentSlideX += diff * 0.18;
                 VinylSlideTransform.X = _currentSlideX;
                 VinylDisc.Opacity = Math.Clamp(_currentSlideX / 28.0, 0.0, 1.0);
             }
@@ -85,6 +100,60 @@ public sealed partial class VinylCoverCard : UserControl
                 _fadeAnimTimer.Stop();
             }
         };
+
+        // 4. 20 频段北欧声学物理律动引擎 (弹簧上升 + 重力回落 + 能量自适应透明度)
+        _spectrumPhysicsTimer.Interval = TimeSpan.FromMilliseconds(25);
+        _spectrumPhysicsTimer.Tick += (s, e) => StepSpectrumPhysics();
+    }
+
+    private void StepSpectrumPhysics()
+    {
+        var now = DateTime.UtcNow;
+        double dt = Math.Clamp((now - _lastSpectrumTick).TotalSeconds, 0.005, 0.05);
+        _lastSpectrumTick = now;
+
+        double riseAlpha = 1.0 - Math.Exp(-22.0 * dt);
+        double fallAlpha = 1.0 - Math.Exp(-7.5 * dt);
+        bool hasActiveEnergy = false;
+
+        for (int i = 0; i < NUM_BARS; i++)
+        {
+            float tgt = _isPlaying ? _targets[i] : 0.04f;
+            float cur = _values[i];
+
+            if (tgt > cur)
+                cur += (float)((tgt - cur) * riseAlpha);
+            else
+                cur += (float)((tgt - cur) * fallAlpha);
+
+            cur = Math.Clamp(cur, 0.04f, 1.0f);
+            _values[i] = cur;
+
+            // 峰值保持与重力回落计算
+            if (cur >= _peaks[i])
+            {
+                _peaks[i] = cur;
+                _peakVels[i] = 0f;
+            }
+            else
+            {
+                _peakVels[i] += (float)(1.5 * dt);
+                _peaks[i] = Math.Max(cur, _peaks[i] - (float)(_peakVels[i] * dt));
+            }
+
+            if (cur > 0.06f) hasActiveEnergy = true;
+
+            // 映射到 3px ~ 26px 的优雅跳动柱高度与能量半透明度
+            const double maxH = 26.0;
+            double h = Math.Max(3.0, cur * maxH);
+            _bars[i].Height = h;
+            _bars[i].Opacity = 0.28 + 0.68 * cur;
+        }
+
+        if (!hasActiveEnergy && !_isPlaying)
+        {
+            _spectrumPhysicsTimer.Stop();
+        }
     }
 
     public void SetPlaying(bool isPlaying)
@@ -96,10 +165,13 @@ public sealed partial class VinylCoverCard : UserControl
         {
             VinylDisc.Visibility = Visibility.Visible;
             _turntableTimer.Start();
+            _lastSpectrumTick = DateTime.UtcNow;
+            _spectrumPhysicsTimer.Start();
         }
         else
         {
             _turntableTimer.Stop();
+            for (int i = 0; i < NUM_BARS; i++) _targets[i] = 0.04f;
         }
 
         _slideAnimTimer.Start();
@@ -107,7 +179,6 @@ public sealed partial class VinylCoverCard : UserControl
 
     public void UpdateTrack(TrackItem? track)
     {
-        // 触发切歌入场缩放动画
         _animProg = 0.0;
         _fadeAnimTimer.Start();
 
@@ -159,13 +230,23 @@ public sealed partial class VinylCoverCard : UserControl
 
     public void UpdateSpectrum(float[] bands)
     {
-        if (bands == null || bands.Length < 16) return;
+        if (bands == null || bands.Length == 0) return;
 
-        for (int i = 0; i < 16; i++)
+        // 将输入的 FFT 声学能量插值映射至 20 根物理律动柱
+        for (int i = 0; i < NUM_BARS; i++)
         {
-            float energy = Math.Clamp(bands[i], 0.0f, 1.0f);
-            double h = 3.0 + energy * 18.0;
-            _bars[i].Height = h;
+            double srcIdx = i * (bands.Length - 1) / (double)(NUM_BARS - 1);
+            int idx0 = (int)srcIdx;
+            int idx1 = Math.Min(bands.Length - 1, idx0 + 1);
+            double frac = srcIdx - idx0;
+            float val = (float)(bands[idx0] * (1.0 - frac) + bands[idx1] * frac);
+            _targets[i] = Math.Clamp(val, 0.0f, 1.0f);
+        }
+
+        if (!_spectrumPhysicsTimer.IsEnabled)
+        {
+            _lastSpectrumTick = DateTime.UtcNow;
+            _spectrumPhysicsTimer.Start();
         }
     }
 }
