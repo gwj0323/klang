@@ -22,66 +22,111 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- 1. 顶部五栏分类胶囊 (全部 / 喜欢 / 歌单 / 网易云) -->
+            <!-- 1. 顶部分类胶囊滑块 (WinUISegmentedControl: 带物理弹簧滑动指示器，告别生硬按钮切换) -->
             <Border
                 Grid.Row="0"
+                Height="34"
                 Padding="3"
                 Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8">
-                <Grid ColumnDefinitions="*,*,*,*">
-                    <Button
-                        x:Name="TabAllBtn"
-                        Grid.Column="0"
+                <Grid x:Name="SegmentGrid" SizeChanged="SegmentGrid_SizeChanged">
+                    <!-- 滑动的背景色块药丸 (Sliding Pill) -->
+                    <Border
+                        x:Name="SlidingPill"
                         Height="28"
-                        Padding="0"
-                        HorizontalAlignment="Stretch"
-                        Click="TabBtn_Click"
-                        CornerRadius="6"
-                        Style="{StaticResource AccentButtonStyle}"
-                        Tag="all">
-                        <TextBlock FontSize="12" Text="全部" />
-                    </Button>
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Background="{ThemeResource AccentFillColorDefaultBrush}"
+                        CornerRadius="6">
+                        <Border.RenderTransform>
+                            <TranslateTransform x:Name="PillTranslate" X="0" />
+                        </Border.RenderTransform>
+                    </Border>
 
-                    <Button
-                        x:Name="TabFavBtn"
-                        Grid.Column="1"
-                        Height="28"
-                        Padding="0"
-                        HorizontalAlignment="Stretch"
-                        Click="TabBtn_Click"
-                        CornerRadius="6"
-                        Style="{StaticResource SubtleButtonStyle}"
-                        Tag="fav">
-                        <TextBlock FontSize="12" Text="喜欢" />
-                    </Button>
+                    <!-- 四个透明交互文字选项 -->
+                    <Grid ColumnDefinitions="*,*,*,*">
+                        <Button
+                            x:Name="TabAllBtn"
+                            Grid.Column="0"
+                            Height="28"
+                            Padding="0"
+                            HorizontalAlignment="Stretch"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="TabBtn_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Tag="all">
+                            <TextBlock
+                                x:Name="TabAllText"
+                                FontSize="12"
+                                FontWeight="SemiBold"
+                                Foreground="#FAF9F6"
+                                Text="全部" />
+                        </Button>
 
-                    <Button
-                        x:Name="TabPlaylistsBtn"
-                        Grid.Column="2"
-                        Height="28"
-                        Padding="0"
-                        HorizontalAlignment="Stretch"
-                        Click="TabBtn_Click"
-                        CornerRadius="6"
-                        Style="{StaticResource SubtleButtonStyle}"
-                        Tag="playlists">
-                        <TextBlock FontSize="12" Text="歌单" />
-                    </Button>
+                        <Button
+                            x:Name="TabFavBtn"
+                            Grid.Column="1"
+                            Height="28"
+                            Padding="0"
+                            HorizontalAlignment="Stretch"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="TabBtn_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Tag="fav">
+                            <TextBlock
+                                x:Name="TabFavText"
+                                FontSize="12"
+                                FontWeight="Normal"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="喜欢" />
+                        </Button>
 
-                    <Button
-                        x:Name="TabNeteaseBtn"
-                        Grid.Column="3"
-                        Height="28"
-                        Padding="0"
-                        HorizontalAlignment="Stretch"
-                        Click="TabBtn_Click"
-                        CornerRadius="6"
-                        Style="{StaticResource SubtleButtonStyle}"
-                        Tag="netease">
-                        <TextBlock FontSize="12" Text="云端" />
-                    </Button>
+                        <Button
+                            x:Name="TabPlaylistsBtn"
+                            Grid.Column="2"
+                            Height="28"
+                            Padding="0"
+                            HorizontalAlignment="Stretch"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="TabBtn_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Tag="playlists">
+                            <TextBlock
+                                x:Name="TabPlaylistsText"
+                                FontSize="12"
+                                FontWeight="Normal"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="歌单" />
+                        </Button>
+
+                        <Button
+                            x:Name="TabNeteaseBtn"
+                            Grid.Column="3"
+                            Height="28"
+                            Padding="0"
+                            HorizontalAlignment="Stretch"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="TabBtn_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Tag="netease">
+                            <TextBlock
+                                x:Name="TabNeteaseText"
+                                FontSize="12"
+                                FontWeight="Normal"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="云端" />
+                        </Button>
+                    </Grid>
                 </Grid>
             </Border>
 
@@ -89,6 +134,8 @@
             <AutoSuggestBox
                 x:Name="SearchBox"
                 Grid.Row="1"
+                Height="32"
+                CornerRadius="6"
                 PlaceholderText="搜索歌名 / 歌手 / 专辑…"
                 QueryIcon="Find"
                 TextChanged="SearchBox_TextChanged" />
@@ -110,20 +157,21 @@
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="共 0 首" />
 
+                <!-- 添加本地文件夹按钮 -->
                 <Button
                     x:Name="AddFolderBtn"
                     Grid.Column="2"
-                    Height="26"
+                    Height="28"
                     Margin="0,0,6,0"
-                    Padding="8,0,8,0"
+                    Padding="10,0,10,0"
                     VerticalAlignment="Center"
                     Click="AddFolderBtn_Click"
-                    CornerRadius="4"
+                    CornerRadius="6"
                     Style="{StaticResource SubtleButtonStyle}"
                     ToolTipService.ToolTip="添加本地音乐文件夹">
-                    <StackPanel Orientation="Horizontal" Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
                         <FontIcon FontSize="12" Glyph="&#xED25;" />
-                        <TextBlock FontSize="11" Text="添加" />
+                        <TextBlock FontSize="11" FontWeight="Medium" Text="添加" />
                     </StackPanel>
                 </Button>
 
@@ -131,12 +179,13 @@
                 <DropDownButton
                     x:Name="SortDropDownBtn"
                     Grid.Column="3"
-                    Height="26"
-                    Padding="8,0,8,0"
+                    Height="28"
+                    Padding="10,0,10,0"
                     VerticalAlignment="Center"
                     Content="排序 ▾"
-                    CornerRadius="4"
-                    FontSize="11">
+                    CornerRadius="6"
+                    FontSize="11"
+                    FontWeight="Medium">
                     <DropDownButton.Flyout>
                         <MenuFlyout>
                             <MenuFlyoutItem Click="SortItem_Click" Tag="default" Text="默认排序" />
@@ -160,12 +209,12 @@
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="models:TrackItem">
                             <Grid
-                                Height="48"
-                                Margin="-4,2,-4,2"
-                                Padding="8,4,8,4"
-                                ColumnSpacing="8">
+                                Height="42"
+                                Padding="8,0,8,0"
+                                Background="Transparent"
+                                ColumnSpacing="10">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="20" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
@@ -174,17 +223,19 @@
                                 <!-- 序号 -->
                                 <TextBlock
                                     Grid.Column="0"
-                                    Width="20"
                                     VerticalAlignment="Center"
                                     FontSize="11"
                                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                     Text="{x:Bind Index}" />
 
-                                <!-- 标题与歌手 -->
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                <!-- 标题与艺术家 -->
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Spacing="1">
                                     <TextBlock
-                                        FontSize="13"
-                                        FontWeight="Medium"
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
                                         Text="{x:Bind Title}"
                                         TextTrimming="CharacterEllipsis" />
                                     <TextBlock
@@ -194,7 +245,7 @@
                                         TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
 
-                                <!-- 格式标签 -->
+                                <!-- 音质格式徽章 -->
                                 <Border
                                     Grid.Column="2"
                                     VerticalAlignment="Center"

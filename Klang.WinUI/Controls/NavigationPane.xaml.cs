@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using WinRT.Interop;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
@@ -17,6 +18,11 @@ public sealed partial class NavigationPane : UserControl
     private readonly List<TrackItem> _allTracks = new();
     private string _currentTab = "all";
     private string _currentSort = "default";
+    private int _currentTabIndex = 0;
+
+    private readonly DispatcherTimer _pillAnimTimer = new();
+    private double _targetPillX = 0;
+    private double _currentPillX = 0;
 
     public event EventHandler<TrackItem>? TrackSelected;
 
@@ -25,6 +31,32 @@ public sealed partial class NavigationPane : UserControl
         InitializeComponent();
         TracksListView.ItemsSource = DisplayTracks;
         UpdateEmptyState();
+
+        _pillAnimTimer.Interval = TimeSpan.FromMilliseconds(16);
+        _pillAnimTimer.Tick += (s, e) =>
+        {
+            double diff = _targetPillX - _currentPillX;
+            if (Math.Abs(diff) > 0.4)
+            {
+                _currentPillX += diff * 0.28; // 阻尼物理逼近 (OutBack / cubic ease)
+                PillTranslate.X = _currentPillX;
+            }
+            else
+            {
+                _currentPillX = _targetPillX;
+                PillTranslate.X = _currentPillX;
+                _pillAnimTimer.Stop();
+            }
+        };
+    }
+
+    private void SegmentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        double colW = e.NewSize.Width / 4.0;
+        SlidingPill.Width = colW;
+        _targetPillX = _currentTabIndex * colW;
+        _currentPillX = _targetPillX;
+        PillTranslate.X = _currentPillX;
     }
 
     public void LoadTracks(IEnumerable<TrackItem> tracks)
@@ -81,27 +113,39 @@ public sealed partial class NavigationPane : UserControl
         if (sender is Button btn && btn.Tag is string tag)
         {
             _currentTab = tag;
-            UpdateTabStyles(tag);
+            _currentTabIndex = tag switch
+            {
+                "fav" => 1,
+                "playlists" => 2,
+                "netease" => 3,
+                _ => 0
+            };
+
+            double colW = SegmentGrid.ActualWidth / 4.0;
+            _targetPillX = _currentTabIndex * colW;
+            _pillAnimTimer.Start();
+
+            UpdateTabLabels(_currentTabIndex);
             ApplyFilterAndSort(_currentSort);
         }
     }
 
-    private void UpdateTabStyles(string activeTag)
+    private void UpdateTabLabels(int activeIdx)
     {
-        try
-        {
-            var accentStyle = Application.Current.Resources["AccentButtonStyle"] as Style;
-            var subtleStyle = Application.Current.Resources["SubtleButtonStyle"] as Style;
+        var activeBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 250, 249, 246));
+        var inactiveBrush = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush;
 
-            if (accentStyle != null && subtleStyle != null)
-            {
-                TabAllBtn.Style = (activeTag == "all") ? accentStyle : subtleStyle;
-                TabFavBtn.Style = (activeTag == "fav") ? accentStyle : subtleStyle;
-                TabPlaylistsBtn.Style = (activeTag == "playlists") ? accentStyle : subtleStyle;
-                TabNeteaseBtn.Style = (activeTag == "netease") ? accentStyle : subtleStyle;
-            }
-        }
-        catch { }
+        TabAllText.Foreground = (activeIdx == 0) ? activeBrush : inactiveBrush;
+        TabAllText.FontWeight = (activeIdx == 0) ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+
+        TabFavText.Foreground = (activeIdx == 1) ? activeBrush : inactiveBrush;
+        TabFavText.FontWeight = (activeIdx == 1) ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+
+        TabPlaylistsText.Foreground = (activeIdx == 2) ? activeBrush : inactiveBrush;
+        TabPlaylistsText.FontWeight = (activeIdx == 2) ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+
+        TabNeteaseText.Foreground = (activeIdx == 3) ? activeBrush : inactiveBrush;
+        TabNeteaseText.FontWeight = (activeIdx == 3) ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
     }
 
     private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)

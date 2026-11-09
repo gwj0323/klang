@@ -40,20 +40,22 @@ public sealed partial class VinylCoverCard : UserControl
             }
         };
 
-        // 2. 黑胶唱片滑出/收回物理弹簧阻尼计时器
+        // 2. 黑胶唱片滑出/收回物理阻尼与透明度联动计时器
         _slideAnimTimer.Interval = TimeSpan.FromMilliseconds(16);
         _slideAnimTimer.Tick += (s, e) =>
         {
             double diff = _targetSlideX - _currentSlideX;
-            if (Math.Abs(diff) > 0.4)
+            if (Math.Abs(diff) > 0.3)
             {
                 _currentSlideX += diff * 0.18; // 阻尼物理逼近
                 VinylSlideTransform.X = _currentSlideX;
+                VinylDisc.Opacity = Math.Clamp(_currentSlideX / 28.0, 0.0, 1.0);
             }
             else
             {
                 _currentSlideX = _targetSlideX;
                 VinylSlideTransform.X = _currentSlideX;
+                VinylDisc.Opacity = _targetSlideX > 0 ? 1.0 : 0.0;
                 _slideAnimTimer.Stop();
             }
         };
@@ -82,7 +84,7 @@ public sealed partial class VinylCoverCard : UserControl
     public void SetPlaying(bool isPlaying)
     {
         _isPlaying = isPlaying;
-        _targetSlideX = isPlaying ? 48.0 : 0.0;
+        _targetSlideX = isPlaying ? 46.0 : 0.0;
         _slideAnimTimer.Start();
 
         if (isPlaying)
@@ -108,7 +110,7 @@ public sealed partial class VinylCoverCard : UserControl
             AlbumText.Text = "";
             QualityBadgeBorder.Visibility = Visibility.Collapsed;
             CoverImage.Visibility = Visibility.Collapsed;
-            FallbackIcon.Visibility = Visibility.Visible;
+            FallbackPanel.Visibility = Visibility.Visible;
             return;
         }
 
@@ -132,18 +134,18 @@ public sealed partial class VinylCoverCard : UserControl
             {
                 CoverImage.Source = new BitmapImage(new Uri(track.CoverPath));
                 CoverImage.Visibility = Visibility.Visible;
-                FallbackIcon.Visibility = Visibility.Collapsed;
+                FallbackPanel.Visibility = Visibility.Collapsed;
             }
             catch
             {
                 CoverImage.Visibility = Visibility.Collapsed;
-                FallbackIcon.Visibility = Visibility.Visible;
+                FallbackPanel.Visibility = Visibility.Visible;
             }
         }
         else
         {
             CoverImage.Visibility = Visibility.Collapsed;
-            FallbackIcon.Visibility = Visibility.Visible;
+            FallbackPanel.Visibility = Visibility.Visible;
         }
     }
 

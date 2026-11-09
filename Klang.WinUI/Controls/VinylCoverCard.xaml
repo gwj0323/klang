@@ -16,54 +16,56 @@
                 Height="270"
                 HorizontalAlignment="Center">
 
-                <!-- [底层] 真实黑胶唱片 (Vinyl LP Disc)：随播放滑出并匀速旋转 -->
+                <!-- [底层] 真实黑胶唱片 (Vinyl LP Disc)：未播放时绝对隐藏在封套正后方，播放时阻尼滑出 46px 并旋转 -->
                 <Border
                     x:Name="VinylDisc"
-                    Width="250"
-                    Height="250"
+                    Width="244"
+                    Height="244"
+                    Margin="8,0,0,0"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
                     Background="#16171A"
-                    BorderBrush="#2A2C30"
+                    BorderBrush="#25272B"
                     BorderThickness="1"
-                    CornerRadius="125">
+                    CornerRadius="122"
+                    Opacity="0">
                     <Border.RenderTransform>
                         <TransformGroup>
                             <TranslateTransform x:Name="VinylSlideTransform" X="0" />
-                            <RotateTransform x:Name="VinylRotateTransform" Angle="0" CenterX="125" CenterY="125" />
+                            <RotateTransform x:Name="VinylRotateTransform" Angle="0" CenterX="122" CenterY="122" />
                         </TransformGroup>
                     </Border.RenderTransform>
 
                     <!-- 黑胶唱片同心纹路与中心标签 -->
                     <Grid>
-                        <!-- 外圈纹理环 -->
-                        <Border Width="220" Height="220" BorderBrush="#35383F" BorderThickness="1" CornerRadius="110" Opacity="0.35" />
-                        <Border Width="190" Height="190" BorderBrush="#35383F" BorderThickness="1" CornerRadius="95" Opacity="0.30" />
-                        <Border Width="160" Height="160" BorderBrush="#35383F" BorderThickness="1" CornerRadius="80" Opacity="0.25" />
-                        <Border Width="130" Height="130" BorderBrush="#35383F" BorderThickness="1" CornerRadius="65" Opacity="0.20" />
+                        <!-- 外圈同心微凹槽环 -->
+                        <Border Width="216" Height="216" BorderBrush="#30333A" BorderThickness="1" CornerRadius="108" Opacity="0.35" />
+                        <Border Width="186" Height="186" BorderBrush="#30333A" BorderThickness="1" CornerRadius="93" Opacity="0.30" />
+                        <Border Width="156" Height="156" BorderBrush="#30333A" BorderThickness="1" CornerRadius="78" Opacity="0.25" />
+                        <Border Width="126" Height="126" BorderBrush="#30333A" BorderThickness="1" CornerRadius="63" Opacity="0.20" />
 
                         <!-- 黑胶中心彩胶贴纸 (Label) -->
                         <Border
-                            Width="92"
-                            Height="92"
+                            Width="88"
+                            Height="88"
                             Background="{ThemeResource AccentFillColorDefaultBrush}"
                             BorderBrush="#111113"
                             BorderThickness="2"
-                            CornerRadius="46">
+                            CornerRadius="44">
                             <Grid>
                                 <FontIcon FontSize="18" Foreground="#FAF9F6" Glyph="&#xE8D6;" />
                                 <!-- 中心转轴孔 (Spindle Hole) -->
                                 <Border
-                                    Width="14"
-                                    Height="14"
+                                    Width="12"
+                                    Height="12"
                                     Background="#111113"
-                                    CornerRadius="7" />
+                                    CornerRadius="6" />
                             </Grid>
                         </Border>
                     </Grid>
                 </Border>
 
-                <!-- [顶层] 唱片封套 (Jacket Card)：沉浸圆角与平滑切换过渡 -->
+                <!-- [顶层] 唱片封套 (Jacket Card)：实体圆角与平滑切换过渡 -->
                 <Border
                     x:Name="JacketCard"
                     Width="260"
@@ -79,12 +81,29 @@
                     </Border.RenderTransform>
 
                     <Grid>
-                        <!-- 默认未加载音乐占位图标 -->
-                        <FontIcon
-                            x:Name="FallbackIcon"
-                            FontSize="64"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Glyph="&#xE8D6;" />
+                        <!-- 默认未加载音乐占位 (Nordic 极简典雅封套风格，告别粗糙双重唱片大图标) -->
+                        <Grid x:Name="FallbackPanel" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                                <Border
+                                    Width="60"
+                                    Height="60"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="30">
+                                    <FontIcon
+                                        FontSize="24"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Glyph="&#xEC4F;" />
+                                </Border>
+                                <TextBlock
+                                    FontSize="10"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    HorizontalAlignment="Center"
+                                    Text="KLANG STUDIO" />
+                            </StackPanel>
+                        </Grid>
 
                         <!-- 高清专辑封面图 (支持平滑淡入淡出动画) -->
                         <Image
