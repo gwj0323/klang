@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter, QCoreApplication
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, QAbstractNativeEventFilter, QCoreApplication
 from PyQt6.QtWidgets import QWidget
 
 from qt6_player.data.tracks import NordicTrack
@@ -429,9 +429,12 @@ class WindowsMediaControlService(QObject):
             (HOTKEY_ID_PREV, VK_MEDIA_PREV_TRACK),
             (HOTKEY_ID_STOP, VK_MEDIA_STOP),
         ]
-        for hid, vk in hotkey_specs:
-            if user32.RegisterHotKey(self.hwnd, hid, MOD_NOREPEAT, vk):
-                self._registered_hotkeys.append(hid)
+        # 全局热键只在播放期间占用（暂停一段时间后释放），否则 Klang 开着就会一直抢走浏览器/其他播放器的媒体键
+        self._hotkey_specs = hotkey_specs
+        self._hotkey_idle_timer = QTimer(self)
+        self._hotkey_idle_timer.setSingleShot(True)
+        self._hotkey_idle_timer.setInterval(120_000)
+        self._hotkey_idle_timer.timeout.connect(self._unregister_hotkeys)
 
         class MediaNativeEventFilter(QAbstractNativeEventFilter):
             def __init__(self, service: "WindowsMediaControlService"):
@@ -458,6 +461,26 @@ class WindowsMediaControlService(QObject):
         app = QCoreApplication.instance()
         if app:
             app.installNativeEventFilter(self._event_filter)
+
+    def _register_hotkeys(self) -> None:
+        if not IS_WIN32 or self._registered_hotkeys or not getattr(self, "_hotkey_specs", None):
+            return
+        for hid, vk in self._hotkey_specs:
+            try:
+                if user32.RegisterHotKey(self.hwnd, hid, MOD_NOREPEAT, vk):
+                    self._registered_hotkeys.append(hid)
+            except Exception:
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
+
+    def _unregister_hotkeys(self) -> None:
+        if not IS_WIN32:
+            return
+        for hid in self._registered_hotkeys:
+            try:
+                user32.UnregisterHotKey(self.hwnd, hid)
+            except Exception:
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
+        self._registered_hotkeys.clear()
 
     def _handle_hotkey(self, hid: int) -> bool:
         now = time.time()
@@ -535,7 +558,14 @@ class WindowsMediaControlService(QObject):
             _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def set_playback_status(self, is_playing: bool) -> None:
-        """向 Windows SMTC 同步播放状态（3=Playing, 4=Paused）"""
+        """向 Windows SMTC 同步播放状态（3=Playing, 4=Paused），并按播放状态占用/释放全局媒体键"""
+        timer = getattr(self, "_hotkey_idle_timer", None)
+        if timer is not None:
+            if is_playing:
+                timer.stop()
+                self._register_hotkeys()
+            else:
+                timer.start()
         if not self._smtc:
             return
         try:
@@ -548,12 +578,10 @@ class WindowsMediaControlService(QObject):
         """应用退出前注销全局热键与事件监听器"""
         if not IS_WIN32:
             return
-        for hid in self._registered_hotkeys:
-            try:
-                user32.UnregisterHotKey(self.hwnd, hid)
-            except Exception:
-                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
-        self._registered_hotkeys.clear()
+        timer = getattr(self, "_hotkey_idle_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._unregister_hotkeys()
 
         if self._event_filter:
             app = QCoreApplication.instance()

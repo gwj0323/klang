@@ -43,6 +43,7 @@ from qt6_player.theme.nordic_palette import DAYLIGHT_THEME, DUSK_THEME, NordicTh
 from qt6_player.services.audio_engine import NordicAudioEngine
 from qt6_player.services.metadata_service import (
     SUPPORTED_IMPORT_EXTS,
+    _NORDIC_PALETTES,
     create_track_from_file,
     parse_cue_file,
     scan_folder_for_audio,
@@ -139,6 +140,41 @@ class FolderWatchScanWorker(QThread):
         self.scanFinished.emit(found)
 
 
+class ImportParseWorker(QThread):
+    """在后台线程解析待导入文件的标签/封面/CUE，避免批量导入时卡住界面。
+
+    只做与界面无关的解析（mutagen、文件读取），结果交回主线程合并进曲库。
+    """
+
+    parsed = pyqtSignal(dict)  # {规范化路径: NordicTrack 或 CUE 分轨列表}
+
+    def __init__(self, paths: List[str], skip_paths: set, parent=None):
+        super().__init__(parent)
+        self.paths = list(paths)
+        self.skip_paths = set(skip_paths)
+
+    def run(self) -> None:
+        out: dict = {}
+        for fp in self.paths:
+            if self.isInterruptionRequested():
+                break
+            try:
+                p = Path(fp)
+                suf = p.suffix.lower()
+                if suf not in SUPPORTED_IMPORT_EXTS:
+                    continue
+                norm = str(p.resolve())
+                if norm in self.skip_paths or norm in out:
+                    continue
+                if suf == ".cue":
+                    out[norm] = parse_cue_file(norm, base_index_hint=0)
+                else:
+                    out[norm] = create_track_from_file(norm, index_hint=0)
+            except Exception:
+                _logging.getLogger(__name__).debug("import parse failed: %s", fp, exc_info=True)
+        self.parsed.emit(out)
+
+
 class NordicWinUI3Window(AcrylicWindow):
     _async_callback_signal = pyqtSignal(object)
 
@@ -179,7 +215,13 @@ class NordicWinUI3Window(AcrylicWindow):
             DUSK_THEME if self._saved_state.get("theme") == "dusk" else DAYLIGHT_THEME
         )
         self.tracks: List[NordicTrack] = restore_tracks_from_state(self._saved_state)
-        self.local_tracks: List[NordicTrack] = list(self.tracks)
+        # 启动时播放队列就是整个本地曲库：必须是同一个列表对象，
+        # 否则 last_track_index 会被误存为 0，监控目录/导入新增的曲目也进不了当前队列
+        self.local_tracks: List[NordicTrack] = self.tracks
+        # 用户从曲库移除过、且位于监控目录中的文件：自动扫描时不再重新导入
+        self._removed_library_paths: set = {
+            str(p) for p in (self._saved_state.get("removed_library_paths") or []) if str(p).strip()
+        }
         self._netease_load_seq: int = 0
         self._scrape_queue: list = []
         init_idx = int(self._saved_state.get("last_track_index", 0))
@@ -244,6 +286,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self._watch_scan_timer.setInterval(1500)
         self._watch_scan_timer.timeout.connect(self._scan_watched_folders_async)
         self._watch_worker: Optional[FolderWatchScanWorker] = None
+        self._import_workers: List[ImportParseWorker] = []
 
         self._setup_ui()
         self._setup_system_tray(icon_path)
@@ -313,6 +356,9 @@ class NordicWinUI3Window(AcrylicWindow):
             ]
             self._tray_menu = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=None)
             self._tray_menu.actionTriggered.connect(self._on_tray_menu_action)
+            # 弹出菜单关闭后会自行释放：同步清掉引用，避免后续换主题/材质时去操作已删除的控件
+            _menu = self._tray_menu
+            _menu.destroyed.connect(lambda *_a, m=_menu: setattr(self, "_tray_menu", None) if self._tray_menu is m else None)
             pos = QCursor.pos()
             self._tray_menu.popup_animated(pos - self._tray_menu.rect().bottomLeft())
 
@@ -536,6 +582,27 @@ class NordicWinUI3Window(AcrylicWindow):
         self.update()
         self.schedule_save()
 
+    @staticmethod
+    def _clamp_to_visible_screen(x: int, y: int, w: int, h: int) -> Tuple[int, int]:
+        """把窗口左上角限制在当前某块屏幕的可用区域内（拔掉副屏后，保存的位置可能已不在任何屏幕上）"""
+        from PyQt6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            return x, y
+        probe_x, probe_y = x + min(w, 120) // 2, y + 24
+        target = None
+        for s in screens:
+            if s.availableGeometry().contains(probe_x, probe_y):
+                target = s
+                break
+        if target is not None:
+            return x, y  # 标题栏附近仍在某块屏幕上，用户抓得到
+        avail = (QGuiApplication.primaryScreen() or screens[0]).availableGeometry()
+        nx = max(avail.left(), min(x, avail.right() - min(w, avail.width())))
+        ny = max(avail.top(), min(y, avail.bottom() - min(h, avail.height())))
+        return nx, ny
+
     def _apply_restored_settings(self) -> None:
         st = self._saved_state
         vol = float(st.get("volume", 0.72))
@@ -628,7 +695,10 @@ class NordicWinUI3Window(AcrylicWindow):
         self.desktop_lyric.font_size = dt_font
         dt_pos = st.get("desktop_lyric_pos")
         if dt_pos and isinstance(dt_pos, list) and len(dt_pos) == 2:
-            self.desktop_lyric.move(int(dt_pos[0]), int(dt_pos[1]))
+            dx, dy = self._clamp_to_visible_screen(
+                int(dt_pos[0]), int(dt_pos[1]), self.desktop_lyric.width(), self.desktop_lyric.height()
+            )
+            self.desktop_lyric.move(dx, dy)
         if bool(st.get("desktop_lyric_open", False)):
             self.desktop_lyric.show()
             self.title_bar.set_desktop_lyric_active(True)
@@ -638,6 +708,7 @@ class NordicWinUI3Window(AcrylicWindow):
         if geo and isinstance(geo, list) and len(geo) == 4:
             gx, gy, gw, gh = int(geo[0]), int(geo[1]), int(geo[2]), int(geo[3])
             if gw >= self.minimumWidth() and gh >= self.minimumHeight():
+                gx, gy = self._clamp_to_visible_screen(gx, gy, gw, gh)
                 self.setGeometry(gx, gy, gw, gh)
         if bool(st.get("is_maximized", False)):
             self.showMaximized()
@@ -695,6 +766,7 @@ class NordicWinUI3Window(AcrylicWindow):
             "last_track_index": int(self.current_track_index if self.tracks is self.local_tracks else getattr(self, "_last_local_track_index", 0)),
             "custom_playlists": dict(getattr(self.nav_pane, "custom_playlists", {})),
             "watched_folders": list(getattr(self, "watched_folders", [])),
+            "removed_library_paths": sorted(getattr(self, "_removed_library_paths", set())),
             "nav_sort_mode": str(getattr(self.nav_pane, "sort_mode", "default")),
             "nav_group_mode": str(getattr(self.nav_pane, "group_mode", "artist")),
         }
@@ -704,6 +776,13 @@ class NordicWinUI3Window(AcrylicWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         if hasattr(self, "taskbar_service") and self.taskbar_service:
             self.taskbar_service.cleanup()
+        # 等待后台导入/扫描线程结束，避免 "QThread: Destroyed while thread is still running"
+        for w in list(self._import_workers) + ([self._watch_worker] if self._watch_worker is not None else []):
+            try:
+                w.requestInterruption()
+                w.wait(3000)
+            except RuntimeError:
+                _logging.getLogger(__name__).debug("worker already deleted", exc_info=True)
         self.audio.pause()
         self.audio._decoder.stop()
         if hasattr(self.audio, "_pre_decoder"):
@@ -716,6 +795,7 @@ class NordicWinUI3Window(AcrylicWindow):
         if hasattr(self, "mini_player"):
             self.mini_player.close()
         if hasattr(self, "immersive_window"):
+            self.immersive_window._closing_app = True
             self.immersive_window.close()
         if hasattr(self, "tray_icon"):
             self.tray_icon.hide()
@@ -930,18 +1010,21 @@ class NordicWinUI3Window(AcrylicWindow):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _open_edit_metadata_dialog(self, index: int) -> None:
-        if not (0 <= index < len(self.tracks)):
-            return
-        target = self.tracks[index]
+    def _open_edit_metadata_dialog(self, index: int, track: Optional[NordicTrack] = None) -> None:
+        if track is not None:
+            target = track
+        else:
+            if not (0 <= index < len(self.tracks)):
+                return
+            target = self.tracks[index]
         dlg = TrackMetadataDialog(target, theme=self.theme, parent=self)
 
         def _apply_meta(new_title: str, new_artist: str, new_album: str, write_to_file: bool = True) -> None:
             target.title = new_title
             target.artist = new_artist
             target.album = new_album
-            self.nav_pane.refresh_item(index)
-            if index == self.current_track_index:
+            self.nav_pane.refresh_item(self._nav_index_of(target))
+            if self.audio.current_track is target:
                 self.cover_card.update_track(target)
                 self.transport_bar.set_track_info(target)
                 self.mini_player.set_track(target)
@@ -958,6 +1041,9 @@ class NordicWinUI3Window(AcrylicWindow):
     def _on_lyric_offset_changed(self, new_offset: float) -> None:
         if 0 <= self.current_track_index < len(self.tracks):
             self.tracks[self.current_track_index].lyric_offset = new_offset
+            # 全屏歌词视图有自己的偏移副本，只在换歌时读取：这里同步，否则全屏时调整偏移不生效
+            if hasattr(self, "immersive_window"):
+                self.immersive_window.lyrics_view.lyric_offset = new_offset
             self.schedule_save()
 
     def _on_play_mode_changed(self, mode: str) -> None:
@@ -983,8 +1069,10 @@ class NordicWinUI3Window(AcrylicWindow):
         self.schedule_save()
 
     def _on_nav_favorite_changed(self, idx: int) -> None:
-        if idx == self.current_track_index and 0 <= idx < len(self.tracks):
-            self.transport_bar.set_track_info(self.tracks[idx])
+        # idx 是导航栏列表里的序号，不是播放队列序号
+        source = self.nav_pane.netease_tracks if self.nav_pane.view_mode == 4 else self.nav_pane.local_tracks
+        if 0 <= idx < len(source) and source[idx] is self.audio.current_track:
+            self.transport_bar.set_track_info(source[idx])
         self.schedule_save()
 
     def _on_transport_favorite_toggled(self) -> None:
@@ -993,27 +1081,65 @@ class NordicWinUI3Window(AcrylicWindow):
         cur = self.tracks[self.current_track_index]
         cur.is_favorite = not cur.is_favorite
         self.transport_bar.set_track_info(cur)
-        self.nav_pane.refresh_item(self.current_track_index)
+        self.nav_pane.refresh_item(self._nav_index_of(cur))
         self.lyrics_stage._show_toast("已添加到「我喜欢」" if cur.is_favorite else "已取消喜欢")
         self.schedule_save()
 
+    @staticmethod
+    def _index_by_identity(lst: list, obj) -> int:
+        for i, item in enumerate(lst):
+            if item is obj:
+                return i
+        return -1
+
+    @classmethod
+    def _index_pop(cls, lst: list, obj) -> int:
+        """按对象身份从列表（原地）移除，返回原来的位置，找不到返回 -1"""
+        i = cls._index_by_identity(lst, obj)
+        if i >= 0:
+            lst.pop(i)
+        return i
+
+    def _nav_index_of(self, track: Optional[NordicTrack]) -> int:
+        """导航栏当前显示列表中该曲目的序号（导航栏序号与播放队列序号是两套）"""
+        if track is None:
+            return -1
+        source = self.nav_pane.netease_tracks if self.nav_pane.view_mode == 4 else self.nav_pane.local_tracks
+        return self._index_by_identity(source, track)
+
+    def _rebuild_nav_list(self, active_index: Optional[int] = None) -> None:
+        """用导航栏自己的数据源（曲库或云歌单）重建列表，而不是用播放队列覆盖它"""
+        if self.nav_pane.view_mode == 4:
+            source = self.nav_pane.netease_tracks
+        else:
+            source = self.local_tracks
+        if active_index is None:
+            active_index = self._index_by_identity(source, self.audio.current_track)
+        self.nav_pane.rebuild_list(source, active_index=active_index)
+
     def _on_track_context_action(self, index: int, action: str) -> None:
-        source_list = self.local_tracks if (self.nav_pane.view_mode != 4) else self.tracks
+        source_list = self.local_tracks if (self.nav_pane.view_mode != 4) else self.nav_pane.netease_tracks
         if not (0 <= index < len(source_list)):
             return
         target = source_list[index]
         if action == "play":
             if self.nav_pane.view_mode != 4:
                 self.tracks = self.local_tracks
-            self.select_track(index, auto_play=True)
+                self.select_track(index, auto_play=True)
+            else:
+                self.tracks = list(self.nav_pane.netease_tracks)
+                self.select_track(index, auto_play=True)
         elif action == "play_next":
-            if index == self.current_track_index:
+            cur_track_obj = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
+            if target is cur_track_obj:
                 self.lyrics_stage._show_toast("当前已在播放该曲目")
                 return
-            cur_track_obj = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
-            target = self.tracks.pop(index)
-            if cur_track_obj is not None and cur_track_obj in self.tracks:
-                cur_idx = self.tracks.index(cur_track_obj)
+            # 导航栏的序号对应曲库/云歌单，播放队列可能是另一个列表：按对象身份在队列里查找
+            q_idx = self._index_by_identity(self.tracks, target)
+            if q_idx >= 0:
+                self.tracks.pop(q_idx)
+            if cur_track_obj is not None and self._index_by_identity(self.tracks, cur_track_obj) >= 0:
+                cur_idx = self._index_by_identity(self.tracks, cur_track_obj)
                 insert_pos = cur_idx + 1
                 self.tracks.insert(insert_pos, target)
                 self.current_track_index = cur_idx
@@ -1022,7 +1148,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 self.tracks.insert(0, target)
             self._next_preloaded_index = insert_pos
             self.audio.preload_next_track(target)
-            self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+            self._rebuild_nav_list()
             self.lyrics_stage._show_toast(f"已设为下一首播放：{target.title}")
             self.schedule_save()
         elif action == "add_to_playlist":
@@ -1051,37 +1177,54 @@ class NordicWinUI3Window(AcrylicWindow):
             if self.nav_pane.remove_track_from_active_playlist(target.track_id):
                 self.lyrics_stage._show_toast(f"已从歌单移除：{target.title}")
         elif action == "scrape":
-            self._open_online_scraper_dialog(index)
+            self._open_online_scraper_dialog(index, track=target)
         elif action == "import_lrc":
-            self._on_import_lrc_file(index)
+            self._on_import_lrc_file(index, track=target)
         elif action == "edit_tags":
-            self._open_edit_metadata_dialog(index)
+            self._open_edit_metadata_dialog(index, track=target)
         elif action == "write_tags":
-            self._write_tags_in_background(self.tracks[index], show_toast=True)
+            self._write_tags_in_background(target, show_toast=True)
         elif action == "remove":
             was_playing = self.audio.is_playing
-            is_removing_current = (index == self.current_track_index)
+            removed_track = target
+            is_removing_current = self.audio.current_track is removed_track
+            from_library = self.nav_pane.view_mode != 4
 
-            removed_track = self.tracks.pop(index)
-            for plist in self.nav_pane.custom_playlists.values():
-                if removed_track.track_id in plist:
-                    plist.remove(removed_track.track_id)
+            lib_idx = -1
+            if from_library:
+                lib_idx = self._index_pop(self.local_tracks, removed_track)
+                # 记住用户的移除决定：位于监控目录里的文件不会在下次扫描时被重新导入
+                if removed_track.cue_path:
+                    # CUE 分轨共用同一个整轨文件，只能按曲目 id 记
+                    self._removed_library_paths.add(f"id:{removed_track.track_id}")
+                elif removed_track.file_path:
+                    self._removed_library_paths.add(str(Path(removed_track.file_path).resolve()))
+                for plist in self.nav_pane.custom_playlists.values():
+                    if removed_track.track_id in plist:
+                        plist.remove(removed_track.track_id)
+            else:
+                self._index_pop(self.nav_pane.netease_tracks, removed_track)
+            # 播放队列与曲库不是同一个列表时（从收藏/歌单/云歌单播放），也要把它从队列里去掉
+            if self.tracks is self.local_tracks and from_library:
+                q_idx = lib_idx  # 同一个列表，上面已经移除
+            else:
+                q_idx = self._index_pop(self.tracks, removed_track)
 
             if not self.tracks:
                 self.current_track_index = 0
-                self.nav_pane.rebuild_list(self.tracks, active_index=-1)
+                self._rebuild_nav_list(active_index=-1)
                 self._clear_now_playing_ui()
                 self.lyrics_stage._show_toast("已清空曲库列表")
             elif is_removing_current:
                 if self.current_track_index >= len(self.tracks):
                     self.current_track_index = max(0, len(self.tracks) - 1)
-                self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+                self._rebuild_nav_list()
                 self.select_track(self.current_track_index, auto_play=was_playing)
                 self.lyrics_stage._show_toast("已移除当前曲目，自动播放下一首")
             else:
-                if index < self.current_track_index:
+                if 0 <= q_idx < self.current_track_index:
                     self.current_track_index -= 1
-                self.nav_pane.rebuild_list(self.tracks, active_index=self.current_track_index)
+                self._rebuild_nav_list()
                 self.lyrics_stage._show_toast("已从列表移除")
             self.schedule_save()
 
@@ -1244,7 +1387,7 @@ class NordicWinUI3Window(AcrylicWindow):
         dlg.immersiveFpsChanged.connect(lambda fps: (self._saved_state.update({"immersive_fps": fps}), self.schedule_save()))
         dlg.vinylModeChanged.connect(self.immersive_window.artwork_view.set_vinyl_mode)
         dlg.vinylModeChanged.connect(lambda m: (self._saved_state.update({"vinyl_mode": m}), self.schedule_save()))
-        dlg.vinylModeToggled.connect(self.immersive_window.artwork_view.set_vinyl_mode)
+        # 注意：不要再连接 vinylModeToggled —— 它是布尔值，会把刚设置好的 "arm"（黑胶唱机）覆盖成 "pure"
         dlg.backdropMaterialChanged.connect(self.set_backdrop_material)
         dlg.scrapeRequested.connect(self._open_online_scraper_dialog)
         self._active_eq_dialog = dlg
@@ -1273,14 +1416,14 @@ class NordicWinUI3Window(AcrylicWindow):
             "音乐与 CUE 索引 (*.mp3 *.flac *.wav *.m4a *.ogg *.aac *.wma *.cue);;CUE 分轨文件 (*.cue);;音频文件 (*.mp3 *.flac *.wav *.m4a *.ogg *.aac *.wma);;所有文件 (*.*)",
         )
         if files:
-            self._append_audio_files(files, auto_play_first=True)
+            self._import_audio_files_async(files, auto_play_first=True)
 
     def _on_import_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择音乐文件夹")
         if folder:
             audio_files = scan_folder_for_audio(folder)
             if audio_files:
-                self._append_audio_files(audio_files, auto_play_first=True)
+                self._import_audio_files_async(audio_files, auto_play_first=True)
 
     def _open_watched_folders_dialog(self) -> None:
         dlg = WatchedFoldersDialog(self.watched_folders, theme=self.theme, parent=self)
@@ -1319,17 +1462,27 @@ class NordicWinUI3Window(AcrylicWindow):
 
     def _on_watch_scan_finished(self, file_paths: list) -> None:
         if file_paths:
-            added_cnt = self._append_audio_files(file_paths, auto_play_first=(len(self.tracks) == 0))
-            if added_cnt > 0 and hasattr(self, "lyrics_stage"):
-                self.lyrics_stage._show_toast(f"监控目录自动新增 {added_cnt} 首曲目")
+            def _toast(added_cnt: int) -> None:
+                if added_cnt > 0 and hasattr(self, "lyrics_stage"):
+                    self.lyrics_stage._show_toast(f"监控目录自动新增 {added_cnt} 首曲目")
 
-    def _on_import_lrc_file(self, target_index: Optional[int] = None) -> None:
+            self._import_audio_files_async(
+                file_paths,
+                auto_play_first=(len(self.tracks) == 0),
+                from_watch=True,
+                on_done=_toast,
+            )
+
+    def _on_import_lrc_file(self, target_index: Optional[int] = None, track: Optional[NordicTrack] = None) -> None:
         if not self.tracks:
             return
-        idx = self.current_track_index if (target_index is None or isinstance(target_index, bool)) else int(target_index)
-        if not (0 <= idx < len(self.tracks)):
-            idx = self.current_track_index
-        target_track = self.tracks[idx]
+        if track is not None:
+            target_track = track
+        else:
+            idx = self.current_track_index if (target_index is None or isinstance(target_index, bool)) else int(target_index)
+            if not (0 <= idx < len(self.tracks)):
+                idx = self.current_track_index
+            target_track = self.tracks[idx]
         lrc_file, _ = QFileDialog.getOpenFileName(
             self,
             f"为「{target_track.title}」导入本地 LRC 歌词",
@@ -1346,7 +1499,7 @@ class NordicWinUI3Window(AcrylicWindow):
                     parsed = parse_lrc_text(content)
                     if parsed:
                         target_track.lyrics = parsed
-                        if idx == self.current_track_index:
+                        if self.audio.current_track is target_track:
                             self.lyrics_stage.load_lyrics(parsed, lyric_offset=target_track.lyric_offset)
                             self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
                         self.transport_bar.set_status_message(f"已加载歌词：{p.name}")
@@ -1355,7 +1508,56 @@ class NordicWinUI3Window(AcrylicWindow):
             except Exception:
                 continue
 
-    def _append_audio_files(self, file_paths: List[str], auto_play_first: bool = True) -> int:
+    def _import_audio_files_async(
+        self,
+        file_paths: List[str],
+        auto_play_first: bool = True,
+        from_watch: bool = False,
+        on_done=None,
+    ) -> None:
+        """导入文件：先在后台线程解析标签/封面/CUE，再回到主线程合并进曲库（避免批量导入卡死界面）"""
+        paths = list(file_paths)
+        if not paths:
+            return
+        # 少量文件直接同步处理，不值得起线程
+        if len(paths) <= 3:
+            added = self._append_audio_files(paths, auto_play_first, from_watch=from_watch)
+            if on_done is not None:
+                on_done(added)
+            return
+
+        known = {t.file_path for t in self.local_tracks if t.file_path and not t.cue_path}
+        known |= {t.cue_path for t in self.local_tracks if t.cue_path}
+        if from_watch:
+            known |= {p for p in self._removed_library_paths if not p.startswith("id:")}
+
+        self.transport_bar.set_status_message(f"正在导入 {len(paths)} 个文件…")
+        worker = ImportParseWorker(paths, known, self)
+        self._import_workers.append(worker)
+
+        def _on_parsed(parsed: dict) -> None:
+            added = self._append_audio_files(paths, auto_play_first, prefetched=parsed, from_watch=from_watch)
+            self.transport_bar.set_status_message("")
+            if on_done is not None:
+                on_done(added)
+
+        def _on_finished(w=worker) -> None:
+            if w in self._import_workers:
+                self._import_workers.remove(w)
+            w.deleteLater()
+
+        worker.parsed.connect(_on_parsed)
+        worker.finished.connect(_on_finished)
+        worker.start()
+
+    def _append_audio_files(
+        self,
+        file_paths: List[str],
+        auto_play_first: bool = True,
+        prefetched: Optional[dict] = None,
+        from_watch: bool = False,
+    ) -> int:
+        prefetched = prefetched or {}
         existing_ids = {t.track_id for t in self.local_tracks}
         existing_whole_files = {
             t.file_path for t in self.local_tracks if t.file_path and not t.cue_path
@@ -1384,14 +1586,29 @@ class NordicWinUI3Window(AcrylicWindow):
             if suf not in SUPPORTED_IMPORT_EXTS:
                 continue
             norm_p = str(p.resolve())
+            if from_watch:
+                if norm_p in self._removed_library_paths:
+                    continue  # 用户已从曲库移除过这个文件
+            else:
+                self._removed_library_paths.discard(norm_p)  # 手动导入 = 明确想要，解除移除标记
 
             if suf == ".cue":
                 if norm_p in existing_cues:
                     newly_handled_tracks.extend(by_cue.get(norm_p, []))
                     continue
-                cue_tracks = parse_cue_file(norm_p, base_index_hint=len(self.local_tracks))
+                if norm_p in prefetched:
+                    cue_tracks = prefetched[norm_p]
+                    for k, ct in enumerate(cue_tracks):
+                        ct.palette = dict(_NORDIC_PALETTES[(len(self.local_tracks) + k) % len(_NORDIC_PALETTES)])
+                else:
+                    cue_tracks = parse_cue_file(norm_p, base_index_hint=len(self.local_tracks))
                 if not cue_tracks:
                     continue
+                if from_watch:
+                    cue_tracks = [ct for ct in cue_tracks if f"id:{ct.track_id}" not in self._removed_library_paths]
+                else:
+                    for ct in cue_tracks:
+                        self._removed_library_paths.discard(f"id:{ct.track_id}")
                 # 如果此前已经把整轨大文件当单曲导入过，自动替换为拆好分轨的 CUE 曲目列表
                 ref_audio_paths = {ct.file_path for ct in cue_tracks if ct.file_path}
                 for ref_ap in ref_audio_paths:
@@ -1423,7 +1640,11 @@ class NordicWinUI3Window(AcrylicWindow):
                     if hit is not None:
                         newly_handled_tracks.append(hit)
                     continue
-                new_track = create_track_from_file(norm_p, index_hint=len(self.local_tracks))
+                new_track = prefetched.get(norm_p)
+                if new_track is None:
+                    new_track = create_track_from_file(norm_p, index_hint=len(self.local_tracks))
+                else:
+                    new_track.palette = dict(_NORDIC_PALETTES[len(self.local_tracks) % len(_NORDIC_PALETTES)])
                 if new_track.track_id in existing_ids:
                     if new_track.track_id in by_id:
                         newly_handled_tracks.append(by_id[new_track.track_id])
@@ -1488,7 +1709,7 @@ class NordicWinUI3Window(AcrylicWindow):
                     lrc_files.append(str(p.resolve()))
 
         if audio_files:
-            self._append_audio_files(audio_files, auto_play_first=True)
+            self._import_audio_files_async(audio_files, auto_play_first=True)
         elif lrc_files and self.tracks:
             for enc in ("utf-8", "utf-8-sig", "gb18030", "utf-16"):
                 try:
@@ -1542,8 +1763,10 @@ class NordicWinUI3Window(AcrylicWindow):
         cover_bytes: Optional[bytes],
         album_name: str,
     ) -> None:
-        for idx, t in enumerate(self.tracks):
+        # 刮削结果按 track_id 找曲目：曲库里的曲目不一定在当前播放队列里
+        for t in list(self.local_tracks) + list(self.tracks):
             if t.track_id == track_id:
+                is_current = self.audio.current_track is t
                 if lyrics:
                     t.lyrics = lyrics
                 if cover_bytes:
@@ -1554,8 +1777,8 @@ class NordicWinUI3Window(AcrylicWindow):
                 if album_name and not t.album:
                     t.album = album_name
 
-                self.nav_pane.refresh_item(idx)
-                if idx == self.current_track_index:
+                self.nav_pane.refresh_item(self._nav_index_of(t))
+                if is_current:
                     self.cover_card.update_track(t)
                     self.transport_bar.set_track_info(t)
                     if lyrics:
@@ -1564,17 +1787,20 @@ class NordicWinUI3Window(AcrylicWindow):
                 self.schedule_save()
                 break
 
-    def _open_online_scraper_dialog(self, target_index: Optional[int] = None) -> None:
-        if not self.tracks:
+    def _open_online_scraper_dialog(self, target_index: Optional[int] = None, track: Optional[NordicTrack] = None) -> None:
+        if not self.tracks and track is None:
             return
-        idx = self.current_track_index if (target_index is None or isinstance(target_index, bool)) else int(target_index)
-        if not (0 <= idx < len(self.tracks)):
-            idx = self.current_track_index
-        target_track = self.tracks[idx]
+        if track is not None:
+            target_track = track
+        else:
+            idx = self.current_track_index if (target_index is None or isinstance(target_index, bool)) else int(target_index)
+            if not (0 <= idx < len(self.tracks)):
+                idx = self.current_track_index
+            target_track = self.tracks[idx]
         dlg = OnlineScraperDialog(target_track, theme=self.theme, parent=self)
         dlg.matchApplied.connect(
-            lambda lyrics, cover_bytes, album_name, i=idx: self._apply_scraped_to_track(
-                i, lyrics, cover_bytes, album_name
+            lambda lyrics, cover_bytes, album_name, t=target_track: self._apply_scraped_to_track(
+                t, lyrics, cover_bytes, album_name
             )
         )
         dlg.finished.connect(dlg.deleteLater)
@@ -1582,17 +1808,15 @@ class NordicWinUI3Window(AcrylicWindow):
 
     def _apply_scraped_to_track(
         self,
-        index: int,
+        target_track: NordicTrack,
         lyrics: List[LyricLine],
         cover_bytes: Optional[bytes],
         album_name: str,
     ) -> None:
-        if not (0 <= index < len(self.tracks)):
-            return
-        target_track = self.tracks[index]
+        is_current = self.audio.current_track is target_track
         if lyrics:
             target_track.lyrics = lyrics
-            if index == self.current_track_index:
+            if is_current:
                 self.lyrics_stage.load_lyrics(lyrics, lyric_offset=target_track.lyric_offset)
                 self.lyrics_stage.sync_time(self.audio.current_time, source="seek")
         if cover_bytes:
@@ -1601,10 +1825,10 @@ class NordicWinUI3Window(AcrylicWindow):
         if album_name:
             target_track.album = album_name
 
-        if index == self.current_track_index:
+        if is_current:
             self.cover_card.update_track(target_track)
             self.transport_bar.set_track_info(target_track)
-        self.nav_pane.refresh_item(index)
+        self.nav_pane.refresh_item(self._nav_index_of(target_track))
         if target_track.file_path:
             self._write_tags_in_background(target_track, show_toast=False)
             self.transport_bar.set_status_message("已更新歌词与封面并写入音频文件")
@@ -2214,7 +2438,7 @@ class NordicWinUI3Window(AcrylicWindow):
             return
 
         target_track = None
-        for t in self.tracks:
+        for t in list(self.tracks) + list(self.local_tracks):
             if t.track_id == track_id:
                 target_track = t
                 break
@@ -2224,14 +2448,7 @@ class NordicWinUI3Window(AcrylicWindow):
         from qt6_player.data.tracks import merge_lyrics_translations
         merged = merge_lyrics_translations(target_track.lyrics, tlyric)
         if merged:
-            if target_track.file_path:
-                try:
-                    p = Path(target_track.file_path)
-                    if p.parent.is_dir():
-                        (p.parent / f"{p.stem}.tr.lrc").write_text(tlyric, encoding="utf-8")
-                except Exception:
-                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
-
+            # 译文已合并进曲目歌词并随曲库状态保存，不再往用户的音乐目录里写 .tr.lrc 文件
             cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
             if cur_track and cur_track.track_id == track_id:
                 self.lyrics_stage.load_lyrics(cur_track.lyrics, lyric_offset=cur_track.lyric_offset)

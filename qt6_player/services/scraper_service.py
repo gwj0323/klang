@@ -151,8 +151,9 @@ def search_lrclib_candidates(keyword: str, limit: int = 6) -> List[ScrapeCandida
         items = resp.json()
         if isinstance(items, list):
             for item in items[:limit]:
-                synced = item.get("syncedLyrics") or item.get("plainLyrics") or ""
-                if not synced:
+                # 只接受带时间轴的歌词：纯文本歌词没有时间信息，会被按 4 秒一句编造时间，滚动完全对不上
+                synced = item.get("syncedLyrics") or ""
+                if not synced.strip():
                     continue
                 results.append(
                     ScrapeCandidate(
@@ -234,9 +235,10 @@ def save_scraped_files_alongside_audio(
                         tr_path.write_text(trans_lrc, encoding="utf-8")
                 if cover_bytes:
                     cov_path = p.parent / f"{p.stem}.jpg"
-                    if overwrite or not cov_path.exists():
+                    # 同名封面图可能是用户自己放的：绝不覆盖，改为存进缓存目录（见下方回退逻辑）
+                    if not cov_path.exists():
                         cov_path.write_bytes(cover_bytes)
-                    saved_cover_path = str(cov_path)
+                        saved_cover_path = str(cov_path)
         except Exception:
             _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 

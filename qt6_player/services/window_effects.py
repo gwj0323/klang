@@ -78,7 +78,6 @@ def suppress_native_caption_buttons(hwnd: int) -> None:
                 | win32con.WS_MINIMIZEBOX
                 | win32con.WS_MAXIMIZEBOX
                 | win32con.WS_CAPTION
-                | win32con.CS_DBLCLKS
                 | win32con.WS_THICKFRAME
             )
             win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, new_style)

@@ -11,6 +11,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     pyqtSignal,
     QEvent,
+    QTimer,
 )
 from PyQt6.QtGui import (
     QPainter,
@@ -1221,6 +1222,17 @@ class WinUIFlyoutMenu(QWidget):
     def _on_item_triggered(self, act_id: str) -> None:
         self.close()
         self.actionTriggered.emit(act_id)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        # 菜单每次都是新建的、关闭后不会再用：隐藏后释放，避免每开一次菜单就留下一棵控件树
+        # （延后到事件循环空闲时再删，确保 actionTriggered 的槽已执行完）
+        if getattr(self, "_shown_once", False):
+            QTimer.singleShot(0, self.deleteLater)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._shown_once = True
 
     def _on_search_text_changed(self, query: str) -> None:
         q = query.strip().lower()

@@ -2161,6 +2161,20 @@ class ImmersiveFullscreenWindow(QWidget):
         self.artwork_view.actual_channels = int(actual_channels)
         self.artwork_view.update()
 
+    def closeEvent(self, event) -> None:
+        # Alt+F4 / 任务栏关闭全屏窗口时，按"退出全屏"处理：停掉渲染循环并通知主窗口恢复显示。
+        # 否则全屏窗口是唯一可见窗口，Qt 会直接退出应用，主窗口的 closeEvent（含最终存盘）不会执行。
+        if self.isVisible() and not getattr(self, "_closing_app", False):
+            event.ignore()
+            self.exit_immersive()
+        else:
+            # 应用正在退出（由主窗口 closeEvent 触发）：直接停掉循环并关闭，不要再通知主窗口恢复显示
+            if hasattr(self, "fluid_shader"):
+                self.fluid_shader.stop_animation()
+            self._render_timer.stop()
+            self._idle_timer.stop()
+            event.accept()
+
     def exit_immersive(self) -> None:
         if hasattr(self, "fluid_shader"):
             self.fluid_shader.stop_animation()

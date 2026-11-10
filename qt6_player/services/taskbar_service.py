@@ -372,6 +372,12 @@ class TaskbarThumbnailService:
                 hwnd = int(msg.hwnd) if msg.hwnd else self.hwnd
                 audio = getattr(handler, "audio", handler)
                 is_playing = getattr(audio, "is_playing", False)
+                # 第二次及以后收到该消息（资源管理器重启后任务栏按钮被重建）：之前添加的缩略图按钮已丢失，需重新添加
+                self._button_created_count = getattr(self, "_button_created_count", 0) + 1
+                if self._button_created_count > 1:
+                    self._toolbar_initialized = False
+                    self._p_tbl = None
+                    self._vtable = None
                 if hwnd:
                     self.init_toolbar(hwnd, is_playing)
                 return False

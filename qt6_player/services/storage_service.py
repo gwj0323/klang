@@ -347,8 +347,17 @@ def _try_fast_restore(item: Dict[str, Any], index_hint: int, fp: str) -> Optiona
             return None
         if not item.get("audio_format") or not item.get("sample_rate"):
             return None
-        if not item.get("lyrics"):
+        saved_lyrics = item.get("lyrics")
+        if not saved_lyrics:
             return None  # 没有保存过歌词的曲目走完整解析（会生成占位歌词/读取同名 .lrc）
+        # 只有"暂无歌词"占位行的曲目：若音频旁边后来出现了同名 .lrc，走完整解析把它读进来
+        # （内嵌歌词的变化会改动音频文件的修改时间，下面的 mtime 检查已经能发现）
+        if len(saved_lyrics) <= 2 and any("暂无歌词" in str(l.get("text", "")) for l in saved_lyrics if isinstance(l, dict)):
+            try:
+                if Path(fp).with_suffix(".lrc").is_file():
+                    return None
+            except Exception:
+                return None
         path_obj = Path(fp)
         if abs(float(path_obj.stat().st_mtime) - saved_ts) > 1e-3:
             return None

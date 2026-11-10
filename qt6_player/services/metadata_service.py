@@ -869,6 +869,10 @@ def write_metadata_to_audio_file(
             bak_dir = _COVER_CACHE_DIR.parent / "tag_backups"
             bak_dir.mkdir(parents=True, exist_ok=True)
             key = hashlib.md5(str(p.resolve()).encode("utf-8", errors="ignore")).hexdigest()[:16]
+            # 第一次改写前的原始文件永远保留一份（.orig），每次改写前再保存一份最近的（上一版）
+            orig_bak = bak_dir / f"{key}.orig{p.suffix}"
+            if not orig_bak.exists():
+                shutil.copy2(p, orig_bak)
             shutil.copy2(p, bak_dir / f"{key}{p.suffix}")
     except Exception:
         _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
@@ -886,6 +890,8 @@ def write_metadata_to_audio_file(
         cov_mime = "image/png"
 
     lrc_str = format_lyrics_to_lrc(track.lyrics) if write_lyrics else ""
+    # "未知歌手"/"Unknown" 只是界面占位词，不能当成真实歌手写进文件标签
+    artist_val = track.artist if track.artist not in ("未知歌手", "Unknown") else ""
 
     try:
         if ext == ".flac":
@@ -894,8 +900,8 @@ def write_metadata_to_audio_file(
             audio = FLAC(str(p))
             if not is_cue_subtrack and track.title:
                 audio["TITLE"] = [track.title]
-            if track.artist:
-                audio["ARTIST"] = [track.artist]
+            if artist_val:
+                audio["ARTIST"] = [artist_val]
             if track.album:
                 audio["ALBUM"] = [track.album]
             if not is_cue_subtrack and lrc_str:
@@ -922,9 +928,9 @@ def write_metadata_to_audio_file(
             if not is_cue_subtrack and track.title:
                 tags.delall("TIT2")
                 tags.add(TIT2(encoding=3, text=track.title))
-            if track.artist:
+            if artist_val:
                 tags.delall("TPE1")
-                tags.add(TPE1(encoding=3, text=track.artist))
+                tags.add(TPE1(encoding=3, text=artist_val))
             if track.album:
                 tags.delall("TALB")
                 tags.add(TALB(encoding=3, text=track.album))
@@ -945,8 +951,8 @@ def write_metadata_to_audio_file(
                 audio.add_tags()
             if not is_cue_subtrack and track.title:
                 audio.tags["\xa9nam"] = [track.title]
-            if track.artist:
-                audio.tags["\xa9ART"] = [track.artist]
+            if artist_val:
+                audio.tags["\xa9ART"] = [artist_val]
             if track.album:
                 audio.tags["\xa9alb"] = [track.album]
             if not is_cue_subtrack and lrc_str:
@@ -963,8 +969,8 @@ def write_metadata_to_audio_file(
             audio = OggVorbis(str(p))
             if not is_cue_subtrack and track.title:
                 audio["TITLE"] = [track.title]
-            if track.artist:
-                audio["ARTIST"] = [track.artist]
+            if artist_val:
+                audio["ARTIST"] = [artist_val]
             if track.album:
                 audio["ALBUM"] = [track.album]
             if not is_cue_subtrack and lrc_str:
@@ -981,8 +987,8 @@ def write_metadata_to_audio_file(
                 audio.add_tags()
             if not is_cue_subtrack and track.title:
                 audio.tags.add(TIT2(encoding=3, text=track.title))
-            if track.artist:
-                audio.tags.add(TPE1(encoding=3, text=track.artist))
+            if artist_val:
+                audio.tags.add(TPE1(encoding=3, text=artist_val))
             if track.album:
                 audio.tags.add(TALB(encoding=3, text=track.album))
             if not is_cue_subtrack and lrc_str:

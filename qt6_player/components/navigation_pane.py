@@ -138,7 +138,8 @@ class TrackMetadataDialog(WinUIModalDialog):
 
     def _on_save(self) -> None:
         new_title = self.edit_title.text().strip() or self.track.title
-        new_artist = self.edit_artist.text().strip() or "未知歌手"
+        # 留空 = 保持原值；不能写成占位词"未知歌手"，否则会连同它一起写进音频文件的 ARTIST 标签
+        new_artist = self.edit_artist.text().strip() or self.track.artist
         new_album = self.edit_album.text().strip()
         self.metadataSaved.emit(new_title, new_artist, new_album, self.cb_write_file.isChecked())
         self.accept()
@@ -1455,6 +1456,9 @@ class NavigationPane(QWidget):
         ]
         self._import_flyout = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self.window())
         self._import_flyout.actionTriggered.connect(self._on_import_flyout_action)
+        # 菜单关闭后会自行释放：清掉引用，避免之后换主题时操作已删除的控件
+        _fly = self._import_flyout
+        _fly.destroyed.connect(lambda *_a, f=_fly: setattr(self, "_import_flyout", None) if self._import_flyout is f else None)
         self._import_flyout.popup_animated(global_pos)
 
     def _on_import_flyout_action(self, act: str) -> None:

@@ -863,7 +863,24 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         self.btn_ne_account_action.clicked.connect(_on_ne_account_action)
         _update_ne_account_ui()
-        netease_manager.loginStatusChanged.connect(lambda _in, _prof: _update_ne_account_ui())
+        # 连到全局单例信号上的闭包必须在对话框关闭时断开，否则之后每次登录状态变化都会去操作已删除的控件，
+        # 而且每打开一次设置就多积累一条连接
+        def _login_slot(_in, _prof):
+            try:
+                _update_ne_account_ui()
+            except RuntimeError:
+                pass
+
+        netease_manager.loginStatusChanged.connect(_login_slot)
+
+        def _disconnect_login_slot(*_args):
+            try:
+                netease_manager.loginStatusChanged.disconnect(_login_slot)
+            except (TypeError, RuntimeError):
+                pass
+
+        self.finished.connect(_disconnect_login_slot)
+        self.destroyed.connect(_disconnect_login_slot)
 
         ne_box.addLayout(ne_header)
 
@@ -1472,8 +1489,13 @@ class AudioSettingsDialog(WinUIModalDialog):
                     latest_key = _version_key(tag_name)
                     has_update = latest_key > curr_key
                     self.updateCheckResult.emit(has_update, tag_name, html_url)
+            except RuntimeError:
+                pass  # 检查期间对话框已被关闭删除
             except Exception as e:
-                self.updateCheckFailed.emit(str(e))
+                try:
+                    self.updateCheckFailed.emit(str(e))
+                except RuntimeError:
+                    pass
 
         t = threading.Thread(target=_fetch, daemon=True)
         t.start()
@@ -1627,6 +1649,8 @@ class AudioSettingsDialog(WinUIModalDialog):
 
         self._device_flyout = WinUIFlyoutMenu(items, theme=self.theme, backdrop_material=getattr(self, "backdrop_material", "mica"), parent=self)
         self._device_flyout.actionTriggered.connect(self._on_device_selected)
+        _fly = self._device_flyout
+        _fly.destroyed.connect(lambda *_a, f=_fly: setattr(self, "_device_flyout", None) if self._device_flyout is f else None)
         global_pos = self.btn_output_device.mapToGlobal(QPoint(0, self.btn_output_device.height() + 4))
         self._device_flyout.popup_animated(global_pos)
 

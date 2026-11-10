@@ -566,8 +566,8 @@ class NeteaseCloudManager(QObject):
                 if track_ids:
                     all_songs = []
                     chunk_size = 100
-                    # 分批获取完整歌曲详情，最多获取前 500 首
-                    for i in range(0, min(len(track_ids), 500), chunk_size):
+                    # 分批获取完整歌曲详情，最多获取前 1000 首
+                    for i in range(0, min(len(track_ids), 1000), chunk_size):
                         chunk = track_ids[i:i + chunk_size]
                         d_res = track.GetTrackDetail(chunk)
                         if d_res.get("code") == 200 and "songs" in d_res:
