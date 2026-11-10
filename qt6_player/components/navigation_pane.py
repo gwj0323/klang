@@ -4,7 +4,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict, Set
+from typing import Any, List, Optional, Dict, Set
 from PyQt6.QtCore import (
     Qt,
     pyqtSignal,

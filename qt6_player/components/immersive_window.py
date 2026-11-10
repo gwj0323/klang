@@ -15,6 +15,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
 )
 from PyQt6.QtGui import (
+    QShowEvent,
     QPainter,
     QPen,
     QBrush,

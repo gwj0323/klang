@@ -255,6 +255,34 @@ def _parse_filename_artist_title(stem: str) -> Tuple[str, str]:
     return artist, title
 
 
+def _decode_text_bytes(raw: bytes) -> str:
+    """探测文本编码：BOM → UTF-8 → charset-normalizer → gb18030/big5/shift_jis。
+
+    gb18030 几乎不会解码失败，必须放在最后，否则日文(Shift-JIS)与繁体(Big5)会被读成乱码。
+    """
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16", errors="replace")
+    for enc in ("utf-8-sig",):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            pass
+    # charset-normalizer 是 requests 的依赖，必定可用；文本较长时对 GBK/Big5/Shift-JIS 的区分很可靠
+    try:
+        from charset_normalizer import from_bytes
+        best = from_bytes(raw).best()
+        if best is not None:
+            return str(best)
+    except Exception:
+        pass
+    for enc in ("gb18030", "big5", "shift_jis"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin1", errors="replace")
+
+
 def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]]:
     """查找音频同目录下的同名 .lrc 歌词、伴生翻译 .tr.lrc 歌词与封面图片"""
     folder = audio_path.parent
@@ -263,14 +291,11 @@ def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]
     trans_text = ""
 
     def _read_file_safe(candidate_path: Path) -> str:
-        for enc in ("utf-8", "utf-8-sig", "gb18030", "utf-16"):
-            try:
-                txt = candidate_path.read_text(encoding=enc)
-                if txt.strip():
-                    return txt
-            except Exception:
-                continue
-        return ""
+        try:
+            txt = _decode_text_bytes(candidate_path.read_bytes())
+        except Exception:
+            return ""
+        return txt if txt.strip() else ""
 
     lrc_candidate = folder / f"{stem}.lrc"
     if lrc_candidate.is_file():
@@ -295,7 +320,7 @@ def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]
 
 
 
-def _parse_db_value(raw_val: object) -> Optional[float]:
+def _parse_db_value(raw_val: object, clamp: bool = True) -> Optional[float]:
     """从标签字符串（如 '-6.42 dB'、'+1.8 dB' 或列表）解析浮点数 dB 值"""
     if raw_val is None:
         return None
@@ -308,7 +333,7 @@ def _parse_db_value(raw_val: object) -> Optional[float]:
     if m:
         try:
             val = float(m.group(1))
-            return max(-24.0, min(18.0, val))
+            return max(-24.0, min(18.0, val)) if clamp else val
         except Exception:
             return None
     return None
@@ -381,7 +406,7 @@ def extract_audio_properties(file_path: str) -> dict:
                 if props["replay_gain_db"] is None:
                     for r128_key in ("R128_TRACK_GAIN", "r128_track_gain", "R128_ALBUM_GAIN"):
                         if r128_key in tags:
-                            raw_q78 = _parse_db_value(tags[r128_key])
+                            raw_q78 = _parse_db_value(tags[r128_key], clamp=False)
                             if raw_q78 is not None:
                                 # EBU R128 Q7.8 (-23 LUFS) 转换为 ReplayGain 2.0 (-18 LUFS) 基准 (+5 dB)
                                 props["replay_gain_db"] = max(-20.0, min(15.0, (raw_q78 / 256.0) + 5.0))
@@ -549,14 +574,11 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
 
 
 def _read_cue_text(cue_file: Path) -> str:
-    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk", "big5", "shift_jis", "utf-16", "latin1"):
-        try:
-            txt = cue_file.read_text(encoding=enc)
-            if "TRACK" in txt.upper() and "FILE" in txt.upper():
-                return txt
-        except Exception:
-            continue
-    return ""
+    try:
+        txt = _decode_text_bytes(cue_file.read_bytes())
+    except Exception:
+        return ""
+    return txt if ("TRACK" in txt.upper() and "FILE" in txt.upper()) else ""
 
 
 def _parse_cue_timecode(tc_str: str) -> float:
