@@ -1,0 +1,43 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "claude/bold-edison-8x2dvx"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Import check
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import qt6_player.main_window; print('import ok')"
+
+      - name: Build exe
+        run: pyinstaller Klang.spec --noconfirm
+
+      - name: Verify output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/Klang.exe)) { throw "dist/Klang.exe was not produced" }
+          Get-Item dist/Klang.exe | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Klang-windows-exe
+          path: dist/Klang.exe
+          if-no-files-found: error
