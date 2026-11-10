@@ -2,9 +2,6 @@ name: Build Windows exe
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "claude/bold-edison-8x2dvx"
 
 jobs:
   build:
@@ -17,17 +14,31 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Check vendored pyncm
+        shell: pwsh
+        run: |
+          if (-not (Test-Path vendor/pyncm/__init__.py)) {
+            throw "vendor/pyncm/__init__.py not found. pyncm was removed from PyPI; copy your local pyncm package folder into vendor/pyncm."
+          }
+
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          # pyncm 已从 PyPI 撤下，改用仓库内 vendor/pyncm；其余依赖照常安装
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^\s*pyncm' } | Set-Content requirements-ci.txt
+          pip install -r requirements-ci.txt pyinstaller pycryptodome pycryptodomex
 
       - name: Import check
+        shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -c "import qt6_player.main_window; print('import ok')"
+          PYTHONPATH: vendor
+        run: python -c "import pyncm, qt6_player.main_window; print('import ok', pyncm.__file__)"
 
       - name: Build exe
+        env:
+          PYTHONPATH: vendor
         run: pyinstaller Klang.spec --noconfirm
 
       - name: Verify output
