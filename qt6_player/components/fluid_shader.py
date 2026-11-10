@@ -246,7 +246,9 @@ def extract_cover_colors(pixmap: Optional[QPixmap], k: int = 6) -> Optional[np.n
         centers = [px[rng.integers(len(px))]]
         for _ in range(1, k):
             d = np.min(((px[:, None, :] - np.array(centers)[None]) ** 2).sum(-1), axis=1)
-            centers.append(px[rng.choice(len(px), p=d / max(d.sum(), 1e-6))])
+            total = float(d.sum())
+            # 纯色封面时所有点到中心的距离都是 0，不能作为概率分布
+            centers.append(px[rng.choice(len(px), p=(d / total) if total > 1e-6 else None)])
         centers = np.array(centers)
 
         for _ in range(12):

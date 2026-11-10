@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 
+from qt6_player.version import APP_VERSION
 from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, get_nordic_font
 from qt6_player.components.fluent_widgets import (
     WinUIModalDialog,
@@ -266,6 +267,17 @@ class EqualizerRackWidget(QWidget):
                 int(Qt.AlignmentFlag.AlignCenter),
                 EQ_BAND_LABELS[i],
             )
+
+
+def _version_key(tag: str) -> Tuple[Tuple[int, ...], int]:
+    """版本比较键：数字段 + 是否正式版（v1.6.1-beta2 小于 v1.6.1，且 beta 的数字不会并入版本号）"""
+    m = re.match(r"\s*[vV]?(\d+(?:\.\d+)*)(.*)$", tag or "")
+    if not m:
+        return ((0,), 0)
+    parts = tuple(int(x) for x in m.group(1).split("."))
+    is_release = 0 if re.match(r"^[-+._]?(alpha|beta|rc|pre|dev|preview|a\d|b\d)", m.group(2).strip(), re.I) else 1
+    return (parts, is_release)
+
 
 
 class AudioSettingsDialog(WinUIModalDialog):
@@ -1260,7 +1272,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.lbl_about_app_name.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         title_row.addWidget(self.lbl_about_app_name)
 
-        self.lbl_about_version_badge = QLabel("v1.6.1", self.tab_about)
+        self.lbl_about_version_badge = QLabel(f"v{APP_VERSION}", self.tab_about)
         self.lbl_about_version_badge.setFont(get_nordic_font(10, QFont.Weight.DemiBold, mono=True))
         self.lbl_about_version_badge.setFixedHeight(20)
         self.lbl_about_version_badge.setContentsMargins(6, 2, 6, 2)
@@ -1371,7 +1383,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         update_text_col = QVBoxLayout()
         update_text_col.setSpacing(2)
 
-        self.lbl_cur_ver = QLabel("当前版本: v1.6.1", self.tab_about)
+        self.lbl_cur_ver = QLabel(f"当前版本: v{APP_VERSION}", self.tab_about)
         self.lbl_cur_ver.setFont(get_nordic_font(11, QFont.Weight.Medium))
         self.lbl_cur_ver.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         update_text_col.addWidget(self.lbl_cur_ver)
@@ -1448,7 +1460,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             try:
                 req = urllib.request.Request(
                     "https://api.github.com/repos/gwj0323/klang/releases/latest",
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Klang/1.6.1"}
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Klang/" + APP_VERSION}
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     raw = resp.read().decode("utf-8")
@@ -1456,14 +1468,9 @@ class AudioSettingsDialog(WinUIModalDialog):
                     tag_name = data.get("tag_name", "").strip()
                     html_url = data.get("html_url", "https://github.com/gwj0323/klang/releases")
 
-                    def _parse_tag(t: str) -> List[int]:
-                        clean = re.sub(r"[^0-9.]", "", t)
-                        parts = [int(p) for p in clean.split(".") if p.isdigit()]
-                        return parts if parts else [0]
-
-                    curr_parts = _parse_tag("1.6.1")
-                    latest_parts = _parse_tag(tag_name)
-                    has_update = latest_parts > curr_parts
+                    curr_key = _version_key(APP_VERSION)
+                    latest_key = _version_key(tag_name)
+                    has_update = latest_key > curr_key
                     self.updateCheckResult.emit(has_update, tag_name, html_url)
             except Exception as e:
                 self.updateCheckFailed.emit(str(e))
@@ -1479,7 +1486,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             self.lbl_update_status.setStyleSheet(f"color: {self.theme.sage_accent.name()}; background: transparent;")
             self.btn_download_update.setVisible(True)
         else:
-            self.lbl_update_status.setText(f"当前已是最新版本 ({tag_name or 'v1.6.1'})")
+            self.lbl_update_status.setText(f"当前已是最新版本 ({tag_name or 'v' + APP_VERSION})")
             self.lbl_update_status.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
             self.btn_download_update.setVisible(False)
 

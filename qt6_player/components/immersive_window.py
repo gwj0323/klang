@@ -2067,7 +2067,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_vinyl_mode.setStyleSheet(
             f"QPushButton {{ background: {'rgba(255, 255, 255, 0.32)' if is_active else 'rgba(255, 255, 255, 0.12)'}; "
             "border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 10px; }"
-            "QPushButton:hover {{ background: rgba(255, 255, 255, 0.36); }}"
+            "QPushButton:hover { background: rgba(255, 255, 255, 0.36); }"
         )
 
     def _on_toggle_fps(self) -> None:
