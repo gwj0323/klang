@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from qt6_player.data.tracks import NordicTrack, NORDIC_TRACKS, LyricLine
-from qt6_player.services.metadata_service import create_track_from_file, _GENERIC_FOLDER_NAMES
+from qt6_player.services.metadata_service import create_track_from_file, _GENERIC_FOLDER_NAMES, _NORDIC_PALETTES
 
 
 def _get_config_path() -> Path:
@@ -178,13 +179,36 @@ def _commit_state(new_state: Dict[str, Any], sync: bool) -> bool:
     return True
 
 
+def _serialize_lyrics_cached(t: NordicTrack) -> list:
+    """歌词序列化结果按（列表对象, 行数）缓存在曲目上：每次自动保存不必为整个曲库重复序列化所有歌词"""
+    lyr = t.lyrics
+    if not lyr:
+        return []
+    key = (id(lyr), len(lyr), sum(len(l.text or "") + len(l.sub or "") for l in lyr))
+    cached = getattr(t, "_lyrics_ser_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    data = [
+        {
+            "index": int(l.index),
+            "time": float(l.time),
+            "end_time": float(l.end_time),
+            "text": str(l.text),
+            "sub": str(l.sub) if l.sub else "",
+            "is_interlude": bool(l.is_interlude),
+        }
+        for l in lyr
+    ]
+    t._lyrics_ser_cache = (key, data)
+    return data
+
+
 def save_player_state(
     tracks: List[NordicTrack],
     settings: Dict[str, Any],
     sync: bool = False,
 ) -> bool:
     playlist_data = []
-    local_tracks_data = []
     builtin_overrides = {}
 
     for t in tracks:
@@ -192,17 +216,7 @@ def save_player_state(
         if str(t.track_id).startswith("netease_"):
             continue
 
-        lyrics_data = []
-        if t.lyrics:
-            for l in t.lyrics:
-                lyrics_data.append({
-                    "index": int(l.index),
-                    "time": float(l.time),
-                    "end_time": float(l.end_time),
-                    "text": str(l.text),
-                    "sub": str(l.sub) if l.sub else "",
-                    "is_interlude": bool(l.is_interlude),
-                })
+        lyrics_data = _serialize_lyrics_cached(t)
 
         entry = {
             "track_id": str(t.track_id),
@@ -231,9 +245,7 @@ def save_player_state(
         }
         playlist_data.append(entry)
 
-        if t.file_path:
-            local_tracks_data.append(entry)
-        else:
+        if not t.file_path:
             builtin_overrides[t.track_id] = {
                 "is_favorite": bool(t.is_favorite),
                 "lyric_offset": float(t.lyric_offset),
@@ -246,13 +258,12 @@ def save_player_state(
             _UNAVAILABLE_ENTRIES.pop(tid, None)
             continue
         playlist_data.append(raw)
-        local_tracks_data.append(raw)
 
     with _STATE_LOCK:
         payload = dict(_current_state_locked())
         payload.update(settings)
         payload["playlist"] = playlist_data
-        payload["local_tracks"] = local_tracks_data
+        payload["local_tracks"] = []  # 旧字段：只在没有 playlist 的老存档里才会被读取，不再重复保存整个曲库
         payload["builtin_overrides"] = builtin_overrides
         return _commit_state(payload, sync)
 
@@ -314,6 +325,39 @@ def _apply_saved_meta_if_valid(tr: NordicTrack, item: Dict[str, Any]) -> None:
             tr.album = saved_album
 
 
+def _try_fast_restore(item: Dict[str, Any], index_hint: int, fp: str) -> Optional[NordicTrack]:
+    """用上次保存的元数据直接构造曲目，跳过逐文件解析标签/封面/歌词（启动时对大曲库非常慢）。
+    仅当文件的修改时间与保存时记录的一致、且保存的数据完整时才走快速路径，否则返回 None 让调用方走完整解析。"""
+    try:
+        saved_ts = float(item.get("added_timestamp") or 0.0)
+        if saved_ts <= 0.0 or not item.get("title") or float(item.get("duration") or 0.0) < 5.0:
+            return None
+        if not item.get("audio_format") or not item.get("sample_rate"):
+            return None
+        if not item.get("lyrics"):
+            return None  # 没有保存过歌词的曲目走完整解析（会生成占位歌词/读取同名 .lrc）
+        path_obj = Path(fp)
+        if abs(float(path_obj.stat().st_mtime) - saved_ts) > 1e-3:
+            return None
+        saved_cov = item.get("cover_path")
+        cover = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
+        resolved = str(path_obj.resolve())
+        digest = hashlib.md5(resolved.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        return NordicTrack(
+            track_id=f"local-{digest}",
+            title=str(item.get("title")),
+            artist=str(item.get("artist") or ""),
+            album=str(item.get("album") or ""),
+            duration=float(item["duration"]),
+            file_path=resolved,
+            cover_path=cover,
+            palette=dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)]),
+            lyrics=[],
+        )
+    except Exception:
+        return None
+
+
 def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
     tracks: List[NordicTrack] = []
 
@@ -332,7 +376,9 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
             saved_cov = item.get("cover_path")
             valid_cov = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
 
-            tr = create_track_from_file(fp, index_hint=idx)
+            tr = None if tid.startswith("cue-") else _try_fast_restore(item, idx, fp)
+            if tr is None:
+                tr = create_track_from_file(fp, index_hint=idx)
             if tid.startswith("cue-"):
                 tr.track_id = tid
             _apply_saved_meta_if_valid(tr, item)
