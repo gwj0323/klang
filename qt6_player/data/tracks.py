@@ -109,6 +109,10 @@ class NordicTrack:
 
         return f"{ext} · {sr_txt}"
 
+    def has_real_dna(self) -> bool:
+        """是否已有从 PCM 真实提取的声学 DNA（未播放过/未分析过的曲目只有粗略估计，不能用于相似度选曲）"""
+        return isinstance(self.acoustic_dna, dict) and "bpm" in self.acoustic_dna
+
     def get_acoustic_vector(self) -> Tuple[float, float, float, float]:
         """
         返回归一化 4 维声学指纹向量 (bpm_norm, energy, brightness, warmth)，均在 0.0 ~ 1.0。

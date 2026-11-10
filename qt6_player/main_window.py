@@ -1798,6 +1798,14 @@ class NordicWinUI3Window(AcrylicWindow):
         for idx, cand in enumerate(self.tracks):
             if idx == self.current_track_index:
                 continue
+            if not (cur_track.has_real_dna() and cand.has_real_dna()):
+                # 没有真实声学数据的曲目不能用估算特征去比相似度（那等于随机）：
+                # 给一个中性距离，让已分析且足够相近的曲目优先，其余未知曲目之间随机探索
+                neutral = 0.55 + random.random() * 0.05
+                if cand.track_id in recent_set and cand.track_id in self._flow_history:
+                    neutral += 0.65 * (self._flow_history.index(cand.track_id) + 1) / max(1, len(self._flow_history))
+                scored.append((neutral, idx))
+                continue
             v_cand = cand.get_acoustic_vector()
             # 4D 加权声学距离：能量密度 (1.35) + BPM 节拍 (1.15) + 频谱明暗 (1.0) + 温暖度 (0.9)
             # 同时支持半速/倍速谐波节拍亲和度 (如 70 BPM 与 140 BPM 具备节奏律动相容性)
