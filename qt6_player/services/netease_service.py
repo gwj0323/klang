@@ -18,6 +18,7 @@ import qrcode
 from PIL import Image
 
 import pyncm
+from qt6_player.services.secret_store import encrypt_obj, decrypt_obj
 from pyncm.apis import (
     WeapiCryptoRequest,
     GetCurrentSession,
@@ -258,7 +259,8 @@ class NeteaseCloudManager(QObject):
     def _init_session(self) -> None:
         sess = self._create_fresh_session()
         state = load_player_state()
-        saved_cookies = state.get("netease_cookies")
+        # 优先读加密存储；兼容旧版本留下的明文 netease_cookies（下次保存时会迁移并清掉明文）
+        saved_cookies = decrypt_obj(state.get("netease_cookies_enc")) or state.get("netease_cookies")
         saved_profile = state.get("netease_profile")
 
         if saved_cookies and isinstance(saved_cookies, dict):
@@ -278,6 +280,10 @@ class NeteaseCloudManager(QObject):
                     "profile": saved_profile,
                 },
             }
+
+        # 旧版本留下的明文 Cookie：登录状态恢复后立即迁移为加密存储并清掉明文
+        if self.is_logged_in and state.get("netease_cookies") and not state.get("netease_cookies_enc"):
+            self._save_session_state()
 
         # 后台静默校验当前登录状态
         threading.Thread(target=self._verify_login_async, daemon=True).start()
@@ -316,7 +322,8 @@ class NeteaseCloudManager(QObject):
         cookies = sess.cookies.get_dict() if self.is_logged_in else {}
         profile = self.user_profile if self.is_logged_in else {}
         update_player_state_fields({
-            "netease_cookies": cookies,
+            "netease_cookies_enc": encrypt_obj(cookies) if cookies else "",
+            "netease_cookies": None,  # 清除旧版本留下的明文
             "netease_profile": profile,
         })
 
