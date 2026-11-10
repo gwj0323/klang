@@ -9,6 +9,7 @@ Klang 原生 Windows 11 / 10 视效与窗口材质模块
 - 标准纯色模式 (Solid, ACCENT_DISABLED + DWMSBT_NONE)
 """
 
+import logging as _logging
 import sys
 import ctypes
 from ctypes import Structure, c_int, c_uint, byref, sizeof, pointer
@@ -64,7 +65,7 @@ def suppress_native_caption_buttons(hwnd: int) -> None:
             hwnd, WTA_NONCLIENT, byref(opts), sizeof(opts)
         )
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     try:
         import win32gui
@@ -95,7 +96,7 @@ def suppress_native_caption_buttons(hwnd: int) -> None:
                 | win32con.SWP_FRAMECHANGED,
             )
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
 
 def _reset_wca_accent_attr(we) -> None:
@@ -110,7 +111,7 @@ def _reset_wca_accent_attr(we) -> None:
         we.winCompAttrData.SizeOfData = sizeof(we.accentPolicy)
         we.winCompAttrData.Data = pointer(we.accentPolicy)
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
 
 def _sync_wca_dark_mode(we, hwnd: int, is_dark: bool) -> None:
@@ -121,7 +122,7 @@ def _sync_wca_dark_mode(we, hwnd: int, is_dark: bool) -> None:
         we.accentPolicy.AccentState = 1 if is_dark else 0
         we.SetWindowCompositionAttribute(int(hwnd), pointer(we.winCompAttrData))
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     finally:
         _reset_wca_accent_attr(we)
 
@@ -161,7 +162,7 @@ def apply_window_backdrop(
             hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, byref(dark_val), sizeof(dark_val)
         )
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     # 2. 设置 Windows 11 原生圆角与阴影策略 (DWMWA_WINDOW_CORNER_PREFERENCE = 33)
     if is_win11():
@@ -171,7 +172,7 @@ def apply_window_backdrop(
                 hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, byref(pref), sizeof(pref)
             )
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     # 3. 获取窗口绑定的 WindowsWindowEffect 实例
     we = getattr(window, "windowEffect", None)
@@ -193,7 +194,7 @@ def apply_window_backdrop(
                 _reset_wca_accent_attr(we)
                 we.removeBackgroundEffect(hwnd)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         if is_win11():
             try:
                 if sys.getwindowsversion().build < 22523:
@@ -203,12 +204,12 @@ def apply_window_backdrop(
                         hwnd, DWMWA_SYSTEMBACKDROP_TYPE, byref(c_int(DWMSBT_NONE)), 4
                     )
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         if we is not None:
             try:
                 we.addShadowEffect(hwnd)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return True
 
     elif mat_lower == "acrylic":
@@ -222,7 +223,7 @@ def apply_window_backdrop(
                         hwnd, DWMWA_SYSTEMBACKDROP_TYPE, byref(c_int(DWMSBT_NONE)), 4
                     )
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         # 计算 RRGGBBAA 格式的北欧亚克力混合底色
         clean_hex = (tint_hex or "").lstrip("#").upper()
@@ -242,7 +243,7 @@ def apply_window_backdrop(
                 if is_win11():
                     we.addShadowEffect(hwnd)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return True
 
     else:
@@ -256,7 +257,7 @@ def apply_window_backdrop(
                     we.setMicaEffect(hwnd, isDarkMode=is_dark, isAlt=False)
                     _reset_wca_accent_attr(we)
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         else:
             # Windows 10 回退至柔和 Acrylic
             if we is not None:
@@ -266,7 +267,7 @@ def apply_window_backdrop(
                     fallback_tint = "181C1AD8" if is_dark else "F4F1EAD8"
                     we.setAcrylicEffect(hwnd, gradientColor=fallback_tint, enableShadow=True)
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return True
 
 

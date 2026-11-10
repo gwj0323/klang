@@ -1,9 +1,9 @@
-import threading
+import logging as _logging
 import webbrowser
-from typing import Optional, Dict, Any
+from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath, QPixmap
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -376,15 +376,15 @@ class NeteaseLoginDialog(WinUIModalDialog):
         try:
             netease_manager.qrCodeGenerated.disconnect(self._on_qr_ready)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         try:
             netease_manager.qrStatusChecked.disconnect(self._on_poll_result)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         try:
             netease_manager.cookieLoginChecked.disconnect(self._on_cookie_login_result)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def closeEvent(self, event) -> None:
         self._cleanup()

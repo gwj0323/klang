@@ -1,14 +1,10 @@
-import os
-import math
-from typing import List, Optional, Tuple
-from pathlib import Path
+from typing import List, Optional
 
 from PyQt6.QtCore import (
     Qt,
     QRectF,
     QPointF,
     QTimer,
-    pyqtSignal,
 )
 from PyQt6.QtGui import (
     QPainter,
@@ -21,7 +17,6 @@ from PyQt6.QtGui import (
     QLinearGradient,
     QPixmap,
     QImage,
-    QMouseEvent,
     QGuiApplication,
 )
 from PyQt6.QtWidgets import (
@@ -33,21 +28,17 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QCheckBox,
     QFileDialog,
-    QApplication,
-    QFrame,
 )
 
 from qt6_player.data.tracks import NordicTrack, LyricLine
 from qt6_player.theme.nordic_palette import (
     NordicThemeColors,
     DAYLIGHT_THEME,
-    DUSK_THEME,
     get_nordic_font,
 )
 from qt6_player.components.fluent_widgets import (
     WinUIModalDialog,
     WinUISegmentedControl,
-    WinUIToggleSwitch,
 )
 from qt6_player.components.title_bar import WinUIChipButton
 
@@ -267,7 +258,7 @@ class LyricPosterPreviewWidget(QWidget):
 
         # 动态根据行数计算最佳字号
         line_count = max(1, len(self.selected_lines))
-        has_trans = self.show_translation and any(bool(l.sub) for l in self.selected_lines)
+        self.show_translation and any(bool(l.sub) for l in self.selected_lines)
 
         if line_count <= 2:
             main_fs = int(round(18 * scale))

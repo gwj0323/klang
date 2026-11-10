@@ -1,3 +1,4 @@
+import logging as _logging
 import math
 import sys
 from pathlib import Path
@@ -11,7 +12,6 @@ from PyQt6.QtCore import (
     Qt,
     QObject,
     QTimer,
-    QElapsedTimer,
     pyqtSignal,
     QIODevice,
     QUrl,
@@ -1159,7 +1159,7 @@ class NordicAudioEngine(QObject):
                 # 0x00008000 = ABOVE_NORMAL_PRIORITY_CLASS
                 kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x00008000)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         self._tick_timer = QTimer(self)
         self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -1178,7 +1178,7 @@ class NordicAudioEngine(QObject):
         try:
             self._decoder.stop()
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         finally:
             self._ignoring_decoder_signals = False
 
@@ -1187,7 +1187,7 @@ class NordicAudioEngine(QObject):
         try:
             self._pre_decoder.stop()
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         finally:
             self._ignoring_pre_decoder_signals = False
 
@@ -1231,7 +1231,7 @@ class NordicAudioEngine(QObject):
                     self._pre_decoded_bytes.extend(buf.constData().asstring(cnt))
                 read_cnt += 1
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _on_pre_decoder_buffer_ready(self) -> None:
         if self._ignoring_pre_decoder_signals:
@@ -1519,7 +1519,7 @@ class NordicAudioEngine(QObject):
                     self._decoded_raw_bytes.extend(buf.constData().asstring(cnt))
                 read_cnt += 1
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _on_decoder_buffer_ready(self) -> None:
         if self._ignoring_decoder_signals:
@@ -1732,7 +1732,7 @@ class NordicAudioEngine(QObject):
                     self._push_io = self._audio_sink.start()
                     self._audio_sink.setVolume(curr_vol)
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         else:
             # 自动连续切歌 (Gapless / Crossfade)：保持音频管线连续，不截断输出缓冲
             self._stream_device._env_gain = 1.0
@@ -1858,7 +1858,7 @@ class NordicAudioEngine(QObject):
                 self._push_io = self._audio_sink.start()
                 self._audio_sink.setVolume(curr_vol)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def seek(self, target_seconds: float, auto_play_on_seek: bool = True, source: str = "seek") -> None:
         max_sec = max(0.0, self.duration - 0.05) if self.duration > 0 else 0.0
@@ -1885,7 +1885,7 @@ class NordicAudioEngine(QObject):
                 self._push_io = self._audio_sink.start()
                 self._audio_sink.setVolume(curr_vol)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         if self._using_local_file and self._decoder_failed:
             abs_sec = (self._track_start_frame / float(self._sample_rate)) + clamped
@@ -1969,7 +1969,7 @@ class NordicAudioEngine(QObject):
                 self._audio_sink.setParent(None)
                 self._audio_sink.deleteLater()
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self._audio_sink = None
             self._push_io = None
         self._stream_device._out_fifo.clear()

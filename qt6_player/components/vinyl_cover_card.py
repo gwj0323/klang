@@ -1,5 +1,5 @@
+import logging as _logging
 import math
-from pathlib import Path
 from typing import List, Optional, Tuple
 from PyQt6.QtCore import (
     Qt,
@@ -19,7 +19,6 @@ from PyQt6.QtGui import (
     QPainterPath,
     QRadialGradient,
     QConicalGradient,
-    QLinearGradient,
     QPixmap,
     QImage,
     QMouseEvent,
@@ -65,7 +64,7 @@ def extract_ambient_colors(pixmap: Optional[QPixmap], track: NordicTrack) -> Tup
                 col2.setHslF(h2 if h2 >= 0 else 0.12, min(0.42, s2 * 0.72), max(0.35, min(0.72, l2)))
                 return col1, col2
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     pal = track.palette or {}
     return QColor(pal.get("accent", "#6E8277")), QColor(pal.get("wood", "#C9BBAE"))

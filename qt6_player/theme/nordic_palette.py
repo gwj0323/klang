@@ -1,3 +1,4 @@
+import logging as _logging
 import os
 import sys
 from dataclasses import dataclass
@@ -98,7 +99,7 @@ def _ensure_bundled_fonts() -> None:
                 try:
                     QFontDatabase.addApplicationFont(fpath)
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
 
 def _resolve_ordered_families(mono: bool) -> List[str]:

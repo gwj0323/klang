@@ -7,9 +7,12 @@ Windows 上使用 DPAPI（CryptProtectData）：密文只能由同一 Windows �
 import base64
 import ctypes
 import json
+import logging
 import sys
 from ctypes import wintypes
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 _DPAPI_PREFIX = "dpapi:"
 _PLAIN_PREFIX = "plain:"
@@ -47,8 +50,9 @@ def encrypt_obj(obj: Any) -> str:
             enc = _dpapi(raw, protect=True)
             if enc is not None:
                 return _DPAPI_PREFIX + base64.b64encode(enc).decode("ascii")
+            logger.warning("DPAPI 加密失败，敏感数据将以未加密的 base64 形式保存")
         except Exception:
-            pass
+            logger.warning("DPAPI 加密异常，敏感数据将以未加密的 base64 形式保存", exc_info=True)
     return _PLAIN_PREFIX + base64.b64encode(raw).decode("ascii")
 
 

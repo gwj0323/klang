@@ -1,3 +1,4 @@
+import logging as _logging
 import concurrent.futures
 import math
 import os
@@ -603,7 +604,7 @@ class NavTrackItemButton(QPushButton):
                 try:
                     subprocess.Popen(["explorer", "/select,", os.path.normpath(target_path)])
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         else:
             self.contextActionRequested.emit(self.index, act)
 
@@ -1193,13 +1194,13 @@ class NavigationPane(QWidget):
                     items.append((f"ne_pl:{pl['id']}", "heart", f"{pl.get('name', '我喜欢的音乐')} ({cnt})"))
 
                 if created_pls:
-                    items.append((f"header:created", "", f"创建的歌单 ({len(created_pls)})"))
+                    items.append(("header:created", "", f"创建的歌单 ({len(created_pls)})"))
                     for pl in created_pls:
                         cnt = pl.get("track_count", 0)
                         items.append((f"ne_pl:{pl['id']}", "music_file", f"{pl.get('name', '歌单')} ({cnt})"))
 
                 if sub_pls:
-                    items.append((f"header:sub", "", f"收藏的歌单 ({len(sub_pls)})"))
+                    items.append(("header:sub", "", f"收藏的歌单 ({len(sub_pls)})"))
                     for pl in sub_pls:
                         cnt = pl.get("track_count", 0)
                         items.append((f"ne_pl:{pl['id']}", "folder", f"{pl.get('name', '歌单')} ({cnt})"))
@@ -1312,7 +1313,7 @@ class NavigationPane(QWidget):
 
     def _update_sub_bar_ui(self) -> None:
         t = self.theme
-        is_trans = getattr(self, "is_translucent_backdrop", True)
+        getattr(self, "is_translucent_backdrop", True)
         is_dusk = t.name == "dusk"
         if is_dusk:
             bg_val = "rgba(255, 255, 255, 0.08)"
@@ -1598,7 +1599,7 @@ class NavigationPane(QWidget):
                             t._cover_cache_loaded = False
                             return True
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 return False
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
@@ -1611,7 +1612,7 @@ class NavigationPane(QWidget):
                             if done_count % 4 == 0 or done_count == len(target_tracks):
                                 self._thumbnailsRefreshed.emit()
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         threading.Thread(target=_worker, daemon=True).start()
 
     def _refresh_item_thumbnails(self) -> None:

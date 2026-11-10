@@ -1,3 +1,4 @@
+import logging as _logging
 import math
 import random
 import time
@@ -10,7 +11,6 @@ from PyQt6.QtCore import (
     QPoint,
     QTimer,
     QElapsedTimer,
-    QDateTime,
     QEvent,
     pyqtSignal,
 )
@@ -27,7 +27,6 @@ from PyQt6.QtGui import (
     QImage,
     QLinearGradient,
     QRadialGradient,
-    QConicalGradient,
     QMouseEvent,
     QWheelEvent,
     QKeyEvent,
@@ -119,7 +118,7 @@ def extract_aurora_palette(pixmap: Optional[QPixmap], track: Optional[NordicTrac
                 c_base = QColor(8, 10, 16)
                 return col1, col2, col3, col4, c_base
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     pal = (track.palette if track else None) or {}
     c1 = QColor(pal.get("accent", "#3D7A63"))
@@ -539,7 +538,7 @@ class ImmersiveArtworkView(QWidget):
                 try:
                     self.grabMouse()
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 ratio = max(0.0, min(1.0, (pos.x() - self._rect_slider.left()) / max(1.0, self._rect_slider.width())))
                 self._scrub_ratio = ratio
                 self.seekRatioScrubbing.emit(ratio)
@@ -553,7 +552,7 @@ class ImmersiveArtworkView(QWidget):
                 try:
                     self.grabMouse()
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 vol = max(0.0, min(1.0, (pos.x() - self._rect_vol_track.left()) / max(1.0, self._rect_vol_track.width())))
                 self.set_volume(vol)
                 self.volumeChanged.emit(vol)
@@ -658,7 +657,7 @@ class ImmersiveArtworkView(QWidget):
             try:
                 self.releaseMouse()
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self.seekRatioRequested.emit(self._scrub_ratio)
             self.update()
             event.accept()
@@ -668,7 +667,7 @@ class ImmersiveArtworkView(QWidget):
             try:
                 self.releaseMouse()
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self.update()
             event.accept()
             return
@@ -681,7 +680,7 @@ class ImmersiveArtworkView(QWidget):
             try:
                 self.releaseMouse()
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         super().hideEvent(event)
 
     def _render_sleeve_card(self, sleeve_sz: int) -> QPixmap:
@@ -821,7 +820,7 @@ class ImmersiveArtworkView(QWidget):
             elif actual_ch == 8:
                 atmos_txt = "DOLBY ATMOS 7.1"
             elif self.track and getattr(self.track, "is_hi_res", False):
-                atmos_txt = f"HI-RES · ATMOS"
+                atmos_txt = "HI-RES · ATMOS"
             else:
                 atmos_txt = "DOLBY ATMOS"
         elif self.track:
@@ -1365,9 +1364,9 @@ class ImmersiveLyricsView(QWidget):
         main_font = self._main_font
         sub_font = self._sub_font
         main_text_h = 48.0
-        main_base_pt = QPointF(0.0, self._main_baseline_y)
-        main_glow_pt = QPointF(0.0, self._main_baseline_y + 1.0)
-        sub_base_pt = QPointF(0.0, self._sub_baseline_y)
+        QPointF(0.0, self._main_baseline_y)
+        QPointF(0.0, self._main_baseline_y + 1.0)
+        QPointF(0.0, self._sub_baseline_y)
 
         for idx, line in enumerate(self.lyrics):
             top_y = self._line_y_tops[idx]
@@ -1989,7 +1988,7 @@ class ImmersiveFullscreenWindow(QWidget):
                         child.removeEventFilter(self)
                         child.installEventFilter(self)
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _wake_hud(self) -> None:
         if self._hud_target_opacity < 0.05 or self._hud_opacity < 0.05:

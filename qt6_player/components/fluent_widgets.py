@@ -1,5 +1,5 @@
 import math
-from typing import List, Optional, Tuple, Callable
+from typing import List, Optional, Tuple
 from PyQt6.QtCore import (
     Qt,
     QRect,
@@ -35,8 +35,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
 )
 
 from qt6_player.theme.nordic_palette import NordicThemeColors, DAYLIGHT_THEME, get_nordic_font
@@ -326,17 +324,8 @@ class WinUISegmentedControl(QWidget):
         self.theme = theme
         self.update()
 
-    def set_backdrop_material(self, material: str) -> None:
-        self.backdrop_material = str(material)
-        self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
-        self.update()
-
     def _on_anim_val(self, val: float) -> None:
         self.pill_pos = float(val)
-        self.update()
-
-    def set_theme(self, theme: NordicThemeColors) -> None:
-        self.theme = theme
         self.update()
 
     def set_item_text(self, index: int, text: str) -> None:

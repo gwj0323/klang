@@ -1,3 +1,4 @@
+import logging as _logging
 import hashlib
 import os
 import re
@@ -108,7 +109,7 @@ def _extract_mp3_id3v2(file_path: str) -> Tuple[str, str, str, Optional[bytes], 
                 elif png_idx != -1:
                     cover_bytes = body[png_idx:]
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return title, artist, album, cover_bytes, lrc_text
 
 
@@ -178,7 +179,7 @@ def _extract_flac_metadata(file_path: str) -> Tuple[str, str, str, Optional[byte
                 if is_last:
                     break
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return title, artist, album, cover_bytes, lrc_text, duration
 
 
@@ -267,7 +268,7 @@ def _decode_text_bytes(raw: bytes) -> str:
         try:
             return raw.decode(enc)
         except UnicodeDecodeError:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     # charset-normalizer 是 requests 的依赖，必定可用；文本较长时对 GBK/Big5/Shift-JIS 的区分很可靠
     try:
         from charset_normalizer import from_bytes
@@ -275,7 +276,7 @@ def _decode_text_bytes(raw: bytes) -> str:
         if best is not None:
             return str(best)
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     for enc in ("gb18030", "big5", "shift_jis"):
         try:
             return raw.decode(enc)
@@ -352,7 +353,7 @@ def _parse_peak_value(raw_val: object) -> Optional[float]:
         if 0.01 <= val <= 4.0:
             return val
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return None
 
 
@@ -440,7 +441,7 @@ def extract_audio_properties(file_path: str) -> dict:
                     props["duration"] = float(m.info.length)
                 return props
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     # 2. 原生二进制快速回退解析 (针对 FLAC)
     if ext == ".flac":
@@ -476,7 +477,7 @@ def extract_audio_properties(file_path: str) -> dict:
                         if is_last:
                             break
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     # 3. 原生二进制快速回退解析 (针对 WAV)
     elif ext == ".wav":
@@ -503,7 +504,7 @@ def extract_audio_properties(file_path: str) -> dict:
                             else:
                                 f.seek(csize, os.SEEK_CUR)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     return props
 
@@ -870,7 +871,7 @@ def write_metadata_to_audio_file(
             key = hashlib.md5(str(p.resolve()).encode("utf-8", errors="ignore")).hexdigest()[:16]
             shutil.copy2(p, bak_dir / f"{key}{p.suffix}")
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     # 准备封面字节与 MIME 类型
     cov_data: Optional[bytes] = track.cover_bytes

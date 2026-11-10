@@ -430,7 +430,8 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         if self._tex_mix < 1.0:
             self._tex_mix = min(1.0, self._tex_mix + dt / 1.2)  # 1.2 秒交叉淡入
 
-        rate = 1.0 - (1.0 - 0.08) ** k
+        # 色彩渐变保持与此前 ~120Hz 下每帧 0.08 相当的速度
+        rate = 1.0 - (1.0 - 0.08) ** (dt * 120.0)
         self._c_base_cur = self._lerp_vec(self._c_base_cur, self._c_base_target, rate)
         self._c1_cur = self._lerp_vec(self._c1_cur, self._c1_target, rate)
         self._c2_cur = self._lerp_vec(self._c2_cur, self._c2_target, rate)

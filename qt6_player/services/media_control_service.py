@@ -1,3 +1,4 @@
+import logging as _logging
 import os
 import sys
 import time
@@ -173,7 +174,7 @@ if IS_WIN32:
                     try:
                         marker.write_text(signature, encoding="utf-8")
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
             # 为快捷方式写入 PKEY_AppUserModel_ID
             ole32.CoInitialize(None)
@@ -189,7 +190,7 @@ if IS_WIN32:
                 Load = WINFUNCTYPE(c_int, c_void_p, c_wchar_p, wintypes.DWORD)(vtable_persist[5])
                 Save = WINFUNCTYPE(c_int, c_void_p, c_wchar_p, wintypes.BOOL)(vtable_persist[6])
 
-                hr_load = Load(pLink, str(lnk_path), 2)  # STGM_READWRITE = 2
+                Load(pLink, str(lnk_path), 2)  # STGM_READWRITE = 2
                 pStore = c_void_p()
                 hr_qi = QI(pLink, byref(IID_IPropertyStore), byref(pStore))
                 if hr_qi == 0 and pStore.value:
@@ -203,7 +204,7 @@ if IS_WIN32:
                     Commit(pStore)
                     Save(pLink, str(lnk_path), True)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
 
 class WindowsMediaControlService(QObject):
@@ -242,7 +243,7 @@ class WindowsMediaControlService(QObject):
         try:
             shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         try:
             # 窗口 PropertyStore 绑定
@@ -263,7 +264,7 @@ class WindowsMediaControlService(QObject):
                 SetValue(pStore, byref(key), byref(val))
                 Commit(pStore)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         # 确保开始菜单存在对应的快捷方式以供 Windows 索引应用名与图标
         # 创建快捷方式要调用 PowerShell，放到后台线程，避免卡住界面启动
@@ -332,7 +333,7 @@ class WindowsMediaControlService(QObject):
                 put_AppMediaId(updater, h_app_id)
                 WindowsDeleteString(h_app_id)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
             get_MusicProperties = GetPtrType(vtable_updater[12])
             music_props = c_void_p()
@@ -374,7 +375,7 @@ class WindowsMediaControlService(QObject):
                 self._token = token.value
                 self._remove_ButtonPressed = WINFUNCTYPE(c_int, c_void_p, c_int64)(vtable_smtc[33])
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _qi_impl(self, this, riid, ppv):
         try:
@@ -383,7 +384,7 @@ class WindowsMediaControlService(QObject):
                 ppv[0] = this
                 return 0
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         ppv[0] = None
         return -2147467262  # E_NOINTERFACE
 
@@ -417,7 +418,7 @@ class WindowsMediaControlService(QObject):
             elif btn == 7:
                 self.previousRequested.emit()
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return 0
 
     def _init_hotkeys_and_filter(self) -> None:
@@ -450,7 +451,7 @@ class WindowsMediaControlService(QObject):
                             if self.service._handle_appcommand(cmd):
                                 return True, 0
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 return False, 0
 
         self._event_filter = MediaNativeEventFilter(self)
@@ -531,7 +532,7 @@ class WindowsMediaControlService(QObject):
 
             self._update_display(self._updater)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def set_playback_status(self, is_playing: bool) -> None:
         """向 Windows SMTC 同步播放状态（3=Playing, 4=Paused）"""
@@ -541,7 +542,7 @@ class WindowsMediaControlService(QObject):
             status = 3 if is_playing else 4
             self._put_PlaybackStatus(self._smtc, status)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def cleanup(self) -> None:
         """应用退出前注销全局热键与事件监听器"""
@@ -551,7 +552,7 @@ class WindowsMediaControlService(QObject):
             try:
                 user32.UnregisterHotKey(self.hwnd, hid)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         self._registered_hotkeys.clear()
 
         if self._event_filter:
@@ -560,13 +561,13 @@ class WindowsMediaControlService(QObject):
                 try:
                     app.removeNativeEventFilter(self._event_filter)
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self._event_filter = None
 
         if self._smtc and self._token and hasattr(self, "_remove_ButtonPressed"):
             try:
                 self._remove_ButtonPressed(self._smtc, self._token)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self._smtc = None
             self._token = None

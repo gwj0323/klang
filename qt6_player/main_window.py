@@ -1,3 +1,4 @@
+import logging as _logging
 import random
 import threading
 from pathlib import Path
@@ -17,9 +18,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QFont,
     QPainter,
-    QPen,
     QColor,
-    QPainterPath,
     QRadialGradient,
     QKeyEvent,
     QDragEnterEvent,
@@ -32,7 +31,6 @@ from PyQt6.QtGui import (
     QPixmap,
 )
 from PyQt6.QtWidgets import (
-    QMainWindow,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -44,7 +42,6 @@ from qt6_player.data.tracks import NordicTrack, LyricLine, parse_lrc_text
 from qt6_player.theme.nordic_palette import DAYLIGHT_THEME, DUSK_THEME, NordicThemeColors
 from qt6_player.services.audio_engine import NordicAudioEngine
 from qt6_player.services.metadata_service import (
-    SUPPORTED_AUDIO_EXTS,
     SUPPORTED_IMPORT_EXTS,
     create_track_from_file,
     parse_cue_file,
@@ -76,7 +73,6 @@ from qt6_player.components.fluent_widgets import WinUIFlyoutMenu
 from qt6_player.services.netease_service import netease_manager
 from qframelesswindow import AcrylicWindow
 from qt6_player.services.window_effects import (
-    apply_window_system_theme_and_corners,
     apply_window_backdrop,
     suppress_native_caption_buttons,
 )
@@ -267,7 +263,7 @@ class NordicWinUI3Window(AcrylicWindow):
         try:
             fn()
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _on_ambient_anim_val(self, val: float) -> None:
         p = float(val)
@@ -471,7 +467,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 tint_hex=tint,
             )
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
 
 
@@ -716,7 +712,7 @@ class NordicWinUI3Window(AcrylicWindow):
             try:
                 w.scrapeCompleted.disconnect(self._on_auto_scrape_completed)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         if hasattr(self, "mini_player"):
             self.mini_player.close()
         if hasattr(self, "immersive_window"):
@@ -1156,7 +1152,7 @@ class NordicWinUI3Window(AcrylicWindow):
             try:
                 self.immersive_window.fluid_shader.stop_animation()
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         try:
             dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
@@ -1165,7 +1161,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 try:
                     self.immersive_window.fluid_shader.start_animation()
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _open_audio_settings_dialog(self, default_tab: int = 0) -> None:
         cur_offset = (
@@ -1256,7 +1252,7 @@ class NordicWinUI3Window(AcrylicWindow):
             try:
                 self.immersive_window.fluid_shader.stop_animation()
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         try:
             dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
@@ -1265,7 +1261,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 try:
                     self.immersive_window.fluid_shader.start_animation()
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         self._active_eq_dialog = None
         self.schedule_save()
 
@@ -1729,7 +1725,7 @@ class NordicWinUI3Window(AcrylicWindow):
                                         self.immersive_window.update_track(track)
                             self._async_callback_signal.emit(_on_lyr)
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 threading.Thread(target=_lyrics_worker, daemon=True).start()
             return
 
@@ -1870,7 +1866,7 @@ class NordicWinUI3Window(AcrylicWindow):
                         if res_p and Path(res_p).is_file():
                             QTimer.singleShot(0, lambda: self.audio.preload_next_track(nxt_track))
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 threading.Thread(target=_preload_worker, daemon=True).start()
             else:
                 self.audio.preload_next_track(nxt_track)
@@ -2234,7 +2230,7 @@ class NordicWinUI3Window(AcrylicWindow):
                     if p.parent.is_dir():
                         (p.parent / f"{p.stem}.tr.lrc").write_text(tlyric, encoding="utf-8")
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
             cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
             if cur_track and cur_track.track_id == track_id:

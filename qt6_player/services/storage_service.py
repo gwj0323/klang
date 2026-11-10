@@ -1,3 +1,4 @@
+import logging as _logging
 import hashlib
 import json
 import os
@@ -5,10 +6,11 @@ import re
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from qt6_player.data.tracks import NordicTrack, NORDIC_TRACKS, LyricLine
+from qt6_player.data.tracks import NordicTrack, LyricLine
 from qt6_player.services.metadata_service import create_track_from_file, _GENERIC_FOLDER_NAMES, _NORDIC_PALETTES
 
 
@@ -98,7 +100,7 @@ def _load_state_from_disk() -> Dict[str, Any]:
                 try:
                     shutil.copy2(_CONFIG_PATH, _CONFIG_PATH.with_suffix(".corrupt"))
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             continue
         if isinstance(data, dict):
             default_state.update(data)
@@ -126,7 +128,7 @@ def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
                 try:
                     shutil.copy2(_CONFIG_PATH, _CONFIG_PATH.with_suffix(".bak"))
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             tmp_file.replace(_CONFIG_PATH)
             return True
         except Exception:
@@ -163,7 +165,11 @@ def _writer_loop() -> None:
         _WRITE_EVENT.clear()
         with _STATE_LOCK:
             snapshot = _make_json_safe(dict(_current_state_locked()))
-        _write_payload_to_disk(snapshot)
+        # 写入失败（如杀毒软件短暂占用文件）时重试几次，避免这次改动要等下一次保存才落盘
+        for _attempt in range(5):
+            if _write_payload_to_disk(snapshot):
+                break
+            time.sleep(1.0)
 
 
 def _commit_state(new_state: Dict[str, Any], sync: bool) -> bool:
@@ -184,9 +190,15 @@ def _serialize_lyrics_cached(t: NordicTrack) -> list:
     lyr = t.lyrics
     if not lyr:
         return []
-    key = (id(lyr), len(lyr), sum(len(l.text or "") + len(l.sub or "") for l in lyr))
+    # 缓存同时持有列表引用（用 is 比较），避免旧列表被回收后 id 复用导致误命中；
+    # 键里带上时间之和，原地修改时间轴时也能失效
+    key = (
+        len(lyr),
+        sum(len(l.text or "") + len(l.sub or "") for l in lyr),
+        round(sum(float(l.time) + float(l.end_time) for l in lyr), 3),
+    )
     cached = getattr(t, "_lyrics_ser_cache", None)
-    if cached is not None and cached[0] == key:
+    if cached is not None and cached[0] == key and cached[2] is lyr:
         return cached[1]
     data = [
         {
@@ -199,7 +211,7 @@ def _serialize_lyrics_cached(t: NordicTrack) -> list:
         }
         for l in lyr
     ]
-    t._lyrics_ser_cache = (key, data)
+    t._lyrics_ser_cache = (key, data, lyr)
     return data
 
 
@@ -312,7 +324,8 @@ def _apply_saved_meta_if_valid(tr: NordicTrack, item: Dict[str, Any]) -> None:
     saved_album = str(item.get("album") or "").strip()
 
     # 若旧版缓存将 '歌名 - 歌手[专辑]' 反向解析为 title='歌手[专辑]'，则自动使用新解析出的正确歌名、歌手与专辑
-    is_legacy_inverted = bool(
+    # 标题与新解析结果一致时无需判断（带 [Live]/【Remastered】 的正常标题不应被误判为旧版反向解析）
+    is_legacy_inverted = saved_title != tr.title and bool(
         re.search(r"[\[【].+?[\]】]\s*$", saved_title)
         or (saved_album.lower() in _GENERIC_FOLDER_NAMES and tr.album)
     )

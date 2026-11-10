@@ -48,7 +48,7 @@ from qt6_player.components.fluent_widgets import (
 from qt6_player.components.title_bar import WinUIChipButton
 from qt6_player.components.transport_bar import WinUISlider
 from qt6_player.services.audio_engine import SOUND_PROFILES, EQ_BAND_LABELS
-from qt6_player.services.headphone_eq import HEADPHONE_PROFILES, HeadphoneProfile
+from qt6_player.services.headphone_eq import HEADPHONE_PROFILES
 
 
 class EqualizerRackWidget(QWidget):
@@ -412,36 +412,36 @@ class AudioSettingsDialog(WinUIModalDialog):
         )
 
     def _apply_scroll_style(self, scroll: QScrollArea) -> None:
-        scroll.setStyleSheet(f"""
-            QScrollArea {{
+        scroll.setStyleSheet("""
+            QScrollArea {
                 background: transparent;
                 border: none;
-            }}
-            QScrollArea > QWidget > QWidget {{
+            }
+            QScrollArea > QWidget > QWidget {
                 background: transparent;
-            }}
-            QScrollBar:vertical {{
+            }
+            QScrollBar:vertical {
                 border: none;
                 background: transparent;
                 width: 6px;
                 margin: 0px 1px 0px 0px;
-            }}
-            QScrollBar::handle:vertical {{
+            }
+            QScrollBar::handle:vertical {
                 background: rgba(140, 150, 145, 0.35);
                 min-height: 28px;
                 border-radius: 3px;
-            }}
-            QScrollBar::handle:vertical:hover {{
+            }
+            QScrollBar::handle:vertical:hover {
                 background: rgba(140, 150, 145, 0.65);
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
                 border: none;
                 background: transparent;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
                 background: transparent;
-            }}
+            }
         """)
 
     def _wrap_tab_in_scroll(self, content_widget: QWidget) -> QScrollArea:
@@ -1493,7 +1493,7 @@ class AudioSettingsDialog(WinUIModalDialog):
     def _on_update_check_failed(self, error_msg: str) -> None:
         self.btn_check_update.setEnabled(True)
         self.lbl_update_status.setText("检查更新失败，请确认网络连接或访问 Releases 页面")
-        self.lbl_update_status.setStyleSheet(f"color: #D32F2F; background: transparent;")
+        self.lbl_update_status.setStyleSheet("color: #D32F2F; background: transparent;")
 
     def _on_download_update_clicked(self) -> None:
         target = self._latest_release_url or "https://github.com/gwj0323/klang/releases"

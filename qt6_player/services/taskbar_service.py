@@ -4,6 +4,7 @@ Implements ITaskbarList3 COM interface to provide Prev, Play/Pause, Next control
 in the Windows Taskbar Hover Preview (Thumbnail Toolbar).
 """
 
+import logging as _logging
 import sys
 import ctypes
 from ctypes import wintypes
@@ -415,6 +416,6 @@ class TaskbarThumbnailService:
                     try:
                         user32.DestroyIcon(h)
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self._created_icons.clear()
             self._state_icons.clear()

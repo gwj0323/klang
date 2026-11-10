@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QPointF, QRectF, QVariantAnimation, QEasingCurve, QTimer

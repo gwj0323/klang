@@ -1,13 +1,12 @@
+import logging as _logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 import requests
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRectF
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath, QPixmap
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QVBoxLayout,
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
@@ -84,7 +83,7 @@ def search_netease_candidates(keyword: str, limit: int = 8) -> List[ScrapeCandid
                 )
             )
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return results
 
 
@@ -117,7 +116,7 @@ def fetch_netease_lyric_and_cover(song_id: str, existing_cover_url: str = "") ->
         primary_lrc = (lrc_json.get("lrc") or {}).get("lyric") or ""
         trans_lrc = (lrc_json.get("tlyric") or {}).get("lyric") or ""
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     if not cover_url:
         try:
@@ -132,7 +131,7 @@ def fetch_netease_lyric_and_cover(song_id: str, existing_cover_url: str = "") ->
                 if pic:
                     cover_url = f"{pic}?param=600y600"
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     return primary_lrc, trans_lrc, cover_url
 
@@ -167,7 +166,7 @@ def search_lrclib_candidates(keyword: str, limit: int = 6) -> List[ScrapeCandida
                     )
                 )
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return results
 
 
@@ -187,7 +186,7 @@ def fetch_itunes_cover_url(keyword: str) -> str:
             if art:
                 return art.replace("100x100bb", "600x600bb")
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return ""
 
 
@@ -199,7 +198,7 @@ def download_image_bytes(url: str) -> Optional[bytes]:
         if r.status_code == 200 and len(r.content) > 512:
             return r.content
     except Exception:
-        pass
+        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
     return None
 
 
@@ -239,7 +238,7 @@ def save_scraped_files_alongside_audio(
                         cov_path.write_bytes(cover_bytes)
                     saved_cover_path = str(cov_path)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     if cover_bytes and not saved_cover_path and track_id:
         try:
@@ -250,7 +249,7 @@ def save_scraped_files_alongside_audio(
             cov_path.write_bytes(cover_bytes)
             saved_cover_path = str(cov_path)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     return saved_cover_path
 

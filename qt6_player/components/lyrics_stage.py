@@ -1,3 +1,4 @@
+import logging as _logging
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -13,11 +14,9 @@ from PyQt6.QtGui import (
     QPainter,
     QImage,
     QPen,
-    QBrush,
     QColor,
     QFont,
     QFontMetricsF,
-    QLinearGradient,
     QPainterPath,
     QMouseEvent,
     QWheelEvent,
@@ -155,7 +154,7 @@ class LyricsStage(QWidget):
                     Qt.ConnectionType.UniqueConnection,
                 )
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             self._update_refresh_rate(new_screen.refreshRate())
         else:
             self._update_refresh_rate()
@@ -179,7 +178,7 @@ class LyricsStage(QWidget):
                             Qt.ConnectionType.UniqueConnection,
                         )
                     except Exception:
-                        pass
+                        _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         self._update_refresh_rate()
 
     def _show_toast(self, text: str) -> None:

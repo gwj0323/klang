@@ -1,5 +1,5 @@
+import logging as _logging
 import io
-import json
 import logging
 import os
 import uuid
@@ -13,9 +13,7 @@ import requests
 logger = logging.getLogger("NeteaseService")
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage
 import qrcode
-from PIL import Image
 
 import pyncm
 from qt6_player.services.secret_store import encrypt_obj, decrypt_obj
@@ -144,7 +142,7 @@ class NeteaseCloudManager(QObject):
                     if f.is_file():
                         total += f.stat().st_size
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return total
 
     def get_cache_count(self) -> int:
@@ -155,7 +153,7 @@ class NeteaseCloudManager(QObject):
                     if f.is_file():
                         count += 1
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return count
 
     def get_cache_size_str(self) -> str:
@@ -180,9 +178,9 @@ class NeteaseCloudManager(QObject):
                             count += 1
                             freed += sz
                         except Exception:
-                            pass
+                            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return count, freed
 
     def set_cache_limit_mb(self, limit_mb: int) -> None:
@@ -197,7 +195,7 @@ class NeteaseCloudManager(QObject):
         try:
             os.utime(path, None)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _enforce_cache_quota(self) -> None:
         """当总缓存超出配额时，按 LRU (最旧访问/修改时间) 淘汰清理至配额的 85%"""
@@ -228,7 +226,7 @@ class NeteaseCloudManager(QObject):
                     if total_size <= target_bytes:
                         break
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         except Exception as e:
             logger.warning(f"淘汰网易云缓存异常: {e}")
 
@@ -315,7 +313,7 @@ class NeteaseCloudManager(QObject):
                     self._save_session_state()
                     self.loginStatusChanged.emit(False, {})
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
     def _save_session_state(self) -> None:
         sess = GetCurrentSession()
@@ -542,7 +540,7 @@ class NeteaseCloudManager(QObject):
                     self.user_playlists = cleaned
                     self.playlistsLoaded.emit(cleaned)
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         threading.Thread(target=_do_fetch, daemon=True).start()
         return self.user_playlists
@@ -555,7 +553,7 @@ class NeteaseCloudManager(QObject):
                 songs = res["data"]["dailySongs"]
                 return self._parse_songs_to_tracks(songs)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return []
 
     def get_playlist_tracks(self, playlist_id: int) -> List[NordicTrack]:
@@ -580,7 +578,7 @@ class NeteaseCloudManager(QObject):
                 tracks_data = pl.get("tracks", [])
                 return self._parse_songs_to_tracks(tracks_data)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return []
 
     def fetch_daily_recommend_async(self) -> None:
@@ -673,11 +671,11 @@ class NeteaseCloudManager(QObject):
                         try:
                             tmp_p.unlink()
                         except Exception:
-                            pass
+                            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
                 if p.exists() and p.stat().st_size > 1024:
                     return str(p.resolve())
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return None
 
     def _find_cached_audio(self, song_id: str) -> Optional[str]:
@@ -823,12 +821,12 @@ class NeteaseCloudManager(QObject):
                 try:
                     resp.close()
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
             if tmp_cache.exists():
                 try:
                     tmp_cache.unlink()
                 except Exception:
-                    pass
+                    _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         return None
 
@@ -882,7 +880,7 @@ class NeteaseCloudManager(QObject):
                             "level": str(item.get("level") or lvl),
                         }
             except Exception:
-                pass
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         try:
             res = track.GetTrackAudio([song_id], quality="standard")
@@ -898,7 +896,7 @@ class NeteaseCloudManager(QObject):
                         "level": "standard",
                     }
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
 
         return {}
 
@@ -921,7 +919,7 @@ class NeteaseCloudManager(QObject):
                     track_obj.lyrics = parsed
                     return parsed
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
         return []
 
 
