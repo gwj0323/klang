@@ -1932,7 +1932,18 @@ class NavigationPane(QWidget):
             if btn.index == index:
                 btn.refresh_thumbnail()
                 btn.update()
-        self._apply_visibility_filter()
+        # 批量刮削时每首歌完成都会调用；合并成一次过滤，避免 O(n²)
+        self._schedule_visibility_filter()
+
+    def _schedule_visibility_filter(self) -> None:
+        timer = getattr(self, "_vis_filter_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(60)
+            timer.timeout.connect(self._apply_visibility_filter)
+            self._vis_filter_timer = timer
+        timer.start()
 
     def _on_item_clicked(self, index: int) -> None:
         self.set_active_index(index)
