@@ -1,7 +1,7 @@
 import random
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from PyQt6.QtCore import (
     QThread,
     pyqtSignal,
@@ -185,6 +185,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self.tracks: List[NordicTrack] = restore_tracks_from_state(self._saved_state)
         self.local_tracks: List[NordicTrack] = list(self.tracks)
         self._netease_load_seq: int = 0
+        self._scrape_queue: list = []
         init_idx = int(self._saved_state.get("last_track_index", 0))
         if not (0 <= init_idx < len(self.tracks)):
             init_idx = 0
@@ -1503,16 +1504,28 @@ class NordicWinUI3Window(AcrylicWindow):
         if has_real_lyrics and has_cover:
             return
 
-        worker = AutoScrapeWorker(
-            track,
-            need_lyrics=(not has_real_lyrics),
-            need_cover=(not has_cover),
-            parent=None,
-        )
-        worker.scrapeCompleted.connect(self._on_auto_scrape_completed)
-        worker.finished.connect(lambda w=worker: self._active_workers.remove(w) if w in self._active_workers else None)
-        self._active_workers.append(worker)
-        worker.start()
+        if any(t is track for t in self._scrape_queue):
+            return
+        self._scrape_queue.append((track, not has_real_lyrics, not has_cover))
+        self._pump_scrape_queue()
+
+    _MAX_CONCURRENT_SCRAPES = 3
+
+    def _pump_scrape_queue(self) -> None:
+        """限制并发：最多同时 3 个刮削线程，其余排队，避免导入大量歌曲时一次性打出海量请求。"""
+        while self._scrape_queue and len(self._active_workers) < self._MAX_CONCURRENT_SCRAPES:
+            track, need_lyrics, need_cover = self._scrape_queue.pop(0)
+            worker = AutoScrapeWorker(track, need_lyrics=need_lyrics, need_cover=need_cover, parent=None)
+            worker.scrapeCompleted.connect(self._on_auto_scrape_completed)
+
+            def _done(w=worker):
+                if w in self._active_workers:
+                    self._active_workers.remove(w)
+                self._pump_scrape_queue()
+
+            worker.finished.connect(_done)
+            self._active_workers.append(worker)
+            worker.start()
 
     def _on_auto_scrape_completed(
         self,
@@ -1526,7 +1539,9 @@ class NordicWinUI3Window(AcrylicWindow):
                 if lyrics:
                     t.lyrics = lyrics
                 if cover_bytes:
-                    t.cover_bytes = cover_bytes
+                    # 封面已落盘到缓存目录并写入 cover_path 时，不再在内存里保留原始字节
+                    if not (t.cover_path and Path(t.cover_path).is_file()):
+                        t.cover_bytes = cover_bytes
                     t.invalidate_cover_cache()
                 if album_name and not t.album:
                     t.album = album_name
