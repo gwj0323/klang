@@ -52,8 +52,25 @@ def _install_safe_excepthook() -> None:
         pass
     log_file = log_dir / "crash.log"
 
+    last_msg = {"text": "", "count": 0}
+
     def _hook(exc_type, exc_value, exc_tb) -> None:
         msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        # 同一异常在定时器里每 10ms 重复一次时，只记录第一次，避免日志被刷爆
+        if msg == last_msg["text"]:
+            last_msg["count"] += 1
+            if last_msg["count"] > 1 and last_msg["count"] % 1000 != 0:
+                return
+        else:
+            last_msg["text"], last_msg["count"] = msg, 1
+        try:
+            # 超过 1 MB 轮转为 crash.log.1（只保留一份旧日志）
+            if log_file.exists() and log_file.stat().st_size > 1024 * 1024:
+                backup = log_file.with_suffix(".log.1")
+                backup.unlink(missing_ok=True)
+                log_file.replace(backup)
+        except Exception:
+            pass
         try:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(f"\n[{datetime.datetime.now().isoformat()}]\n{msg}")
