@@ -212,13 +212,15 @@ class DolbyAtmosSpatializer:
         if n == 0:
             return stereo_in
 
-        if abs(self._cur_wet_gain - self._target_wet_gain) > 1e-4:
+        fading = abs(self._cur_wet_gain - self._target_wet_gain) > 1e-4
+        if fading:
             wet_ramp = np.linspace(self._cur_wet_gain, self._target_wet_gain, n, dtype=np.float64)
             self._cur_wet_gain = self._target_wet_gain
         else:
             wet_ramp = self._cur_wet_gain
 
-        if self._cur_wet_gain <= 0.001 and self._target_wet_gain <= 0.001:
+        # 正在淡出（刚切到 off）的这一块仍要走完整渲染，否则湿声会被瞬间切断产生爆音
+        if not fading and self._cur_wet_gain <= 0.001 and self._target_wet_gain <= 0.001:
             # 空间声场关闭：多声道输出仍需返回 target_channels 行（前左/前右直通，其余补零）
             if target_channels <= stereo_in.shape[0]:
                 return stereo_in
