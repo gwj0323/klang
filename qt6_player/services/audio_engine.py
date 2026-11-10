@@ -219,7 +219,12 @@ class DolbyAtmosSpatializer:
             wet_ramp = self._cur_wet_gain
 
         if self._cur_wet_gain <= 0.001 and self._target_wet_gain <= 0.001:
-            return stereo_in
+            # 空间声场关闭：多声道输出仍需返回 target_channels 行（前左/前右直通，其余补零）
+            if target_channels <= stereo_in.shape[0]:
+                return stereo_in
+            padded = np.zeros((target_channels, n), dtype=stereo_in.dtype)
+            padded[: stereo_in.shape[0]] = stereo_in
+            return padded
 
         L = stereo_in[0]
         R = stereo_in[1]

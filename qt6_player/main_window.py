@@ -1668,6 +1668,8 @@ class NordicWinUI3Window(AcrylicWindow):
         auto_play: bool = True,
         is_auto_transition: bool = False
     ) -> None:
+        # 任何新的选曲请求都使之前尚未完成的网易云异步加载回调失效
+        self._netease_load_seq += 1
         if not track.track_id.startswith("netease_"):
             self.audio.load_track(track, auto_play=auto_play, is_auto_transition=is_auto_transition)
             return

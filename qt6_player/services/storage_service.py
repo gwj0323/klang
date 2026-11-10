@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -87,16 +88,28 @@ def load_player_state() -> Dict[str, Any]:
     }
     if not _CONFIG_PATH.is_file():
         return default_state
-    try:
-        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    for candidate in (_CONFIG_PATH, _CONFIG_PATH.with_suffix(".bak")):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            if candidate == _CONFIG_PATH:
+                # 主文件损坏：保留一份副本供人工恢复，并尝试 .bak
+                try:
+                    shutil.copy2(_CONFIG_PATH, _CONFIG_PATH.with_suffix(".corrupt"))
+                except Exception:
+                    pass
+            continue
         if isinstance(data, dict):
             default_state.update(data)
-    except Exception:
-        pass
+            break
     return default_state
 
 
 _SAVE_LOCK = threading.Lock()
+
+# 启动时文件暂时不可用（外接盘/NAS 未挂载等）的曲目原始条目：
+# 不加入播放列表，但保存时原样保留，避免收藏、歌词偏移、歌词缓存被永久抹掉。
+_UNAVAILABLE_ENTRIES: Dict[str, Dict[str, Any]] = {}
 
 
 def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
@@ -108,17 +121,15 @@ def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
                 json.dumps(safe_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            if _CONFIG_PATH.is_file():
+                try:
+                    shutil.copy2(_CONFIG_PATH, _CONFIG_PATH.with_suffix(".bak"))
+                except Exception:
+                    pass
             tmp_file.replace(_CONFIG_PATH)
             return True
         except Exception:
-            try:
-                _CONFIG_PATH.write_text(
-                    json.dumps(safe_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                return True
-            except Exception:
-                return False
+            return False
 
 
 def save_player_state(
@@ -182,6 +193,14 @@ def save_player_state(
                 "lyric_offset": float(t.lyric_offset),
                 "cover_path": str(t.cover_path) if t.cover_path else "",
             }
+
+    present_ids = {str(t.track_id) for t in tracks}
+    for tid, raw in list(_UNAVAILABLE_ENTRIES.items()):
+        if tid in present_ids:
+            _UNAVAILABLE_ENTRIES.pop(tid, None)
+            continue
+        playlist_data.append(raw)
+        local_tracks_data.append(raw)
 
     current_state = load_player_state()
     payload = dict(current_state)
@@ -277,7 +296,10 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
             if tid in _LEGACY_BUILTIN_IDS or tid.startswith("netease_"):
                 continue
             fp = item.get("file_path")
-            if not fp or not Path(fp).is_file():
+            if not fp:
+                continue
+            if not Path(fp).is_file():
+                _UNAVAILABLE_ENTRIES[tid] = dict(item)
                 continue
             saved_cov = item.get("cover_path")
             valid_cov = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
@@ -331,7 +353,10 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
         if tid in _LEGACY_BUILTIN_IDS or tid.startswith("netease_"):
             continue
         fp = item.get("file_path")
-        if not fp or not Path(fp).is_file():
+        if not fp:
+            continue
+        if not Path(fp).is_file():
+            _UNAVAILABLE_ENTRIES.setdefault(tid, dict(item))
             continue
         tr = create_track_from_file(fp, index_hint=len(tracks) + idx)
         _apply_saved_meta_if_valid(tr, item)

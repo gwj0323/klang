@@ -30,6 +30,8 @@ venv.bak/
 
 # User data & cache
 player_state.json
+player_state.bak
+player_state.corrupt
 .cache/
 cache/
 *.log
