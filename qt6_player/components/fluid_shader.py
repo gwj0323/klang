@@ -14,7 +14,7 @@ from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, QPointF
-from PyQt6.QtGui import QColor, QImage, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPixmap, QSurfaceFormat
 from PyQt6.QtOpenGL import (
     QOpenGLShader,
     QOpenGLShaderProgram,
@@ -355,9 +355,13 @@ class FluidMeshShaderWidget(QOpenGLWidget):
 
         self._loc = {}
 
-        self._anim_timer = QTimer(self)
-        self._anim_timer.setInterval(16)
-        self._anim_timer.timeout.connect(self._on_tick)
+        # 垂直同步：交换间隔 1，让 frameSwapped 以显示器刷新率节拍触发
+        fmt = QSurfaceFormat(self.format())
+        fmt.setSwapInterval(1)
+        self.setFormat(fmt)
+
+        # 不再自带定时器：由沉浸窗口的统一帧循环调用 advance(dt) 驱动，避免与主窗口定时器相互错位
+        self._animating = False
         self._initialized = False
         self._init_failed = False
         self._first_palette = True
@@ -369,15 +373,14 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         return self.isVisible() and self._initialized and not self._init_failed
 
     def start_animation(self):
-        if not self._anim_timer.isActive():
-            self._anim_timer.start()
+        self._animating = True
 
     def stop_animation(self):
-        if self._anim_timer.isActive():
-            self._anim_timer.stop()
+        self._animating = False
 
     def set_fps(self, fps: int):
-        self._anim_timer.setInterval(7 if fps >= 100 else 16)
+        # 帧节拍由沉浸窗口统一驱动，此处保留接口兼容
+        pass
 
     def set_energy(self, energy: float):
         self._target_energy = max(0.0, min(1.0, float(energy)))
@@ -413,20 +416,26 @@ class FluidMeshShaderWidget(QOpenGLWidget):
     def _lerp_vec(cur, target, rate=0.08):
         return [c + (t - c) * rate for c, t in zip(cur, target)]
 
-    def _on_tick(self):
-        dt = self._anim_timer.interval() / 1000.0
+    def advance(self, dt: float):
+        """按真实帧间隔推进一帧并请求重绘（由沉浸窗口的统一帧循环调用）。"""
+        if not self._animating:
+            return
+        dt = max(0.001, min(0.05, float(dt)))
         self._time += dt
-        self._energy += (self._target_energy - self._energy) * 0.18
-        self._target_energy *= 0.94
+        # 能量平滑原按 ~60Hz 固定系数设计，换算为与帧率无关的指数衰减
+        k = dt * 60.0
+        self._energy += (self._target_energy - self._energy) * (1.0 - (1.0 - 0.18) ** k)
+        self._target_energy *= 0.94 ** k
 
         if self._tex_mix < 1.0:
             self._tex_mix = min(1.0, self._tex_mix + dt / 1.2)  # 1.2 秒交叉淡入
 
-        self._c_base_cur = self._lerp_vec(self._c_base_cur, self._c_base_target)
-        self._c1_cur = self._lerp_vec(self._c1_cur, self._c1_target)
-        self._c2_cur = self._lerp_vec(self._c2_cur, self._c2_target)
-        self._c3_cur = self._lerp_vec(self._c3_cur, self._c3_target)
-        self._c4_cur = self._lerp_vec(self._c4_cur, self._c4_target)
+        rate = 1.0 - (1.0 - 0.08) ** k
+        self._c_base_cur = self._lerp_vec(self._c_base_cur, self._c_base_target, rate)
+        self._c1_cur = self._lerp_vec(self._c1_cur, self._c1_target, rate)
+        self._c2_cur = self._lerp_vec(self._c2_cur, self._c2_target, rate)
+        self._c3_cur = self._lerp_vec(self._c3_cur, self._c3_target, rate)
+        self._c4_cur = self._lerp_vec(self._c4_cur, self._c4_target, rate)
         self.update()
 
     # ---------- GL ----------

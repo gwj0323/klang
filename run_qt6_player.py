@@ -32,7 +32,7 @@ if sys.platform == "win32":
         pass
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QSurfaceFormat
 from PyQt6.QtWidgets import QApplication
 
 from qt6_player.theme.nordic_palette import apply_apple_sans_globally
@@ -89,6 +89,10 @@ def main() -> int:
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
+    # 垂直同步：沉浸模式帧循环由 frameSwapped 驱动，需要交换间隔 = 1（必须在创建 QApplication 之前设置）
+    _fmt = QSurfaceFormat()
+    _fmt.setSwapInterval(1)
+    QSurfaceFormat.setDefaultFormat(_fmt)
     app = QApplication(sys.argv)
     app.setApplicationName("Klang")
 

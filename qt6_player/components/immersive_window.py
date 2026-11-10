@@ -1818,18 +1818,21 @@ class ImmersiveFullscreenWindow(QWidget):
 
         # 动画与歌词刷新率控制 (默认 120 FPS 原生高刷)
         self.target_fps: int = 120
-        self._frame_clock = QElapsedTimer()
-        self._frame_clock.start()
+        # 帧间隔用高精度时钟（QElapsedTimer 仅毫秒整数，8/9ms 交替会造成滚动微抖）
+        self._last_frame_t: float = time.perf_counter()
 
+        # 120 FPS 模式且 GPU 背景可用时，由 GPU 的 frameSwapped（垂直同步）驱动帧循环；
+        # 定时器仅作兜底看门狗 / 60 FPS 模式 / CPU 降级模式的驱动源
         self._render_timer = QTimer(self)
         self._render_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._render_timer.setInterval(7)
-        self._render_timer.timeout.connect(self._on_animation_frame)
+        self._render_timer.timeout.connect(self._on_render_timer)
 
         self._setup_ui()
         self.fluid_shader = FluidMeshShaderWidget(self)
         self.fluid_shader.setGeometry(self.rect())
         self.fluid_shader.lower()
+        self.fluid_shader.frameSwapped.connect(self._on_frame_swapped)
 
     def _setup_ui(self) -> None:
         root_vbox = QVBoxLayout(self)
@@ -2144,8 +2147,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self._top_opacity_eff.setEnabled(False)
         self.artwork_view.controls_opacity = 1.0
 
-        if hasattr(self, "_frame_clock"):
-            self._frame_clock.restart()
+        self._last_frame_t = time.perf_counter()
         if hasattr(self, "fluid_shader"):
             self.fluid_shader.setGeometry(self.rect())
             self.fluid_shader.lower()
@@ -2283,12 +2285,34 @@ class ImmersiveFullscreenWindow(QWidget):
         b = int(c_cur.blue() + (c_tar.blue() - c_cur.blue()) * factor)
         return QColor(r, g, b)
 
+    def _vsync_driven(self) -> bool:
+        return (
+            self.target_fps == 120
+            and hasattr(self, "fluid_shader")
+            and self.fluid_shader.gpu_active
+        )
+
+    def _on_frame_swapped(self) -> None:
+        """GPU 一帧交换完成（垂直同步节拍）→ 立即推进下一帧，形成与显示器刷新对齐的帧循环。"""
+        if not self._render_timer.isActive() or not self._vsync_driven():
+            return
+        since = time.perf_counter() - self._last_frame_t
+        if since < 0.004:
+            # 驱动未真正阻塞垂直同步时防止空转烧 GPU：最多约 250Hz
+            QTimer.singleShot(max(1, int((0.004 - since) * 1000)), self._on_frame_swapped)
+            return
+        self._on_animation_frame()
+
+    def _on_render_timer(self) -> None:
+        # 垂直同步驱动正常工作时（最近一帧很新）定时器不重复推帧，仅在帧循环停摆时兜底
+        if self._vsync_driven() and (time.perf_counter() - self._last_frame_t) < 0.03:
+            return
+        self._on_animation_frame()
+
     def _on_animation_frame(self) -> None:
-        if hasattr(self, "_frame_clock"):
-            elapsed_ms = self._frame_clock.restart()
-            dt = max(0.001, min(0.05, elapsed_ms / 1000.0))
-        else:
-            dt = 0.008 if self.target_fps == 120 else 0.016
+        now_t = time.perf_counter()
+        dt = max(0.001, min(0.05, now_t - self._last_frame_t))
+        self._last_frame_t = now_t
 
         # 色彩渐变插值平滑推进 (无级指数阻尼，与帧率解耦)
         col_rate = min(1.0, 1.0 - math.exp(-3.5 * dt))
@@ -2336,6 +2360,9 @@ class ImmersiveFullscreenWindow(QWidget):
                 self._last_aurora_ms = now_ms
                 self._render_aurora_buffer(240, 135)
 
+        # GPU 背景与主窗口在同一帧内一起标脏，合成一次、交换一次
+        if hasattr(self, "fluid_shader"):
+            self.fluid_shader.advance(dt)
         self.update()
 
     def _render_aurora_buffer(self, bw: int, bh: int) -> None:
