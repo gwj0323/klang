@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import shutil
 import struct
 import time
 from pathlib import Path
@@ -857,6 +858,19 @@ def write_metadata_to_audio_file(
 
     ext = p.suffix.lower()
     is_cue_subtrack = bool(track.cue_path or track.start_time > 0.0 or track.end_time > 0.0)
+    if is_cue_subtrack:
+        # CUE 分轨对应的是一个整轨音频文件，把某一轨的歌手/专辑/封面写进去会污染整轨文件，因此不写入
+        return False, "CUE 分轨对应整轨文件，为避免把某一轨的信息写进整轨文件，已跳过写入内嵌标签"
+
+    # 原地改写前先备份到应用数据目录（每个文件只保留最近一份；超大文件跳过以免占满磁盘）
+    try:
+        if p.stat().st_size <= 300 * 1024 * 1024:
+            bak_dir = _COVER_CACHE_DIR.parent / "tag_backups"
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            key = hashlib.md5(str(p.resolve()).encode("utf-8", errors="ignore")).hexdigest()[:16]
+            shutil.copy2(p, bak_dir / f"{key}{p.suffix}")
+    except Exception:
+        pass
 
     # 准备封面字节与 MIME 类型
     cov_data: Optional[bytes] = track.cover_bytes
