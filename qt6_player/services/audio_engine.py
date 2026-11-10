@@ -1076,6 +1076,7 @@ class NordicAudioEngine(QObject):
         # ReplayGain 响度均衡开关
         self.replay_gain_enabled: bool = False
         self._rms_rg_computed: bool = False
+        self._rms_rg_provisional_done: bool = False
         self._dna_computed: bool = False
 
         # Klang 听感控制
@@ -1369,11 +1370,19 @@ class NordicAudioEngine(QObject):
             self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
             return
 
-        # 当音频标签内未写入 REPLAYGAIN_TRACK_GAIN 时，基于已解码 PCM 的 RMS 能量实时计算动态响度归一化 (目标 -16.5 dBFS)
-        total_bytes = len(self._decoded_raw_bytes)
-        if total_bytes >= self._sample_rate * 4 * 2:
-            # 取前 25 秒或中间段采样计算 RMS 与峰值，避免片头静音干扰
-            sample_slice = self._decoded_raw_bytes[: min(total_bytes, self._sample_rate * 4 * 25)]
+        # 当音频标签内未写入 REPLAYGAIN_TRACK_GAIN 时，基于已解码 PCM 的 RMS 能量动态估算响度 (目标 -16.5 dBFS)。
+        # 两阶段：解码到 3 秒先给一个保守的临时增益（范围 -6~+4 dB，不写回曲目、不锁定），
+        # 解码满 25 秒后再算最终增益并锁定。CUE 分轨从该轨的起始偏移开始量，而不是整轨文件的开头。
+        sr_bytes = self._sample_rate * 4
+        offset_bytes = int(max(0.0, float(getattr(track, "start_time", 0.0) or 0.0)) * self._sample_rate) * 4
+        avail = len(self._decoded_raw_bytes) - offset_bytes
+        window = sr_bytes * 25
+        if avail >= sr_bytes * 2:
+            is_final = avail >= window
+            if not is_final and self._rms_rg_provisional_done:
+                return
+            sample_slice = bytes(self._decoded_raw_bytes[offset_bytes : offset_bytes + min(avail, window)])
+            sample_slice = sample_slice[: (len(sample_slice) // 4) * 4]
             pcm = np.frombuffer(sample_slice, dtype=np.int16).astype(np.float32) / 32768.0
             abs_pcm = np.abs(pcm)
             active = pcm[abs_pcm > 0.008]
@@ -1382,11 +1391,16 @@ class NordicAudioEngine(QObject):
                 peak = float(np.max(abs_pcm))
                 if rms > 1e-4:
                     rms_db = 20.0 * math.log10(rms)
-                    est_gain_db = max(-10.0, min(7.5, -16.5 - rms_db))
-                    track.replay_gain_db = round(est_gain_db, 2)
-                    track.replay_peak = round(peak, 4)
-                    self._rms_rg_computed = True
-                    self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
+                    lo, hi = (-10.0, 7.5) if is_final else (-6.0, 4.0)
+                    est_gain_db = max(lo, min(hi, -16.5 - rms_db))
+                    if is_final:
+                        track.replay_gain_db = round(est_gain_db, 2)
+                        track.replay_peak = round(peak, 4)
+                        self._rms_rg_computed = True
+                        self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
+                    else:
+                        self._rms_rg_provisional_done = True
+                        self.dsp.set_replay_gain(True, round(est_gain_db, 2), round(peak, 4))
                     return
 
         self.dsp.set_replay_gain(True, 0.0, None)
@@ -1521,7 +1535,13 @@ class NordicAudioEngine(QObject):
             and not self._rms_rg_computed
             and self.current_track is not None
             and self.current_track.replay_gain_db is None
-            and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 3
+            and len(self._decoded_raw_bytes)
+            >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 3) * 4
+            and (
+                not self._rms_rg_provisional_done
+                or len(self._decoded_raw_bytes)
+                >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 25) * 4
+            )
         ):
             self._update_track_replay_gain()
         if not self._dna_computed and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 14:
@@ -1695,6 +1715,7 @@ class NordicAudioEngine(QObject):
         else:
             self._initial_sink_fed = True
         self._rms_rg_computed = False
+        self._rms_rg_provisional_done = False
         self._dna_computed = False
 
         if not is_auto_transition:
