@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 import numpy as np
-from scipy.signal import sosfilt, butter
+from scipy.signal import sosfilt, butter, lfilter, lfiltic
 
 from qt6_player.services.headphone_eq import HEADPHONE_PROFILES, build_headphone_sos
 
@@ -219,7 +219,12 @@ class DolbyAtmosSpatializer:
             wet_ramp = self._cur_wet_gain
 
         if self._cur_wet_gain <= 0.001 and self._target_wet_gain <= 0.001:
-            return stereo_in
+            # 空间声场关闭：多声道输出仍需返回 target_channels 行（前左/前右直通，其余补零）
+            if target_channels <= stereo_in.shape[0]:
+                return stereo_in
+            padded = np.zeros((target_channels, n), dtype=stereo_in.dtype)
+            padded[: stereo_in.shape[0]] = stereo_in
+            return padded
 
         L = stereo_in[0]
         R = stereo_in[1]
@@ -245,17 +250,13 @@ class DolbyAtmosSpatializer:
         itd_samples = max(1, int(round(self.sample_rate * 0.00025)))  # 0.25ms
         m_cross = self._delay_ring[0, (idx_vec - itd_samples) & self.RING_MASK]
         alpha_shadow = 0.35
-        shadow_l = np.empty(n, dtype=np.float64)
-        shadow_r = np.empty(n, dtype=np.float64)
-        prev_l = self._head_shadow_l
-        prev_r = self._head_shadow_r
-        for i in range(n):
-            prev_l += alpha_shadow * (m_cross[i] - prev_l)
-            prev_r += alpha_shadow * (m_cross[i] - prev_r)
-            shadow_l[i] = prev_l
-            shadow_r[i] = prev_r
-        self._head_shadow_l = prev_l
-        self._head_shadow_r = prev_r
+        # 一阶低通 y[i] = y[i-1] + a*(x[i]-y[i-1])，用 lfilter 向量化（带状态延续），替代逐采样 Python 循环
+        shadow_b = np.array([alpha_shadow], dtype=np.float64)
+        shadow_a = np.array([1.0, -(1.0 - alpha_shadow)], dtype=np.float64)
+        shadow_l, _ = lfilter(shadow_b, shadow_a, m_cross, zi=lfiltic(shadow_b, shadow_a, [self._head_shadow_l]))
+        shadow_r, _ = lfilter(shadow_b, shadow_a, m_cross, zi=lfiltic(shadow_b, shadow_a, [self._head_shadow_r]))
+        self._head_shadow_l = float(shadow_l[-1])
+        self._head_shadow_r = float(shadow_r[-1])
 
         # 5. 杜比天空声道高度感知渲染 (Height Elevation Objects)
         if self.mode == "dolby_atmos" and self.spatial_height > 0.05:
@@ -910,7 +911,6 @@ class ContinuousDspStreamDevice(QIODevice):
             return self._get_silence_bytes(eng._channels)
 
         advance_cursor = eng.is_playing or eng._preview_frames_remaining > 0
-        tt_start = 1.0
         self._tt_speed = 1.0
 
         if abs(rate - 1.0) < 0.01:
@@ -933,14 +933,9 @@ class ContinuousDspStreamDevice(QIODevice):
             if advance_cursor:
                 eng._frame_cursor = end_frame
         else:
-            if tt_start < 0.995:
-                step_vec = rate * np.linspace(tt_start, tt_end, n_frames, dtype=np.float64)
-                float_indices = cur_frame + (np.cumsum(step_vec) - step_vec[0])
-                next_cursor = min(target_end_frame, int(float_indices[-1] + step_vec[-1]))
-            else:
-                step = rate
-                float_indices = cur_frame + np.arange(n_frames, dtype=np.float64) * step
-                next_cursor = min(target_end_frame, int(cur_frame + n_frames * step))
+            step = rate
+            float_indices = cur_frame + np.arange(n_frames, dtype=np.float64) * step
+            next_cursor = min(target_end_frame, int(cur_frame + n_frames * step))
 
             valid_mask = float_indices < (target_end_frame - 1)
             clamped_idx = np.clip(float_indices, 0, max(0, target_end_frame - 2))
@@ -1071,6 +1066,7 @@ class NordicAudioEngine(QObject):
         # ReplayGain 响度均衡开关
         self.replay_gain_enabled: bool = False
         self._rms_rg_computed: bool = False
+        self._rms_rg_provisional_done: bool = False
         self._dna_computed: bool = False
 
         # Klang 听感控制
@@ -1277,8 +1273,13 @@ class NordicAudioEngine(QObject):
         end_byte = self._track_end_frame * 4 if self._track_end_frame > self._track_start_frame else total_bytes
         avail_span = min(total_bytes, end_byte) - start_byte
         if avail_span >= self._sample_rate * 4 * 12 or (self._decoder_finished and avail_span >= self._sample_rate * 4 * 3):
-            slice_bytes = self._decoded_raw_bytes[start_byte : min(total_bytes, end_byte)]
-            dna = compute_pcm_acoustic_dna(slice_bytes, self._sample_rate)
+            # 直接传整块缓冲区 + 帧范围，函数内部只会切出 12 秒窗口；不再先复制整首（CUE 整轨可达数百 MB）
+            dna = compute_pcm_acoustic_dna(
+                self._decoded_raw_bytes,
+                self._sample_rate,
+                start_frame=self._track_start_frame,
+                end_frame=min(total_bytes, end_byte) // 4,
+            )
             if dna:
                 track.acoustic_dna = dna
                 self._dna_computed = True
@@ -1364,11 +1365,19 @@ class NordicAudioEngine(QObject):
             self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
             return
 
-        # 当音频标签内未写入 REPLAYGAIN_TRACK_GAIN 时，基于已解码 PCM 的 RMS 能量实时计算动态响度归一化 (目标 -16.5 dBFS)
-        total_bytes = len(self._decoded_raw_bytes)
-        if total_bytes >= self._sample_rate * 4 * 2:
-            # 取前 25 秒或中间段采样计算 RMS 与峰值，避免片头静音干扰
-            sample_slice = self._decoded_raw_bytes[: min(total_bytes, self._sample_rate * 4 * 25)]
+        # 当音频标签内未写入 REPLAYGAIN_TRACK_GAIN 时，基于已解码 PCM 的 RMS 能量动态估算响度 (目标 -16.5 dBFS)。
+        # 两阶段：解码到 3 秒先给一个保守的临时增益（范围 -6~+4 dB，不写回曲目、不锁定），
+        # 解码满 25 秒后再算最终增益并锁定。CUE 分轨从该轨的起始偏移开始量，而不是整轨文件的开头。
+        sr_bytes = self._sample_rate * 4
+        offset_bytes = int(max(0.0, float(getattr(track, "start_time", 0.0) or 0.0)) * self._sample_rate) * 4
+        avail = len(self._decoded_raw_bytes) - offset_bytes
+        window = sr_bytes * 25
+        if avail >= sr_bytes * 2:
+            is_final = avail >= window
+            if not is_final and self._rms_rg_provisional_done:
+                return
+            sample_slice = bytes(self._decoded_raw_bytes[offset_bytes : offset_bytes + min(avail, window)])
+            sample_slice = sample_slice[: (len(sample_slice) // 4) * 4]
             pcm = np.frombuffer(sample_slice, dtype=np.int16).astype(np.float32) / 32768.0
             abs_pcm = np.abs(pcm)
             active = pcm[abs_pcm > 0.008]
@@ -1377,11 +1386,16 @@ class NordicAudioEngine(QObject):
                 peak = float(np.max(abs_pcm))
                 if rms > 1e-4:
                     rms_db = 20.0 * math.log10(rms)
-                    est_gain_db = max(-10.0, min(7.5, -16.5 - rms_db))
-                    track.replay_gain_db = round(est_gain_db, 2)
-                    track.replay_peak = round(peak, 4)
-                    self._rms_rg_computed = True
-                    self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
+                    lo, hi = (-10.0, 7.5) if is_final else (-6.0, 4.0)
+                    est_gain_db = max(lo, min(hi, -16.5 - rms_db))
+                    if is_final:
+                        track.replay_gain_db = round(est_gain_db, 2)
+                        track.replay_peak = round(peak, 4)
+                        self._rms_rg_computed = True
+                        self.dsp.set_replay_gain(True, track.replay_gain_db, track.replay_peak)
+                    else:
+                        self._rms_rg_provisional_done = True
+                        self.dsp.set_replay_gain(True, round(est_gain_db, 2), round(peak, 4))
                     return
 
         self.dsp.set_replay_gain(True, 0.0, None)
@@ -1516,7 +1530,13 @@ class NordicAudioEngine(QObject):
             and not self._rms_rg_computed
             and self.current_track is not None
             and self.current_track.replay_gain_db is None
-            and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 3
+            and len(self._decoded_raw_bytes)
+            >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 3) * 4
+            and (
+                not self._rms_rg_provisional_done
+                or len(self._decoded_raw_bytes)
+                >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 25) * 4
+            )
         ):
             self._update_track_replay_gain()
         if not self._dna_computed and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 14:
@@ -1690,6 +1710,7 @@ class NordicAudioEngine(QObject):
         else:
             self._initial_sink_fed = True
         self._rms_rg_computed = False
+        self._rms_rg_provisional_done = False
         self._dna_computed = False
 
         if not is_auto_transition:

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -254,6 +255,33 @@ def save_scraped_files_alongside_audio(
     return saved_cover_path
 
 
+def _norm_text(v: str) -> str:
+    v = re.sub(r"[\(（\[【].*?[\)）\]】]", "", v or "")
+    return re.sub(r"[^0-9a-z\u3040-\u30ff\u4e00-\u9fff]", "", v.lower())
+
+
+def pick_matching_candidate(
+    candidates: List["ScrapeCandidate"], title: str, artist: str = "", duration: float = 0.0
+) -> Optional["ScrapeCandidate"]:
+    """在候选中挑第一个与本地曲目确实匹配的：歌名一致（允许互相包含）、歌手有交集（双方都有时）、时长相差 ≤ 8 秒（双方都有时）。
+    都不匹配则返回 None，宁可不刮削也不写入错误的歌词/封面。"""
+    nt = _norm_text(title)
+    na = _norm_text("" if artist in ("未知歌手", "Unknown") else artist)
+    if not nt:
+        return None
+    for c in candidates:
+        ct = _norm_text(c.title)
+        if not ct or not (nt == ct or (min(len(nt), len(ct)) >= 2 and (nt in ct or ct in nt))):
+            continue
+        ca = _norm_text(c.artist)
+        if na and ca and not (na in ca or ca in na):
+            continue
+        if duration > 15.0 and c.duration > 15.0 and abs(duration - c.duration) > 8.0:
+            continue
+        return c
+    return None
+
+
 class AutoScrapeWorker(QThread):
     scrapeCompleted = pyqtSignal(str, list, object, str)
 
@@ -273,9 +301,9 @@ class AutoScrapeWorker(QThread):
         cover_url = ""
         album_name = self.track.album
 
-        ne_list = search_netease_candidates(query, limit=3)
-        if ne_list:
-            best = ne_list[0]
+        ne_list = search_netease_candidates(query, limit=5)
+        best = pick_matching_candidate(ne_list, self.track.title, artist_clean, self.track.duration)
+        if best is not None:
             if not album_name and best.album:
                 album_name = best.album
             p_lrc, t_lrc, c_url = fetch_netease_lyric_and_cover(best.song_id, best.cover_url)
@@ -285,13 +313,14 @@ class AutoScrapeWorker(QThread):
                 cover_url = c_url
 
         if self.need_lyrics and not primary_lrc.strip():
-            lrc_list = search_lrclib_candidates(query, limit=2)
+            lrc_list = search_lrclib_candidates(query, limit=5)
             if not lrc_list and artist_clean:
-                lrc_list = search_lrclib_candidates(self.track.title, limit=2)
-            if lrc_list:
-                primary_lrc = lrc_list[0].synced_lrc
-                if not album_name and lrc_list[0].album:
-                    album_name = lrc_list[0].album
+                lrc_list = search_lrclib_candidates(self.track.title, limit=5)
+            lrc_best = pick_matching_candidate(lrc_list, self.track.title, artist_clean, self.track.duration)
+            if lrc_best is not None:
+                primary_lrc = lrc_best.synced_lrc
+                if not album_name and lrc_best.album:
+                    album_name = lrc_best.album
 
         if self.need_cover and not cover_url:
             cover_url = fetch_itunes_cover_url(query) or fetch_itunes_cover_url(self.track.title)
@@ -300,13 +329,15 @@ class AutoScrapeWorker(QThread):
         parsed_lyrics: List[LyricLine] = parse_lrc_text(primary_lrc, trans_lrc) if primary_lrc.strip() else []
 
         if primary_lrc.strip() or cover_bytes or trans_lrc.strip():
+            # 自动刮削只把封面写进缓存目录，不往用户的音乐目录里写 .lrc/.jpg（歌词随曲库状态保存）；
+            # 想把文件保存到音频旁边，请使用手动刮削对话框
             saved_cov = save_scraped_files_alongside_audio(
-                self.track.file_path,
-                primary_lrc,
+                None,
+                "",
                 cover_bytes,
                 track_id=self.track.track_id,
                 overwrite=False,
-                trans_lrc=trans_lrc,
+                trans_lrc="",
             )
             if saved_cov:
                 self.track.cover_path = saved_cov

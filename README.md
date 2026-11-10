@@ -20,10 +20,10 @@ Klang 是一款基于 PyQt6 的 Windows 桌面音乐播放器。支持本地无�
 - **曲库管理**：支持扫描本地文件夹、自定义歌单、按歌手 / 专辑 / 目录树分类浏览与实时过滤。
 
 ### 网易云音乐集成
-- **扫码登录**：支持客户端扫码登录，Cookie 本地安全加密保存，启动时自动恢复会话。
+- **扫码登录**：支持客户端扫码登录，Cookie 本地加密保存（Windows 使用 DPAPI，仅当前 Windows 用户可解密），启动时自动恢复会话。
 - **歌单同步**：同步「我喜欢的音乐」、个人创建与收藏的歌单以及每日推荐。
 - **在线搜索**：切到网易云页面后搜索框自动支持云端曲库搜索，即点即播。
-- **多音质与离线缓存**：支持在标准、极高、无损 FLAC、Hi-Res 与超清母带间切换；支持设定本地缓存上限（500MB ~ 5GB 或不限），按 LRU 自动清理过期缓存。
+- **多音质与离线缓存**：支持在标准、极高、无损 FLAC、Hi-Res 与超清母带间切换；支持设定本地缓存上限（500MB ~ 5GB 或不限），按 LRU 自动清理过期缓存。注意：音质等级（含 Hi-Res / 超清母带）指下载的音源规格，播放管线目前统一解码为 44.1 kHz / 16-bit PCM 再输出，高采样率不会原样到达声卡。
 
 ### 界面与沉浸模式
 - **系统材质**：支持 Windows 11 Mica（云母）、Acrylic（亚克力）及经典纯色背景，支持深色 / 浅色主题切换。
@@ -64,11 +64,12 @@ Klang 是一款基于 PyQt6 的 Windows 桌面音乐播放器。支持本地无�
 
 ### 从源码运行
 
-推荐使用 `uv`：
+推荐使用 `uv`（项目目前没有 `pyproject.toml`，用 requirements.txt 安装依赖）：
 ```bash
 git clone https://github.com/gwj0323/klang.git
 cd klang
-uv sync
+uv venv
+uv pip install -r requirements.txt
 uv run python run_qt6_player.py
 ```
 

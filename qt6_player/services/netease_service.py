@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import os
+import uuid
 import sys
 import time
 import threading
@@ -17,6 +18,7 @@ import qrcode
 from PIL import Image
 
 import pyncm
+from qt6_player.services.secret_store import encrypt_obj, decrypt_obj
 from pyncm.apis import (
     WeapiCryptoRequest,
     GetCurrentSession,
@@ -189,6 +191,14 @@ class NeteaseCloudManager(QObject):
         update_player_state_fields({"netease_cache_limit_mb": self.cache_limit_mb})
         self._enforce_cache_quota()
 
+    @staticmethod
+    def _touch_cache_file(path: Path) -> None:
+        """Windows 通常不更新 atime，缓存淘汰（LRU）改靠 mtime：命中缓存时手动刷新"""
+        try:
+            os.utime(path, None)
+        except Exception:
+            pass
+
     def _enforce_cache_quota(self) -> None:
         """当总缓存超出配额时，按 LRU (最旧访问/修改时间) 淘汰清理至配额的 85%"""
         if self.cache_limit_mb <= 0:
@@ -203,7 +213,7 @@ class NeteaseCloudManager(QObject):
                 if f.is_file() and not f.name.endswith(".tmp"):
                     st = f.stat()
                     total_size += st.st_size
-                    access_time = max(st.st_atime, st.st_mtime)
+                    access_time = st.st_mtime
                     files.append((access_time, st.st_size, f))
 
             if total_size <= limit_bytes:
@@ -249,7 +259,8 @@ class NeteaseCloudManager(QObject):
     def _init_session(self) -> None:
         sess = self._create_fresh_session()
         state = load_player_state()
-        saved_cookies = state.get("netease_cookies")
+        # 优先读加密存储；兼容旧版本留下的明文 netease_cookies（下次保存时会迁移并清掉明文）
+        saved_cookies = decrypt_obj(state.get("netease_cookies_enc")) or state.get("netease_cookies")
         saved_profile = state.get("netease_profile")
 
         if saved_cookies and isinstance(saved_cookies, dict):
@@ -269,6 +280,10 @@ class NeteaseCloudManager(QObject):
                     "profile": saved_profile,
                 },
             }
+
+        # 旧版本留下的明文 Cookie：登录状态恢复后立即迁移为加密存储并清掉明文
+        if self.is_logged_in and state.get("netease_cookies") and not state.get("netease_cookies_enc"):
+            self._save_session_state()
 
         # 后台静默校验当前登录状态
         threading.Thread(target=self._verify_login_async, daemon=True).start()
@@ -307,7 +322,8 @@ class NeteaseCloudManager(QObject):
         cookies = sess.cookies.get_dict() if self.is_logged_in else {}
         profile = self.user_profile if self.is_logged_in else {}
         update_player_state_fields({
-            "netease_cookies": cookies,
+            "netease_cookies_enc": encrypt_obj(cookies) if cookies else "",
+            "netease_cookies": None,  # 清除旧版本留下的明文
             "netease_profile": profile,
         })
 
@@ -664,6 +680,21 @@ class NeteaseCloudManager(QObject):
             pass
         return None
 
+    def _find_cached_audio(self, song_id: str) -> Optional[str]:
+        """查找已缓存的音轨（文件名为 {id}_{音质}.{扩展名}），优先当前首选音质"""
+        try:
+            candidates = [
+                f for f in self._cache_dir.glob(f"{song_id}_*.*")
+                if f.suffix.lower() in (".flac", ".m4a", ".mp3", ".ogg") and f.stat().st_size > 10240
+            ]
+        except Exception:
+            return None
+        if not candidates:
+            return None
+        pref = f"{song_id}_{self.preferred_quality}."
+        candidates.sort(key=lambda f: (0 if f.name.startswith(pref) else 1, -f.stat().st_mtime))
+        return str(candidates[0].resolve())
+
     def _parse_songs_to_tracks(self, songs_data: List[Dict[str, Any]]) -> List[NordicTrack]:
         tracks: List[NordicTrack] = []
         for s in songs_data:
@@ -682,8 +713,7 @@ class NeteaseCloudManager(QObject):
             local_cover = self.get_cached_cover_path(song_id)
             final_cover = local_cover if local_cover else cover_url
 
-            cache_file = self._cache_dir / f"{song_id}.mp3"
-            local_audio = str(cache_file.resolve()) if cache_file.exists() and cache_file.stat().st_size > 10240 else None
+            local_audio = self._find_cached_audio(song_id)
 
             nt = NordicTrack(
                 track_id=f"netease_{song_id}",
@@ -729,6 +759,7 @@ class NeteaseCloudManager(QObject):
         for ext in ("flac", "m4a", "mp3", "ogg"):
             q_cache = self._cache_dir / f"{song_id}_{req_quality}.{ext}"
             if q_cache.exists() and q_cache.stat().st_size > 10240:
+                self._touch_cache_file(q_cache)
                 track_obj.file_path = str(q_cache.resolve())
                 self._apply_quality_metadata(track_obj, req_quality, ext)
                 return track_obj.file_path
@@ -745,11 +776,14 @@ class NeteaseCloudManager(QObject):
 
         final_cache = self._cache_dir / f"{song_id}_{actual_level}.{file_ext}"
         if final_cache.exists() and final_cache.stat().st_size > 10240:
+            self._touch_cache_file(final_cache)
             track_obj.file_path = str(final_cache.resolve())
             self._apply_quality_metadata(track_obj, actual_level, file_ext, br)
             return track_obj.file_path
 
-        tmp_cache = final_cache.with_suffix(".tmp")
+        # 每次下载使用独立临时文件名，避免同一首歌并发下载互相写坏
+        tmp_cache = final_cache.with_name(f"{final_cache.name}.{uuid.uuid4().hex[:8]}.tmp")
+        resp = None
         try:
             resp = requests.get(
                 url,
@@ -761,13 +795,22 @@ class NeteaseCloudManager(QObject):
                 timeout=(8, 45),
             )
             if resp.status_code in (200, 206):
+                expected = None
+                if not resp.headers.get("Content-Encoding"):
+                    try:
+                        expected = int(resp.headers.get("Content-Length", ""))
+                    except (TypeError, ValueError):
+                        expected = None
                 bytes_written = 0
                 with open(tmp_cache, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
                             bytes_written += len(chunk)
-                if bytes_written > 10240 and tmp_cache.exists():
+                # 被截断的下载（长度与 Content-Length 不符）不能当成有效缓存
+                if expected is not None and bytes_written != expected:
+                    logger.warning(f"网易云音轨下载不完整 [{song_id}]: {bytes_written}/{expected}")
+                elif bytes_written > 10240 and tmp_cache.exists():
                     tmp_cache.replace(final_cache)
                     track_obj.file_path = str(final_cache.resolve())
                     self._apply_quality_metadata(track_obj, actual_level, file_ext, br)
@@ -775,6 +818,12 @@ class NeteaseCloudManager(QObject):
                     return track_obj.file_path
         except Exception as e:
             logger.warning(f"下载网易云音轨异常 [{song_id}]: {e}")
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
             if tmp_cache.exists():
                 try:
                     tmp_cache.unlink()

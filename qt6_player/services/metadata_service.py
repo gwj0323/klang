@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import shutil
 import struct
 import time
 from pathlib import Path
@@ -255,6 +256,34 @@ def _parse_filename_artist_title(stem: str) -> Tuple[str, str]:
     return artist, title
 
 
+def _decode_text_bytes(raw: bytes) -> str:
+    """探测文本编码：BOM → UTF-8 → charset-normalizer → gb18030/big5/shift_jis。
+
+    gb18030 几乎不会解码失败，必须放在最后，否则日文(Shift-JIS)与繁体(Big5)会被读成乱码。
+    """
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16", errors="replace")
+    for enc in ("utf-8-sig",):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            pass
+    # charset-normalizer 是 requests 的依赖，必定可用；文本较长时对 GBK/Big5/Shift-JIS 的区分很可靠
+    try:
+        from charset_normalizer import from_bytes
+        best = from_bytes(raw).best()
+        if best is not None:
+            return str(best)
+    except Exception:
+        pass
+    for enc in ("gb18030", "big5", "shift_jis"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin1", errors="replace")
+
+
 def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]]:
     """查找音频同目录下的同名 .lrc 歌词、伴生翻译 .tr.lrc 歌词与封面图片"""
     folder = audio_path.parent
@@ -263,14 +292,11 @@ def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]
     trans_text = ""
 
     def _read_file_safe(candidate_path: Path) -> str:
-        for enc in ("utf-8", "utf-8-sig", "gb18030", "utf-16"):
-            try:
-                txt = candidate_path.read_text(encoding=enc)
-                if txt.strip():
-                    return txt
-            except Exception:
-                continue
-        return ""
+        try:
+            txt = _decode_text_bytes(candidate_path.read_bytes())
+        except Exception:
+            return ""
+        return txt if txt.strip() else ""
 
     lrc_candidate = folder / f"{stem}.lrc"
     if lrc_candidate.is_file():
@@ -295,7 +321,7 @@ def _find_local_lrc_and_cover(audio_path: Path) -> Tuple[str, str, Optional[str]
 
 
 
-def _parse_db_value(raw_val: object) -> Optional[float]:
+def _parse_db_value(raw_val: object, clamp: bool = True) -> Optional[float]:
     """从标签字符串（如 '-6.42 dB'、'+1.8 dB' 或列表）解析浮点数 dB 值"""
     if raw_val is None:
         return None
@@ -308,7 +334,7 @@ def _parse_db_value(raw_val: object) -> Optional[float]:
     if m:
         try:
             val = float(m.group(1))
-            return max(-24.0, min(18.0, val))
+            return max(-24.0, min(18.0, val)) if clamp else val
         except Exception:
             return None
     return None
@@ -381,7 +407,7 @@ def extract_audio_properties(file_path: str) -> dict:
                 if props["replay_gain_db"] is None:
                     for r128_key in ("R128_TRACK_GAIN", "r128_track_gain", "R128_ALBUM_GAIN"):
                         if r128_key in tags:
-                            raw_q78 = _parse_db_value(tags[r128_key])
+                            raw_q78 = _parse_db_value(tags[r128_key], clamp=False)
                             if raw_q78 is not None:
                                 # EBU R128 Q7.8 (-23 LUFS) 转换为 ReplayGain 2.0 (-18 LUFS) 基准 (+5 dB)
                                 props["replay_gain_db"] = max(-20.0, min(15.0, (raw_q78 / 256.0) + 5.0))
@@ -482,6 +508,26 @@ def extract_audio_properties(file_path: str) -> dict:
     return props
 
 
+_COVER_CACHE_DIR = Path(os.getenv("APPDATA", str(Path.home()))) / "Klang" / "cover_cache"
+
+
+def _spill_cover_to_cache(cover_bytes: Optional[bytes]) -> Optional[str]:
+    """把内嵌封面原图写入缓存目录（按内容哈希去重）并返回路径，避免原始字节常驻内存。失败返回 None。"""
+    if not cover_bytes:
+        return None
+    try:
+        ext = ".png" if cover_bytes.startswith(b"\x89PNG") else ".jpg"
+        target = _COVER_CACHE_DIR / (hashlib.sha1(cover_bytes).hexdigest()[:20] + ext)
+        if not target.is_file() or target.stat().st_size != len(cover_bytes):
+            _COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_bytes(cover_bytes)
+            tmp.replace(target)
+        return str(target)
+    except Exception:
+        return None
+
+
 def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
     """从本地音频文件构建 NordicTrack，自动解析标签、内嵌封面、同名 LRC 与高解析度音频参数"""
     path_obj = Path(file_path)
@@ -517,6 +563,12 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
             ]
         )
 
+    # 内嵌封面优先于文件夹封面（与原先 get_cover_pixmap 的取用顺序一致）；落盘后不再在内存里保留原始字节
+    spilled_cover = _spill_cover_to_cache(cover_bytes)
+    if spilled_cover:
+        local_cover_path = spilled_cover
+        cover_bytes = None
+
     palette = dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)])
     resolved_str = str(path_obj.resolve())
     stable_digest = hashlib.md5(resolved_str.encode("utf-8", errors="ignore")).hexdigest()[:12]
@@ -549,14 +601,11 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
 
 
 def _read_cue_text(cue_file: Path) -> str:
-    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk", "big5", "shift_jis", "utf-16", "latin1"):
-        try:
-            txt = cue_file.read_text(encoding=enc)
-            if "TRACK" in txt.upper() and "FILE" in txt.upper():
-                return txt
-        except Exception:
-            continue
-    return ""
+    try:
+        txt = _decode_text_bytes(cue_file.read_bytes())
+    except Exception:
+        return ""
+    return txt if ("TRACK" in txt.upper() and "FILE" in txt.upper()) else ""
 
 
 def _parse_cue_timecode(tc_str: str) -> float:
@@ -754,6 +803,12 @@ def parse_cue_file(cue_path: str, base_index_hint: int = 0) -> List[NordicTrack]
         digest_key = f"{resolved_cue_str}#{track_num:02d}"
         stable_digest = hashlib.md5(digest_key.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
+        cue_cover_path = loc_cov
+        cue_cover_bytes = cov_bytes
+        spilled = _spill_cover_to_cache(cov_bytes)
+        if spilled:
+            cue_cover_path, cue_cover_bytes = spilled, None
+
         result.append(
             NordicTrack(
                 track_id=f"cue-{stable_digest}-{track_num:02d}",
@@ -762,8 +817,8 @@ def parse_cue_file(cue_path: str, base_index_hint: int = 0) -> List[NordicTrack]
                 album=album_title,
                 duration=round(sub_dur, 2),
                 file_path=resolved_audio,
-                cover_path=loc_cov,
-                cover_bytes=cov_bytes,
+                cover_path=cue_cover_path,
+                cover_bytes=cue_cover_bytes,
                 sample_rate=props["sample_rate"],
                 bit_depth=props["bit_depth"],
                 bitrate_kbps=props["bitrate_kbps"],
@@ -803,6 +858,19 @@ def write_metadata_to_audio_file(
 
     ext = p.suffix.lower()
     is_cue_subtrack = bool(track.cue_path or track.start_time > 0.0 or track.end_time > 0.0)
+    if is_cue_subtrack:
+        # CUE 分轨对应的是一个整轨音频文件，把某一轨的歌手/专辑/封面写进去会污染整轨文件，因此不写入
+        return False, "CUE 分轨对应整轨文件，为避免把某一轨的信息写进整轨文件，已跳过写入内嵌标签"
+
+    # 原地改写前先备份到应用数据目录（每个文件只保留最近一份；超大文件跳过以免占满磁盘）
+    try:
+        if p.stat().st_size <= 300 * 1024 * 1024:
+            bak_dir = _COVER_CACHE_DIR.parent / "tag_backups"
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            key = hashlib.md5(str(p.resolve()).encode("utf-8", errors="ignore")).hexdigest()[:16]
+            shutil.copy2(p, bak_dir / f"{key}{p.suffix}")
+    except Exception:
+        pass
 
     # 准备封面字节与 MIME 类型
     cov_data: Optional[bytes] = track.cover_bytes

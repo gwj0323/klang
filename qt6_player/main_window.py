@@ -1,7 +1,7 @@
 import random
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from PyQt6.QtCore import (
     QThread,
     pyqtSignal,
@@ -185,6 +185,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self.tracks: List[NordicTrack] = restore_tracks_from_state(self._saved_state)
         self.local_tracks: List[NordicTrack] = list(self.tracks)
         self._netease_load_seq: int = 0
+        self._scrape_queue: list = []
         init_idx = int(self._saved_state.get("last_track_index", 0))
         if not (0 <= init_idx < len(self.tracks)):
             init_idx = 0
@@ -955,6 +956,7 @@ class NordicWinUI3Window(AcrylicWindow):
             self.schedule_save()
 
         dlg.metadataSaved.connect(_apply_meta)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def _on_lyric_offset_changed(self, new_offset: float) -> None:
@@ -1156,6 +1158,7 @@ class NordicWinUI3Window(AcrylicWindow):
             except Exception:
                 pass
         try:
+            dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
         finally:
             if is_fs and hasattr(self.immersive_window, "fluid_shader"):
@@ -1255,6 +1258,7 @@ class NordicWinUI3Window(AcrylicWindow):
             except Exception:
                 pass
         try:
+            dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
         finally:
             if is_fs and hasattr(self.immersive_window, "fluid_shader"):
@@ -1292,6 +1296,7 @@ class NordicWinUI3Window(AcrylicWindow):
 
         dlg.watchedFoldersChanged.connect(_on_changed)
         dlg.rescanRequested.connect(self._scan_watched_folders_async)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
         if self.watched_folders:
             self._scan_watched_folders_async()
@@ -1361,6 +1366,15 @@ class NordicWinUI3Window(AcrylicWindow):
         }
         existing_cues = {t.cue_path for t in self.local_tracks if t.cue_path}
         cue_covered_files = {t.file_path for t in self.local_tracks if t.file_path and t.cue_path}
+        # 一次性建索引，避免每个文件都线性扫描整个曲库（批量导入时是 O(n²)）
+        by_id: Dict[str, NordicTrack] = {t.track_id: t for t in self.local_tracks}
+        by_file: Dict[str, NordicTrack] = {
+            t.file_path: t for t in self.local_tracks if t.file_path and not t.cue_path
+        }
+        by_cue: Dict[str, List[NordicTrack]] = {}
+        for t in self.local_tracks:
+            if t.cue_path:
+                by_cue.setdefault(t.cue_path, []).append(t)
         first_new_index: Optional[int] = None
         added_count = 0
         newly_handled_tracks: List[NordicTrack] = []
@@ -1377,8 +1391,7 @@ class NordicWinUI3Window(AcrylicWindow):
 
             if suf == ".cue":
                 if norm_p in existing_cues:
-                    matching_cues = [t for t in self.local_tracks if t.cue_path == norm_p]
-                    newly_handled_tracks.extend(matching_cues)
+                    newly_handled_tracks.extend(by_cue.get(norm_p, []))
                     continue
                 cue_tracks = parse_cue_file(norm_p, base_index_hint=len(self.local_tracks))
                 if not cue_tracks:
@@ -1391,15 +1404,18 @@ class NordicWinUI3Window(AcrylicWindow):
                     t for t in self.local_tracks
                     if not (t.file_path in ref_audio_paths and not t.cue_path)
                 ]
+                for ref_ap in ref_audio_paths:
+                    by_file.pop(ref_ap, None)
                 for ct in cue_tracks:
                     if ct.track_id in existing_ids:
-                        matching = [t for t in self.local_tracks if t.track_id == ct.track_id]
-                        if matching:
-                            newly_handled_tracks.append(matching[0])
+                        if ct.track_id in by_id:
+                            newly_handled_tracks.append(by_id[ct.track_id])
                         continue
                     if first_new_index is None:
                         first_new_index = len(self.local_tracks)
                     self.local_tracks.append(ct)
+                    by_id[ct.track_id] = ct
+                    by_cue.setdefault(norm_p, []).append(ct)
                     existing_ids.add(ct.track_id)
                     newly_handled_tracks.append(ct)
                     added_count += 1
@@ -1407,19 +1423,20 @@ class NordicWinUI3Window(AcrylicWindow):
                 existing_cues.add(norm_p)
             else:
                 if norm_p in existing_whole_files or norm_p in cue_covered_files:
-                    matching = [t for t in self.local_tracks if t.file_path == norm_p]
-                    if matching:
-                        newly_handled_tracks.append(matching[0])
+                    hit = by_file.get(norm_p)
+                    if hit is not None:
+                        newly_handled_tracks.append(hit)
                     continue
                 new_track = create_track_from_file(norm_p, index_hint=len(self.local_tracks))
                 if new_track.track_id in existing_ids:
-                    matching = [t for t in self.local_tracks if t.track_id == new_track.track_id]
-                    if matching:
-                        newly_handled_tracks.append(matching[0])
+                    if new_track.track_id in by_id:
+                        newly_handled_tracks.append(by_id[new_track.track_id])
                     continue
                 if first_new_index is None:
                     first_new_index = len(self.local_tracks)
                 self.local_tracks.append(new_track)
+                by_id[new_track.track_id] = new_track
+                by_file[norm_p] = new_track
                 existing_whole_files.add(norm_p)
                 existing_ids.add(new_track.track_id)
                 newly_handled_tracks.append(new_track)
@@ -1499,16 +1516,28 @@ class NordicWinUI3Window(AcrylicWindow):
         if has_real_lyrics and has_cover:
             return
 
-        worker = AutoScrapeWorker(
-            track,
-            need_lyrics=(not has_real_lyrics),
-            need_cover=(not has_cover),
-            parent=None,
-        )
-        worker.scrapeCompleted.connect(self._on_auto_scrape_completed)
-        worker.finished.connect(lambda w=worker: self._active_workers.remove(w) if w in self._active_workers else None)
-        self._active_workers.append(worker)
-        worker.start()
+        if any(t is track for t in self._scrape_queue):
+            return
+        self._scrape_queue.append((track, not has_real_lyrics, not has_cover))
+        self._pump_scrape_queue()
+
+    _MAX_CONCURRENT_SCRAPES = 3
+
+    def _pump_scrape_queue(self) -> None:
+        """限制并发：最多同时 3 个刮削线程，其余排队，避免导入大量歌曲时一次性打出海量请求。"""
+        while self._scrape_queue and len(self._active_workers) < self._MAX_CONCURRENT_SCRAPES:
+            track, need_lyrics, need_cover = self._scrape_queue.pop(0)
+            worker = AutoScrapeWorker(track, need_lyrics=need_lyrics, need_cover=need_cover, parent=None)
+            worker.scrapeCompleted.connect(self._on_auto_scrape_completed)
+
+            def _done(w=worker):
+                if w in self._active_workers:
+                    self._active_workers.remove(w)
+                self._pump_scrape_queue()
+
+            worker.finished.connect(_done)
+            self._active_workers.append(worker)
+            worker.start()
 
     def _on_auto_scrape_completed(
         self,
@@ -1522,7 +1551,9 @@ class NordicWinUI3Window(AcrylicWindow):
                 if lyrics:
                     t.lyrics = lyrics
                 if cover_bytes:
-                    t.cover_bytes = cover_bytes
+                    # 封面已落盘到缓存目录并写入 cover_path 时，不再在内存里保留原始字节
+                    if not (t.cover_path and Path(t.cover_path).is_file()):
+                        t.cover_bytes = cover_bytes
                     t.invalidate_cover_cache()
                 if album_name and not t.album:
                     t.album = album_name
@@ -1550,6 +1581,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 i, lyrics, cover_bytes, album_name
             )
         )
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def _apply_scraped_to_track(
@@ -1668,6 +1700,8 @@ class NordicWinUI3Window(AcrylicWindow):
         auto_play: bool = True,
         is_auto_transition: bool = False
     ) -> None:
+        # 任何新的选曲请求都使之前尚未完成的网易云异步加载回调失效
+        self._netease_load_seq += 1
         if not track.track_id.startswith("netease_"):
             self.audio.load_track(track, auto_play=auto_play, is_auto_transition=is_auto_transition)
             return
@@ -1763,6 +1797,14 @@ class NordicWinUI3Window(AcrylicWindow):
         scored: List[Tuple[float, int]] = []
         for idx, cand in enumerate(self.tracks):
             if idx == self.current_track_index:
+                continue
+            if not (cur_track.has_real_dna() and cand.has_real_dna()):
+                # 没有真实声学数据的曲目不能用估算特征去比相似度（那等于随机）：
+                # 给一个中性距离，让已分析且足够相近的曲目优先，其余未知曲目之间随机探索
+                neutral = 0.55 + random.random() * 0.05
+                if cand.track_id in recent_set and cand.track_id in self._flow_history:
+                    neutral += 0.65 * (self._flow_history.index(cand.track_id) + 1) / max(1, len(self._flow_history))
+                scored.append((neutral, idx))
                 continue
             v_cand = cand.get_acoustic_vector()
             # 4D 加权声学距离：能量密度 (1.35) + BPM 节拍 (1.15) + 频谱明暗 (1.0) + 温暖度 (0.9)

@@ -126,30 +126,54 @@ if IS_WIN32:
                 programs_dir.mkdir(parents=True, exist_ok=True)
             lnk_path = programs_dir / "Klang.lnk"
 
-            root = Path(__file__).resolve().parent.parent.parent
-            py_exe = sys.executable
-            pyw_exe = Path(py_exe).parent / "pythonw.exe"
-            target_exe = str(pyw_exe if pyw_exe.exists() else py_exe)
-            script_path = str(root / "run_qt6_player.py")
-            ico_path = str(root / "qt6_player" / "assets" / "klang_icon.ico")
+            if getattr(sys, "frozen", False):
+                # 打包后：指向真实的 exe 本身（sys._MEIPASS 是每次运行都会变的临时目录，不能写进快捷方式）
+                target_exe = str(Path(sys.executable).resolve())
+                arguments = ""
+                root = Path(target_exe).parent
+                ico_path = target_exe
+            else:
+                root = Path(__file__).resolve().parent.parent.parent
+                py_exe = sys.executable
+                pyw_exe = Path(py_exe).parent / "pythonw.exe"
+                target_exe = str(pyw_exe if pyw_exe.exists() else py_exe)
+                arguments = '"' + str(root / "run_qt6_player.py") + '"'
+                ico_path = str(root / "qt6_player" / "assets" / "klang_icon.ico")
 
-            if not lnk_path.exists():
-                ps_script = f"""
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut('{lnk_path}')
-$Shortcut.TargetPath = '{target_exe}'
-$Shortcut.Arguments = '"{script_path}"'
-$Shortcut.WorkingDirectory = '{root}'
-$Shortcut.IconLocation = '{ico_path},0'
-$Shortcut.Save()
-"""
-                subprocess.run(
+            # 记录上次创建快捷方式时的目标；目标变了（换了安装位置/解释器）就重建，避免残留过期快捷方式
+            marker = lnk_path.with_suffix(".klang-target")
+            signature = f"{target_exe}|{arguments}"
+            try:
+                up_to_date = lnk_path.exists() and marker.read_text(encoding="utf-8") == signature
+            except Exception:
+                up_to_date = False
+
+            def _ps_quote(v: str) -> str:
+                # PowerShell 单引号字符串内，单引号需写成两个单引号
+                return "'" + str(v).replace("'", "''") + "'"
+
+            if not up_to_date:
+                ps_script = (
+                    "$WshShell = New-Object -ComObject WScript.Shell\n"
+                    f"$Shortcut = $WshShell.CreateShortcut({_ps_quote(str(lnk_path))})\n"
+                    f"$Shortcut.TargetPath = {_ps_quote(target_exe)}\n"
+                    f"$Shortcut.Arguments = {_ps_quote(arguments)}\n"
+                    f"$Shortcut.WorkingDirectory = {_ps_quote(str(root))}\n"
+                    f"$Shortcut.IconLocation = {_ps_quote(ico_path + ',0')}\n"
+                    "$Shortcut.Save()\n"
+                )
+                proc = subprocess.run(
                     ["powershell", "-NoProfile", "-Command", ps_script],
                     capture_output=True,
                     text=True,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                     check=False,
                 )
+                if proc.returncode == 0 and lnk_path.exists():
+                    try:
+                        marker.write_text(signature, encoding="utf-8")
+                    except Exception:
+                        pass
 
             # 为快捷方式写入 PKEY_AppUserModel_ID
             ole32.CoInitialize(None)
@@ -242,7 +266,9 @@ class WindowsMediaControlService(QObject):
             pass
 
         # 确保开始菜单存在对应的快捷方式以供 Windows 索引应用名与图标
-        ensure_start_menu_shortcut()
+        # 创建快捷方式要调用 PowerShell，放到后台线程，避免卡住界面启动
+        import threading
+        threading.Thread(target=ensure_start_menu_shortcut, daemon=True, name='klang-shortcut').start()
 
     def _init_smtc(self) -> None:
         try:

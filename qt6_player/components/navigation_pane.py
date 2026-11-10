@@ -4,7 +4,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict, Set
+from typing import Any, List, Optional, Dict, Set
 from PyQt6.QtCore import (
     Qt,
     pyqtSignal,
@@ -1118,6 +1118,7 @@ class NavigationPane(QWidget):
             self.playlistsChanged.emit()
 
         dlg.playlistCreated.connect(_on_created)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def add_track_to_playlist(self, playlist_name: str, track_id: str) -> bool:
@@ -1573,6 +1574,7 @@ class NavigationPane(QWidget):
 
     def _open_netease_login_dialog(self) -> None:
         dlg = NeteaseLoginDialog(theme=self.theme, parent=self.window())
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def _prefetch_thumbnails_for_tracks(self, tracks: List[NordicTrack]) -> None:
@@ -1930,7 +1932,18 @@ class NavigationPane(QWidget):
             if btn.index == index:
                 btn.refresh_thumbnail()
                 btn.update()
-        self._apply_visibility_filter()
+        # 批量刮削时每首歌完成都会调用；合并成一次过滤，避免 O(n²)
+        self._schedule_visibility_filter()
+
+    def _schedule_visibility_filter(self) -> None:
+        timer = getattr(self, "_vis_filter_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(60)
+            timer.timeout.connect(self._apply_visibility_filter)
+            self._vis_filter_timer = timer
+        timer.start()
 
     def _on_item_clicked(self, index: int) -> None:
         self.set_active_index(index)

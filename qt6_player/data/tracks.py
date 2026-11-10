@@ -109,6 +109,10 @@ class NordicTrack:
 
         return f"{ext} · {sr_txt}"
 
+    def has_real_dna(self) -> bool:
+        """是否已有从 PCM 真实提取的声学 DNA（未播放过/未分析过的曲目只有粗略估计，不能用于相似度选曲）"""
+        return isinstance(self.acoustic_dna, dict) and "bpm" in self.acoustic_dna
+
     def get_acoustic_vector(self) -> Tuple[float, float, float, float]:
         """
         返回归一化 4 维声学指纹向量 (bpm_norm, energy, brightness, warmth)，均在 0.0 ~ 1.0。
@@ -189,8 +193,9 @@ def build_syllables(text: str, start_time: float, end_time: float) -> List[Sylla
     else:
         raw_tokens = re.findall(r"\S+\s*", text) or [text]
 
-    total_span = max(0.5, (end_time - start_time) * 0.88)
     count = max(1, len(raw_tokens))
+    # 合成的逐字时间：一行后面若紧跟长间奏，不能把高亮拖满整个间奏；按字数估计演唱时长并封顶
+    total_span = max(0.5, min((end_time - start_time) * 0.88, max(1.2, count * 0.5)))
     step = total_span / count
 
     return [
@@ -203,6 +208,15 @@ def build_syllables(text: str, start_time: float, end_time: float) -> List[Sylla
     ]
 
 
+def _syllables_from_word_tags(words: List[Tuple[float, str]], line_end: float) -> List[SyllableToken]:
+    """由 LRC 逐字时间标签 <mm:ss.xx>字 生成真实的音节时间；末字结束于行结束时间"""
+    result: List[SyllableToken] = []
+    for i, (t, txt) in enumerate(words):
+        nxt = words[i + 1][0] if i + 1 < len(words) else min(max(t + 0.1, line_end), t + 1.5)
+        result.append(SyllableToken(text=txt, start=round(t, 2), end=round(max(t, nxt), 2)))
+    return result
+
+
 def create_lyric_lines(raw_items: List[dict]) -> List[LyricLine]:
     result: List[LyricLine] = []
     for idx, item in enumerate(raw_items):
@@ -213,7 +227,13 @@ def create_lyric_lines(raw_items: List[dict]) -> List[LyricLine]:
         text = item["text"]
         sub = item.get("sub", "")
         roma = item.get("roma", "")
-        syllables = [] if is_interlude else build_syllables(text, start_t, end_t)
+        words = item.get("words")
+        if is_interlude:
+            syllables = []
+        elif words:
+            syllables = _syllables_from_word_tags(words, end_t)
+        else:
+            syllables = build_syllables(text, start_t, end_t)
         result.append(
             LyricLine(
                 index=idx,
@@ -233,6 +253,8 @@ _LRC_TIME_PATTERN = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _WORD_TAG_PATTERN = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")
 _INLINE_SEP_PATTERN = re.compile(r"\s+(?://|/|\||——|--)\s+")
 _CJK_PATTERN = re.compile(r"[\u4e00-\u9fa5]")
+_CREDIT_PATTERN = re.compile(r"^(作词|作曲|编曲|制作人?|监制|混音|母带|词|曲|lyrics?|music|composer|arranger|producer)\s*[:：]", re.I)
+_OFFSET_PATTERN = re.compile(r"^\[offset:\s*([+-]?\d+)\s*\]", re.I)
 _HEADER_NOISE_PATTERN = re.compile(r"^(//|作词|作曲|编曲|制作|监制|混音|母带|by:|ti:|ar:|al:|offset:|qq:)", re.I)
 
 
@@ -294,10 +316,25 @@ def merge_lyrics_translations(lyrics: List[LyricLine], trans_lrc: str) -> bool:
     return updated
 
 
-def _parse_raw_lrc_map(lrc_content: str) -> List[Tuple[float, str]]:
-    entries: List[Tuple[float, str]] = []
+def _frac_to_seconds(frac_str: str) -> float:
+    """LRC 小数部分：1 位=十分之一秒，2 位=百分之一秒，3 位=毫秒（[00:12.5] 是 12.5 秒，不是 12.05）"""
+    if not frac_str:
+        return 0.0
+    return int(frac_str) / (10.0 ** len(frac_str))
+
+
+def _parse_raw_lrc_map_ex(lrc_content: str) -> List[Tuple[float, str, List[Tuple[float, str]]]]:
+    entries: List[Tuple[float, str, List[Tuple[float, str]]]] = []
     if not lrc_content:
         return entries
+
+    offset_sec = 0.0
+    for raw_line in lrc_content.splitlines():
+        om = _OFFSET_PATTERN.match(raw_line.strip())
+        if om:
+            # 规范：offset 为毫秒，正值表示歌词整体提前
+            offset_sec = int(om.group(1)) / 1000.0
+            break
 
     for raw_line in lrc_content.splitlines():
         line = raw_line.strip()
@@ -307,23 +344,34 @@ def _parse_raw_lrc_map(lrc_content: str) -> List[Tuple[float, str]]:
         if not matches:
             continue
 
-        text_part = _LRC_TIME_PATTERN.sub("", line)
-        text_part = _WORD_TAG_PATTERN.sub("", text_part).strip()
+        body = _LRC_TIME_PATTERN.sub("", line)
+        words: List[Tuple[float, str]] = []
+        wmatches = list(_WORD_TAG_PATTERN.finditer(body))
+        for k, wm in enumerate(wmatches):
+            seg_end = wmatches[k + 1].start() if k + 1 < len(wmatches) else len(body)
+            seg = body[wm.end():seg_end]
+            if not seg:
+                continue
+            wt = int(wm.group(1)) * 60.0 + int(wm.group(2)) + _frac_to_seconds(wm.group(3) or "")
+            words.append((round(max(0.0, wt - offset_sec), 2), seg))
+        text_part = _WORD_TAG_PATTERN.sub("", body).strip()
 
         for m in matches:
-            mins = int(m.group(1))
-            secs = int(m.group(2))
-            frac_str = m.group(3) or "0"
-            frac = int(frac_str) / (1000.0 if len(frac_str) == 3 else 100.0)
-            t = round(mins * 60.0 + secs + frac, 2)
-            entries.append((t, text_part))
+            t = int(m.group(1)) * 60.0 + int(m.group(2)) + _frac_to_seconds(m.group(3) or "")
+            t = round(max(0.0, t - offset_sec), 2)
+            entries.append((t, text_part, words if len(matches) == 1 else []))
 
     entries.sort(key=lambda x: x[0])
     return entries
 
 
+def _parse_raw_lrc_map(lrc_content: str) -> List[Tuple[float, str]]:
+    return [(t, txt) for t, txt, _w in _parse_raw_lrc_map_ex(lrc_content)]
+
+
 def parse_lrc_text(primary_lrc: str, trans_lrc: str = "", roma_lrc: str = "") -> List[LyricLine]:
-    primary_entries = _parse_raw_lrc_map(primary_lrc)
+    primary_ex = _parse_raw_lrc_map_ex(primary_lrc)
+    primary_entries = [(t, txt) for t, txt, _w in primary_ex]
     if not primary_entries:
         plain_lines = [ln.strip() for ln in (primary_lrc or "").splitlines() if ln.strip()]
         if not plain_lines:
@@ -353,7 +401,8 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "", roma_lrc: str = "") ->
     n = len(primary_entries)
     while i < n:
         t, txt = primary_entries[i]
-        if not txt:
+        line_words = primary_ex[i][2]
+        if not txt or _CREDIT_PATTERN.match(txt.strip()):
             i += 1
             continue
 
@@ -403,6 +452,7 @@ def parse_lrc_text(primary_lrc: str, trans_lrc: str = "", roma_lrc: str = "") ->
                 "sub": s_txt,
                 "roma": r_txt,
                 "is_interlude": is_dots,
+                "words": line_words if (line_words and "".join(w for _t, w in line_words).strip() == p_txt) else [],
             }
         )
         i += 1

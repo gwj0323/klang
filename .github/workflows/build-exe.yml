@@ -1,0 +1,54 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Check vendored pyncm
+        shell: pwsh
+        run: |
+          if (-not (Test-Path vendor/pyncm/__init__.py)) {
+            throw "vendor/pyncm/__init__.py not found. pyncm was removed from PyPI; copy your local pyncm package folder into vendor/pyncm."
+          }
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # pyncm 已从 PyPI 撤下，改用仓库内 vendor/pyncm；其余依赖照常安装
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^\s*pyncm' } | Set-Content requirements-ci.txt
+          pip install -r requirements-ci.txt pyinstaller pycryptodome pycryptodomex
+
+      - name: Import check
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: vendor
+        run: python -c "import pyncm, qt6_player.main_window; print('import ok', pyncm.__file__)"
+
+      - name: Build exe
+        env:
+          PYTHONPATH: vendor
+        run: pyinstaller Klang.spec --noconfirm
+
+      - name: Verify output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/Klang.exe)) { throw "dist/Klang.exe was not produced" }
+          Get-Item dist/Klang.exe | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Klang-windows-exe
+          path: dist/Klang.exe
+          if-no-files-found: error

@@ -246,7 +246,9 @@ def extract_cover_colors(pixmap: Optional[QPixmap], k: int = 6) -> Optional[np.n
         centers = [px[rng.integers(len(px))]]
         for _ in range(1, k):
             d = np.min(((px[:, None, :] - np.array(centers)[None]) ** 2).sum(-1), axis=1)
-            centers.append(px[rng.choice(len(px), p=d / max(d.sum(), 1e-6))])
+            total = float(d.sum())
+            # 纯色封面时所有点到中心的距离都是 0，不能作为概率分布
+            centers.append(px[rng.choice(len(px), p=(d / total) if total > 1e-6 else None)])
         centers = np.array(centers)
 
         for _ in range(12):
@@ -357,9 +359,14 @@ class FluidMeshShaderWidget(QOpenGLWidget):
         self._anim_timer.setInterval(16)
         self._anim_timer.timeout.connect(self._on_tick)
         self._initialized = False
+        self._init_failed = False
         self._first_palette = True
 
     # ---------- 外部接口 ----------
+
+    @property
+    def gpu_active(self) -> bool:
+        return self.isVisible() and self._initialized and not self._init_failed
 
     def start_animation(self):
         if not self._anim_timer.isActive():
@@ -490,6 +497,9 @@ class FluidMeshShaderWidget(QOpenGLWidget):
             logger.info("[FluidShader] GPU cover background initialized.")
         except Exception as e:
             logger.warning(f"[FluidShader] initializeGL error: {e}")
+            # GL 初始化失败：隐藏控件，让沉浸窗口回退到 CPU 极光背景
+            self._init_failed = True
+            QTimer.singleShot(0, self.hide)
 
     def paintGL(self):
         if not self._initialized or not self._program or not self._vao or not self._funcs:

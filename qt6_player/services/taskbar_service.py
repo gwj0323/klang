@@ -201,6 +201,7 @@ class TaskbarThumbnailService:
         self._toolbar_initialized = False
         self._is_playing = False
         self._created_icons = []
+        self._state_icons = {}
 
         if IS_WINDOWS and user32:
             try:
@@ -325,8 +326,11 @@ class TaskbarThumbnailService:
             return
 
         try:
-            h_icon = _render_pause_icon(24) if is_playing else _render_play_icon(24)
-            self._created_icons.append(h_icon)
+            h_icon = self._state_icons.get(bool(is_playing))
+            if not h_icon:
+                h_icon = _render_pause_icon(24) if is_playing else _render_play_icon(24)
+                self._state_icons[bool(is_playing)] = h_icon
+                self._created_icons.append(h_icon)
 
             btn = THUMBBUTTON()
             btn.dwMask = THB_ICON | THB_TOOLTIP | THB_FLAGS
@@ -413,3 +417,4 @@ class TaskbarThumbnailService:
                     except Exception:
                         pass
             self._created_icons.clear()
+            self._state_icons.clear()

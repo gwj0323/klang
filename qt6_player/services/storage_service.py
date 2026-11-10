@@ -1,13 +1,15 @@
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from qt6_player.data.tracks import NordicTrack, NORDIC_TRACKS, LyricLine
-from qt6_player.services.metadata_service import create_track_from_file, _GENERIC_FOLDER_NAMES
+from qt6_player.services.metadata_service import create_track_from_file, _GENERIC_FOLDER_NAMES, _NORDIC_PALETTES
 
 
 def _get_config_path() -> Path:
@@ -44,7 +46,7 @@ def _make_json_safe(obj: Any) -> Any:
     return obj
 
 
-def load_player_state() -> Dict[str, Any]:
+def _load_state_from_disk() -> Dict[str, Any]:
     default_state: Dict[str, Any] = {
         "volume": 0.72,
         "is_muted": False,
@@ -87,16 +89,28 @@ def load_player_state() -> Dict[str, Any]:
     }
     if not _CONFIG_PATH.is_file():
         return default_state
-    try:
-        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    for candidate in (_CONFIG_PATH, _CONFIG_PATH.with_suffix(".bak")):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            if candidate == _CONFIG_PATH:
+                # 主文件损坏：保留一份副本供人工恢复，并尝试 .bak
+                try:
+                    shutil.copy2(_CONFIG_PATH, _CONFIG_PATH.with_suffix(".corrupt"))
+                except Exception:
+                    pass
+            continue
         if isinstance(data, dict):
             default_state.update(data)
-    except Exception:
-        pass
+            break
     return default_state
 
 
 _SAVE_LOCK = threading.Lock()
+
+# 启动时文件暂时不可用（外接盘/NAS 未挂载等）的曲目原始条目：
+# 不加入播放列表，但保存时原样保留，避免收藏、歌词偏移、歌词缓存被永久抹掉。
+_UNAVAILABLE_ENTRIES: Dict[str, Dict[str, Any]] = {}
 
 
 def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
@@ -108,17 +122,85 @@ def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
                 json.dumps(safe_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            if _CONFIG_PATH.is_file():
+                try:
+                    shutil.copy2(_CONFIG_PATH, _CONFIG_PATH.with_suffix(".bak"))
+                except Exception:
+                    pass
             tmp_file.replace(_CONFIG_PATH)
             return True
         except Exception:
-            try:
-                _CONFIG_PATH.write_text(
-                    json.dumps(safe_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                return True
-            except Exception:
-                return False
+            return False
+
+
+# ── 单写线程 + 内存最新快照 ───────────────────────────────────────────
+# 所有“读-改-写”都在 _STATE_LOCK 内基于内存缓存完成（不再重读可能尚未落盘的旧文件），
+# 后台线程只写最新快照；连续多次保存会被合并，旧快照不会覆盖新状态。
+_STATE_LOCK = threading.RLock()
+_STATE_CACHE: Optional[Dict[str, Any]] = None
+_WRITE_EVENT = threading.Event()
+_WRITER_STARTED = False
+
+
+def load_player_state() -> Dict[str, Any]:
+    """返回最新状态：已有内存快照时用快照（可能尚未落盘），否则读磁盘。"""
+    with _STATE_LOCK:
+        if _STATE_CACHE is not None:
+            return dict(_STATE_CACHE)
+    return _load_state_from_disk()
+
+
+def _current_state_locked() -> Dict[str, Any]:
+    global _STATE_CACHE
+    if _STATE_CACHE is None:
+        _STATE_CACHE = _load_state_from_disk()
+    return _STATE_CACHE
+
+
+def _writer_loop() -> None:
+    while True:
+        _WRITE_EVENT.wait()
+        _WRITE_EVENT.clear()
+        with _STATE_LOCK:
+            snapshot = _make_json_safe(dict(_current_state_locked()))
+        _write_payload_to_disk(snapshot)
+
+
+def _commit_state(new_state: Dict[str, Any], sync: bool) -> bool:
+    """在 _STATE_LOCK 内调用：更新内存快照，并同步写盘或交给后台写线程。"""
+    global _STATE_CACHE, _WRITER_STARTED
+    _STATE_CACHE = new_state
+    if sync:
+        return _write_payload_to_disk(_make_json_safe(dict(new_state)))
+    if not _WRITER_STARTED:
+        _WRITER_STARTED = True
+        threading.Thread(target=_writer_loop, daemon=True, name="klang-state-writer").start()
+    _WRITE_EVENT.set()
+    return True
+
+
+def _serialize_lyrics_cached(t: NordicTrack) -> list:
+    """歌词序列化结果按（列表对象, 行数）缓存在曲目上：每次自动保存不必为整个曲库重复序列化所有歌词"""
+    lyr = t.lyrics
+    if not lyr:
+        return []
+    key = (id(lyr), len(lyr), sum(len(l.text or "") + len(l.sub or "") for l in lyr))
+    cached = getattr(t, "_lyrics_ser_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    data = [
+        {
+            "index": int(l.index),
+            "time": float(l.time),
+            "end_time": float(l.end_time),
+            "text": str(l.text),
+            "sub": str(l.sub) if l.sub else "",
+            "is_interlude": bool(l.is_interlude),
+        }
+        for l in lyr
+    ]
+    t._lyrics_ser_cache = (key, data)
+    return data
 
 
 def save_player_state(
@@ -127,7 +209,6 @@ def save_player_state(
     sync: bool = False,
 ) -> bool:
     playlist_data = []
-    local_tracks_data = []
     builtin_overrides = {}
 
     for t in tracks:
@@ -135,17 +216,7 @@ def save_player_state(
         if str(t.track_id).startswith("netease_"):
             continue
 
-        lyrics_data = []
-        if t.lyrics:
-            for l in t.lyrics:
-                lyrics_data.append({
-                    "index": int(l.index),
-                    "time": float(l.time),
-                    "end_time": float(l.end_time),
-                    "text": str(l.text),
-                    "sub": str(l.sub) if l.sub else "",
-                    "is_interlude": bool(l.is_interlude),
-                })
+        lyrics_data = _serialize_lyrics_cached(t)
 
         entry = {
             "track_id": str(t.track_id),
@@ -174,48 +245,35 @@ def save_player_state(
         }
         playlist_data.append(entry)
 
-        if t.file_path:
-            local_tracks_data.append(entry)
-        else:
+        if not t.file_path:
             builtin_overrides[t.track_id] = {
                 "is_favorite": bool(t.is_favorite),
                 "lyric_offset": float(t.lyric_offset),
                 "cover_path": str(t.cover_path) if t.cover_path else "",
             }
 
-    current_state = load_player_state()
-    payload = dict(current_state)
-    payload.update(settings)
-    payload["playlist"] = playlist_data
-    payload["local_tracks"] = local_tracks_data
-    payload["builtin_overrides"] = builtin_overrides
+    present_ids = {str(t.track_id) for t in tracks}
+    for tid, raw in list(_UNAVAILABLE_ENTRIES.items()):
+        if tid in present_ids:
+            _UNAVAILABLE_ENTRIES.pop(tid, None)
+            continue
+        playlist_data.append(raw)
 
-    safe_payload = _make_json_safe(payload)
-
-    if sync:
-        return _write_payload_to_disk(safe_payload)
-
-    threading.Thread(
-        target=_write_payload_to_disk,
-        args=(safe_payload,),
-        daemon=True,
-    ).start()
-    return True
+    with _STATE_LOCK:
+        payload = dict(_current_state_locked())
+        payload.update(settings)
+        payload["playlist"] = playlist_data
+        payload["local_tracks"] = []  # 旧字段：只在没有 playlist 的老存档里才会被读取，不再重复保存整个曲库
+        payload["builtin_overrides"] = builtin_overrides
+        return _commit_state(payload, sync)
 
 
 def update_player_state_fields(updates: Dict[str, Any], sync: bool = False) -> bool:
     """Safely update specific key-value fields in player_state.json without touching others."""
-    state = load_player_state()
-    state.update(updates)
-    safe_payload = _make_json_safe(state)
-    if sync:
-        return _write_payload_to_disk(safe_payload)
-    threading.Thread(
-        target=_write_payload_to_disk,
-        args=(safe_payload,),
-        daemon=True,
-    ).start()
-    return True
+    with _STATE_LOCK:
+        state = dict(_current_state_locked())
+        state.update(updates)
+        return _commit_state(state, sync)
 
 
 def _parse_saved_lyrics(lyrics_list: list) -> List[LyricLine]:
@@ -267,6 +325,39 @@ def _apply_saved_meta_if_valid(tr: NordicTrack, item: Dict[str, Any]) -> None:
             tr.album = saved_album
 
 
+def _try_fast_restore(item: Dict[str, Any], index_hint: int, fp: str) -> Optional[NordicTrack]:
+    """用上次保存的元数据直接构造曲目，跳过逐文件解析标签/封面/歌词（启动时对大曲库非常慢）。
+    仅当文件的修改时间与保存时记录的一致、且保存的数据完整时才走快速路径，否则返回 None 让调用方走完整解析。"""
+    try:
+        saved_ts = float(item.get("added_timestamp") or 0.0)
+        if saved_ts <= 0.0 or not item.get("title") or float(item.get("duration") or 0.0) < 5.0:
+            return None
+        if not item.get("audio_format") or not item.get("sample_rate"):
+            return None
+        if not item.get("lyrics"):
+            return None  # 没有保存过歌词的曲目走完整解析（会生成占位歌词/读取同名 .lrc）
+        path_obj = Path(fp)
+        if abs(float(path_obj.stat().st_mtime) - saved_ts) > 1e-3:
+            return None
+        saved_cov = item.get("cover_path")
+        cover = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
+        resolved = str(path_obj.resolve())
+        digest = hashlib.md5(resolved.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        return NordicTrack(
+            track_id=f"local-{digest}",
+            title=str(item.get("title")),
+            artist=str(item.get("artist") or ""),
+            album=str(item.get("album") or ""),
+            duration=float(item["duration"]),
+            file_path=resolved,
+            cover_path=cover,
+            palette=dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)]),
+            lyrics=[],
+        )
+    except Exception:
+        return None
+
+
 def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
     tracks: List[NordicTrack] = []
 
@@ -277,12 +368,17 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
             if tid in _LEGACY_BUILTIN_IDS or tid.startswith("netease_"):
                 continue
             fp = item.get("file_path")
-            if not fp or not Path(fp).is_file():
+            if not fp:
+                continue
+            if not Path(fp).is_file():
+                _UNAVAILABLE_ENTRIES[tid] = dict(item)
                 continue
             saved_cov = item.get("cover_path")
             valid_cov = str(saved_cov) if (saved_cov and Path(str(saved_cov)).is_file()) else None
 
-            tr = create_track_from_file(fp, index_hint=idx)
+            tr = None if tid.startswith("cue-") else _try_fast_restore(item, idx, fp)
+            if tr is None:
+                tr = create_track_from_file(fp, index_hint=idx)
             if tid.startswith("cue-"):
                 tr.track_id = tid
             _apply_saved_meta_if_valid(tr, item)
@@ -331,7 +427,10 @@ def restore_tracks_from_state(state: Dict[str, Any]) -> List[NordicTrack]:
         if tid in _LEGACY_BUILTIN_IDS or tid.startswith("netease_"):
             continue
         fp = item.get("file_path")
-        if not fp or not Path(fp).is_file():
+        if not fp:
+            continue
+        if not Path(fp).is_file():
+            _UNAVAILABLE_ENTRIES.setdefault(tid, dict(item))
             continue
         tr = create_track_from_file(fp, index_hint=len(tracks) + idx)
         _apply_saved_meta_if_valid(tr, item)
