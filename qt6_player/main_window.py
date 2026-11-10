@@ -1366,6 +1366,15 @@ class NordicWinUI3Window(AcrylicWindow):
         }
         existing_cues = {t.cue_path for t in self.local_tracks if t.cue_path}
         cue_covered_files = {t.file_path for t in self.local_tracks if t.file_path and t.cue_path}
+        # 一次性建索引，避免每个文件都线性扫描整个曲库（批量导入时是 O(n²)）
+        by_id: Dict[str, NordicTrack] = {t.track_id: t for t in self.local_tracks}
+        by_file: Dict[str, NordicTrack] = {
+            t.file_path: t for t in self.local_tracks if t.file_path and not t.cue_path
+        }
+        by_cue: Dict[str, List[NordicTrack]] = {}
+        for t in self.local_tracks:
+            if t.cue_path:
+                by_cue.setdefault(t.cue_path, []).append(t)
         first_new_index: Optional[int] = None
         added_count = 0
         newly_handled_tracks: List[NordicTrack] = []
@@ -1382,8 +1391,7 @@ class NordicWinUI3Window(AcrylicWindow):
 
             if suf == ".cue":
                 if norm_p in existing_cues:
-                    matching_cues = [t for t in self.local_tracks if t.cue_path == norm_p]
-                    newly_handled_tracks.extend(matching_cues)
+                    newly_handled_tracks.extend(by_cue.get(norm_p, []))
                     continue
                 cue_tracks = parse_cue_file(norm_p, base_index_hint=len(self.local_tracks))
                 if not cue_tracks:
@@ -1396,15 +1404,18 @@ class NordicWinUI3Window(AcrylicWindow):
                     t for t in self.local_tracks
                     if not (t.file_path in ref_audio_paths and not t.cue_path)
                 ]
+                for ref_ap in ref_audio_paths:
+                    by_file.pop(ref_ap, None)
                 for ct in cue_tracks:
                     if ct.track_id in existing_ids:
-                        matching = [t for t in self.local_tracks if t.track_id == ct.track_id]
-                        if matching:
-                            newly_handled_tracks.append(matching[0])
+                        if ct.track_id in by_id:
+                            newly_handled_tracks.append(by_id[ct.track_id])
                         continue
                     if first_new_index is None:
                         first_new_index = len(self.local_tracks)
                     self.local_tracks.append(ct)
+                    by_id[ct.track_id] = ct
+                    by_cue.setdefault(norm_p, []).append(ct)
                     existing_ids.add(ct.track_id)
                     newly_handled_tracks.append(ct)
                     added_count += 1
@@ -1412,19 +1423,20 @@ class NordicWinUI3Window(AcrylicWindow):
                 existing_cues.add(norm_p)
             else:
                 if norm_p in existing_whole_files or norm_p in cue_covered_files:
-                    matching = [t for t in self.local_tracks if t.file_path == norm_p]
-                    if matching:
-                        newly_handled_tracks.append(matching[0])
+                    hit = by_file.get(norm_p)
+                    if hit is not None:
+                        newly_handled_tracks.append(hit)
                     continue
                 new_track = create_track_from_file(norm_p, index_hint=len(self.local_tracks))
                 if new_track.track_id in existing_ids:
-                    matching = [t for t in self.local_tracks if t.track_id == new_track.track_id]
-                    if matching:
-                        newly_handled_tracks.append(matching[0])
+                    if new_track.track_id in by_id:
+                        newly_handled_tracks.append(by_id[new_track.track_id])
                     continue
                 if first_new_index is None:
                     first_new_index = len(self.local_tracks)
                 self.local_tracks.append(new_track)
+                by_id[new_track.track_id] = new_track
+                by_file[norm_p] = new_track
                 existing_whole_files.add(norm_p)
                 existing_ids.add(new_track.track_id)
                 newly_handled_tracks.append(new_track)

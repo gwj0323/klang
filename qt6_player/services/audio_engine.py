@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 import numpy as np
-from scipy.signal import sosfilt, butter
+from scipy.signal import sosfilt, butter, lfilter, lfiltic
 
 from qt6_player.services.headphone_eq import HEADPHONE_PROFILES, build_headphone_sos
 
@@ -250,17 +250,13 @@ class DolbyAtmosSpatializer:
         itd_samples = max(1, int(round(self.sample_rate * 0.00025)))  # 0.25ms
         m_cross = self._delay_ring[0, (idx_vec - itd_samples) & self.RING_MASK]
         alpha_shadow = 0.35
-        shadow_l = np.empty(n, dtype=np.float64)
-        shadow_r = np.empty(n, dtype=np.float64)
-        prev_l = self._head_shadow_l
-        prev_r = self._head_shadow_r
-        for i in range(n):
-            prev_l += alpha_shadow * (m_cross[i] - prev_l)
-            prev_r += alpha_shadow * (m_cross[i] - prev_r)
-            shadow_l[i] = prev_l
-            shadow_r[i] = prev_r
-        self._head_shadow_l = prev_l
-        self._head_shadow_r = prev_r
+        # 一阶低通 y[i] = y[i-1] + a*(x[i]-y[i-1])，用 lfilter 向量化（带状态延续），替代逐采样 Python 循环
+        shadow_b = np.array([alpha_shadow], dtype=np.float64)
+        shadow_a = np.array([1.0, -(1.0 - alpha_shadow)], dtype=np.float64)
+        shadow_l, _ = lfilter(shadow_b, shadow_a, m_cross, zi=lfiltic(shadow_b, shadow_a, [self._head_shadow_l]))
+        shadow_r, _ = lfilter(shadow_b, shadow_a, m_cross, zi=lfiltic(shadow_b, shadow_a, [self._head_shadow_r]))
+        self._head_shadow_l = float(shadow_l[-1])
+        self._head_shadow_r = float(shadow_r[-1])
 
         # 5. 杜比天空声道高度感知渲染 (Height Elevation Objects)
         if self.mode == "dolby_atmos" and self.spatial_height > 0.05:
@@ -1283,8 +1279,13 @@ class NordicAudioEngine(QObject):
         end_byte = self._track_end_frame * 4 if self._track_end_frame > self._track_start_frame else total_bytes
         avail_span = min(total_bytes, end_byte) - start_byte
         if avail_span >= self._sample_rate * 4 * 12 or (self._decoder_finished and avail_span >= self._sample_rate * 4 * 3):
-            slice_bytes = self._decoded_raw_bytes[start_byte : min(total_bytes, end_byte)]
-            dna = compute_pcm_acoustic_dna(slice_bytes, self._sample_rate)
+            # 直接传整块缓冲区 + 帧范围，函数内部只会切出 12 秒窗口；不再先复制整首（CUE 整轨可达数百 MB）
+            dna = compute_pcm_acoustic_dna(
+                self._decoded_raw_bytes,
+                self._sample_rate,
+                start_frame=self._track_start_frame,
+                end_frame=min(total_bytes, end_byte) // 4,
+            )
             if dna:
                 track.acoustic_dna = dna
                 self._dna_computed = True
