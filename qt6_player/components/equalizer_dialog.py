@@ -1259,7 +1259,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.lbl_about_app_name.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         title_row.addWidget(self.lbl_about_app_name)
 
-        self.lbl_about_version_badge = QLabel("v1.6.0", self.tab_about)
+        self.lbl_about_version_badge = QLabel("v1.6.1", self.tab_about)
         self.lbl_about_version_badge.setFont(get_nordic_font(10, QFont.Weight.DemiBold, mono=True))
         self.lbl_about_version_badge.setFixedHeight(20)
         self.lbl_about_version_badge.setContentsMargins(6, 2, 6, 2)
@@ -1370,7 +1370,7 @@ class AudioSettingsDialog(WinUIModalDialog):
         update_text_col = QVBoxLayout()
         update_text_col.setSpacing(2)
 
-        self.lbl_cur_ver = QLabel("当前版本: v1.6.0", self.tab_about)
+        self.lbl_cur_ver = QLabel("当前版本: v1.6.1", self.tab_about)
         self.lbl_cur_ver.setFont(get_nordic_font(11, QFont.Weight.Medium))
         self.lbl_cur_ver.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
         update_text_col.addWidget(self.lbl_cur_ver)
@@ -1447,7 +1447,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             try:
                 req = urllib.request.Request(
                     "https://api.github.com/repos/gwj0323/klang/releases/latest",
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Klang/1.6.0"}
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Klang/1.6.1"}
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     raw = resp.read().decode("utf-8")
@@ -1460,7 +1460,7 @@ class AudioSettingsDialog(WinUIModalDialog):
                         parts = [int(p) for p in clean.split(".") if p.isdigit()]
                         return parts if parts else [0]
 
-                    curr_parts = _parse_tag("1.6.0")
+                    curr_parts = _parse_tag("1.6.1")
                     latest_parts = _parse_tag(tag_name)
                     has_update = latest_parts > curr_parts
                     self.updateCheckResult.emit(has_update, tag_name, html_url)
@@ -1478,7 +1478,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             self.lbl_update_status.setStyleSheet(f"color: {self.theme.sage_accent.name()}; background: transparent;")
             self.btn_download_update.setVisible(True)
         else:
-            self.lbl_update_status.setText(f"当前已是最新版本 ({tag_name or 'v1.6.0'})")
+            self.lbl_update_status.setText(f"当前已是最新版本 ({tag_name or 'v1.6.1'})")
             self.lbl_update_status.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
             self.btn_download_update.setVisible(False)
 
