@@ -1,6 +1,7 @@
 import logging as _logging
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 import numpy as np
@@ -46,11 +47,44 @@ SOUND_PROFILES["深沉低音"] = SOUND_PROFILES["低音增强"]
 SOUND_PROFILES["清澈器乐"] = SOUND_PROFILES["清澈高音"]
 
 
+DEFAULT_SAMPLE_RATE = 44100
+# 输出采样率候选（由高到低）：曲目原始采样率声卡不支持时，依次向下找第一个支持的
+RATE_LADDER: Tuple[int, ...] = (384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100)
+# 整首解码缓冲允许占用的内存上限：超出时降低解码采样率（最低到 44.1kHz）
+MAX_DECODED_BYTES = 768 * 1024 * 1024
+FADEOUT_SECONDS = 0.0813  # 切歌/暂停的余弦微淡出时长（原先固定 3584 帧 @ 44.1kHz）
+
+
+def stereo_frame_bytes(store_float: bool) -> int:
+    """内部解码缓冲每个立体声帧占多少字节：16 位源用 int16（4 字节），更高位深用 float32（8 字节）"""
+    return 8 if store_float else 4
+
+
+def pcm_to_float_stereo(raw, store_float: bool) -> np.ndarray:
+    """把内部存储的交错立体声 PCM（int16 或 float32）转成 (2, n) 的 float64，范围 -1..1"""
+    item = 4 if store_float else 2
+    raw = raw[: (len(raw) // (item * 2)) * (item * 2)]
+    if store_float:
+        arr = np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+    else:
+        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
+    return arr.reshape(-1, 2).T
+
+
+def float_stereo_to_store(block: np.ndarray, store_float: bool) -> bytes:
+    """(2, n) float → 内部存储格式的交错字节"""
+    inter = np.ascontiguousarray(block[:2].T)
+    if store_float:
+        return np.clip(inter, -1.0, 1.0).astype(np.float32).tobytes()
+    return np.clip(inter * 32767.0, -32767.0, 32767.0).astype(np.int16).tobytes()
+
+
 def compute_pcm_acoustic_dna(
     raw_bytes: bytearray,
     sample_rate: int = 44100,
     start_frame: int = 0,
     end_frame: int = 0,
+    store_float: bool = False,
 ) -> Optional[Dict[str, float]]:
     """
     完全离线提取曲目的 4 维声学 DNA 指纹：
@@ -60,7 +94,8 @@ def compute_pcm_acoustic_dna(
     - warmth: 中低频温暖度 (0.0 ~ 1.0)
     耗时 < 3ms，用于「离线声学 DNA 情绪漫游」无缝智能选曲。
     """
-    total_frames = len(raw_bytes) // 4
+    fb = stereo_frame_bytes(store_float)
+    total_frames = len(raw_bytes) // fb
     if total_frames < sample_rate * 4:
         return None
 
@@ -76,8 +111,8 @@ def compute_pcm_acoustic_dna(
     mid_end = mid_start + window_frames
 
     try:
-        pcm = np.frombuffer(raw_bytes[mid_start * 4 : mid_end * 4], dtype=np.int16).astype(np.float32) / 32768.0
-        mono = (pcm[0::2] + pcm[1::2]) * 0.5
+        pcm = pcm_to_float_stereo(raw_bytes[mid_start * fb : mid_end * fb], store_float)
+        mono = ((pcm[0] + pcm[1]) * 0.5).astype(np.float32)
         if len(mono) < 4096:
             return None
 
@@ -146,6 +181,10 @@ class DolbyAtmosSpatializer:
         self.spatial_width: float = 1.35
         self.spatial_height: float = 0.65
 
+        # 延迟环必须比"最大延迟 + 单次处理块（含最长的淡出块）"更长，否则块内写入会覆盖尚未读取的数据
+        _need = int(0.03 * self.sample_rate) + 20480
+        self.RING_LEN = 1 << (_need - 1).bit_length()
+        self.RING_MASK = self.RING_LEN - 1
         self._delay_ring: np.ndarray = np.zeros((3, self.RING_LEN), dtype=np.float64)
         self._write_pos: int = 0
         self._head_shadow_l: float = 0.0
@@ -251,7 +290,8 @@ class DolbyAtmosSpatializer:
         # 4. 前置人声声学交叉馈送 (ITD ~0.25ms + 头影衰减 ILD)
         itd_samples = max(1, int(round(self.sample_rate * 0.00025)))  # 0.25ms
         m_cross = self._delay_ring[0, (idx_vec - itd_samples) & self.RING_MASK]
-        alpha_shadow = 0.35
+        # 一阶低通的截止频率随采样率变化：按 44.1kHz 下的 0.35 换算，保持头影效应的频率特性不变
+        alpha_shadow = 1.0 - (1.0 - 0.35) ** (float(DEFAULT_SAMPLE_RATE) / float(self.sample_rate))
         # 一阶低通 y[i] = y[i-1] + a*(x[i]-y[i-1])，用 lfilter 向量化（带状态延续），替代逐采样 Python 循环
         shadow_b = np.array([alpha_shadow], dtype=np.float64)
         shadow_a = np.array([1.0, -(1.0 - alpha_shadow)], dtype=np.float64)
@@ -343,11 +383,20 @@ class DolbyAtmosSpatializer:
 
 class NordicDspProcessor:
     HIST_LEN = 512
-    REV_BUF_LEN = 32768
-    REV_MASK = 32767
+    # 混响反射点（采样点数 @ 44.1kHz, 增益, 是否左右交叉）：随采样率按时间等比换算，保持"房间大小"不变
+    REV_BASE_TAPS = (
+        (1279, 0.36, False),
+        (2337, 0.28, True),
+        (3925, 0.22, False),
+        (6042, 0.16, True),
+        (9305, 0.11, False),
+        (13980, 0.07, True),
+    )
+    REV_BASE_FB_DELAY = 3925
 
     def __init__(self, sample_rate: int = 44100):
         self.sample_rate = sample_rate
+        self._configure_reverb()
         self.gains_db: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
         self.reverb_mix: float = 0.03
 
@@ -381,8 +430,6 @@ class NordicDspProcessor:
         self._zi: np.ndarray = np.zeros((5, 2, 2), dtype=np.float64)
         self._input_hist: np.ndarray = np.zeros((2, self.HIST_LEN), dtype=np.float64)
 
-        self._rev_ring: np.ndarray = np.zeros((2, self.REV_BUF_LEN), dtype=np.float64)
-        self._rev_write_pos: int = 0
         self._rev_lp_state: np.ndarray = np.zeros(2, dtype=np.float64)
         self.spatializer = DolbyAtmosSpatializer(self.sample_rate)
 
@@ -393,6 +440,18 @@ class NordicDspProcessor:
         self._headphone_preamp: float = 1.0
         self._cur_hp_wet: float = 0.0
         self._target_hp_wet: float = 0.0
+
+    def _configure_reverb(self) -> None:
+        """按当前采样率换算混响各反射点的延迟，并分配足够长的环形缓冲（2 的幂，便于位掩码取模）"""
+        k = self.sample_rate / float(DEFAULT_SAMPLE_RATE)
+        self._rev_taps = tuple((max(1, int(round(d * k))), g, c) for d, g, c in self.REV_BASE_TAPS)
+        # 反馈延迟必须大于一个处理块（1024 帧），否则同一块内读到的是尚未写入的旧数据
+        self._rev_fb_delay = max(1100, int(round(self.REV_BASE_FB_DELAY * k)))
+        need = max(max(d for d, _g, _c in self._rev_taps), self._rev_fb_delay) + 20480
+        self._rev_len = max(32768, 1 << (need - 1).bit_length())
+        self._rev_mask = self._rev_len - 1
+        self._rev_ring = np.zeros((2, self._rev_len), dtype=np.float64)
+        self._rev_write_pos = 0
 
     def reset_state(self) -> None:
         self._zi.fill(0.0)
@@ -441,7 +500,20 @@ class NordicDspProcessor:
         self._vocal_lp_sos = butter(2, max(60.0, 145.0) / nyq, btype="lowpass", output="sos")
         self._vocal_hp_sos = butter(2, min(8200.0, nyq * 0.88) / nyq, btype="highpass", output="sos")
         self._sos = self._build_sos(self.gains_db)
-        self.spatializer = DolbyAtmosSpatializer(self.sample_rate)
+        self._pending_sos = None  # 旧采样率算出的待切换滤波器作废
+        self._input_hist = np.zeros((2, self.HIST_LEN), dtype=np.float64)
+        self._configure_reverb()
+
+        # 重建空间音频处理器时保留用户设置（模式、宽度、高度），否则每次换采样率都会被重置成默认值
+        old = self.spatializer
+        new_sp = DolbyAtmosSpatializer(self.sample_rate)
+        new_sp.mode = old.mode
+        new_sp.spatial_width = old.spatial_width
+        new_sp.spatial_height = old.spatial_height
+        new_sp.set_mode(old.mode)
+        new_sp._cur_wet_gain = new_sp._target_wet_gain  # 直接就位，不要从 1.0 重新渐变
+        self.spatializer = new_sp
+
         if self.headphone_profile_id != "bypass":
             self.set_headphone_profile(self.headphone_profile_id)
         self.reset_state()
@@ -593,10 +665,12 @@ class NordicDspProcessor:
             stereo_in = stereo_in * (1.0 - 0.55 * w_mix) + tube_out * (0.55 * w_mix)
 
             # 合成极其克制的真实黑胶唱针接触微尘脉冲与温暖底噪
-            dust_prob = 0.0009 * w_scalar
+            # 尘埃脉冲的"每秒个数"和底噪的频谱密度不随采样率变化：按 44.1kHz 的数值换算
+            rate_k = self.sample_rate / float(DEFAULT_SAMPLE_RATE)
+            dust_prob = 0.0009 * w_scalar / rate_k
             impulses = (self._rng.random((2, n)) < dust_prob).astype(np.float64)
             imp_amp = (self._rng.uniform(-1.0, 1.0, size=(2, n)) * impulses) * (0.011 * w_scalar)
-            surface_hiss = self._rng.normal(0.0, 0.00028 * w_scalar, size=(2, n))
+            surface_hiss = self._rng.normal(0.0, 0.00028 * w_scalar * math.sqrt(rate_k), size=(2, n))
             raw_vinyl_noise = imp_amp + surface_hiss
             # 简单一阶唱头谐振柔化，消除数字毛刺感
             vinyl_filtered = raw_vinyl_noise * 0.55
@@ -648,11 +722,11 @@ class NordicDspProcessor:
         # 杜比全景声与空间音频渲染 (支持 2.0 双耳、5.1 环绕与 7.1 全景声输出)
         spatial_out = self.spatializer.process_block(eq_out, target_channels=target_channels)
 
-        idx_vec = (self._rev_write_pos + np.arange(n, dtype=np.int32)) & self.REV_MASK
-        fb_read_idx = (idx_vec - 3925) & self.REV_MASK
+        idx_vec = (self._rev_write_pos + np.arange(n, dtype=np.int64)) & self._rev_mask
+        fb_read_idx = (idx_vec - self._rev_fb_delay) & self._rev_mask
         self._rev_ring[0, idx_vec] = spatial_out[0] + self._rev_ring[1, fb_read_idx] * 0.14
         self._rev_ring[1, idx_vec] = spatial_out[1] + self._rev_ring[0, fb_read_idx] * 0.14
-        self._rev_write_pos = (self._rev_write_pos + n) & self.REV_MASK
+        self._rev_write_pos = (self._rev_write_pos + n) & self._rev_mask
 
         if self._cur_rev_mix > 0.005 or self._target_rev_mix > 0.005:
             if abs(self._cur_rev_mix - self._target_rev_mix) > 1e-4:
@@ -663,16 +737,8 @@ class NordicDspProcessor:
 
             wet_l = np.zeros(n, dtype=np.float64)
             wet_r = np.zeros(n, dtype=np.float64)
-            taps = (
-                (1279, 0.36, False),
-                (2337, 0.28, True),
-                (3925, 0.22, False),
-                (6042, 0.16, True),
-                (9305, 0.11, False),
-                (13980, 0.07, True),
-            )
-            for delay_samples, tap_gain, cross in taps:
-                r_idx = (idx_vec - delay_samples) & self.REV_MASK
+            for delay_samples, tap_gain, cross in self._rev_taps:
+                r_idx = (idx_vec - delay_samples) & self._rev_mask
                 if cross:
                     wet_l += self._rev_ring[1, r_idx] * tap_gain
                     wet_r += self._rev_ring[0, r_idx] * tap_gain
@@ -715,7 +781,7 @@ class NordicDspProcessor:
 
 class ContinuousDspStreamDevice(QIODevice):
     BLOCK_FRAMES = 1024
-    FADEOUT_FRAMES = 3584  # ~81.3ms @ 44.1kHz，消除切歌/暂停时的数字截断爆音 (Click/Pop)
+    MAX_FADEOUT_FRAMES = 16384
     SPECTRUM_BANDS = 24
 
     def __init__(self, engine: "NordicAudioEngine"):
@@ -726,18 +792,30 @@ class ContinuousDspStreamDevice(QIODevice):
         self._crossfade_on_next_block: bool = False
         self._env_gain: float = 0.0
         self._tt_speed: float = 1.0  # 黑胶唱盘实时转速倍率 (0.22x -> 1.0x 柔顺加速曲线)
-        self._hann_win = np.hanning(self.BLOCK_FRAMES)
         self._cos_fade_in = (
             0.5 - 0.5 * np.cos(np.linspace(0.0, math.pi, self.BLOCK_FRAMES, dtype=np.float64))
         )[np.newaxis, :]
         self._cos_fade_out = 1.0 - self._cos_fade_in
+        self.configure_for_rate(DEFAULT_SAMPLE_RATE)
+
+    def configure_for_rate(self, rate: int) -> None:
+        """依赖采样率的量：淡出长度（按时间）、频谱窗口与频段边界、每块淡入步进"""
+        rate = int(rate)
+        self.fadeout_frames = int(min(self.MAX_FADEOUT_FRAMES, max(512, round(FADEOUT_SECONDS * rate))))
         self._cos_fade_out_80ms = (
-            0.5 + 0.5 * np.cos(np.linspace(0.0, math.pi, self.FADEOUT_FRAMES, dtype=np.float64))
+            0.5 + 0.5 * np.cos(np.linspace(0.0, math.pi, self.fadeout_frames, dtype=np.float64))
         )[np.newaxis, :]
-        self._silence_stereo = bytes(self.BLOCK_FRAMES * 4)
-        self._silence_mono = bytes(self.BLOCK_FRAMES * 2)
+        # 每处理一块（1024 帧）推进多少包络：44.1kHz 下约 0.28，约 3.5 块完成 ~81ms 的淡入/淡出
+        self._env_step = min(1.0, self.BLOCK_FRAMES / (FADEOUT_SECONDS * rate))
+        # 频谱分析窗口按采样率放大，使频率分辨率（~43Hz/bin）和 24 个频段覆盖的频率范围不随采样率变化
+        self._spec_len = self.BLOCK_FRAMES * max(1, int(round(rate / float(DEFAULT_SAMPLE_RATE))))
+        self._spec_buf = np.zeros(self._spec_len, dtype=np.float64)
+        self._hann_win = np.hanning(self._spec_len)
+        bin_hz = rate / float(self._spec_len)
+        lo = max(1.0, 86.0 / bin_hz)
+        hi = min(self._spec_len / 2.0 - 1.0, 15500.0 / bin_hz)
         self._fft_edges = np.unique(
-            np.geomspace(2, 360, num=self.SPECTRUM_BANDS + 1).astype(np.int32)
+            np.geomspace(lo, max(lo + 1.0, hi), num=self.SPECTRUM_BANDS + 1).astype(np.int32)
         )
 
     def start_stream(self) -> None:
@@ -758,16 +836,16 @@ class ContinuousDspStreamDevice(QIODevice):
             return None
 
         raw_buf = eng._decoded_raw_bytes
-        total_avail_frames = len(raw_buf) // 4
+        fb = eng._fb
+        total_avail_frames = len(raw_buf) // fb
         cur_frame = eng._frame_cursor
 
-        n_frames = self.FADEOUT_FRAMES
+        n_frames = self.fadeout_frames
         if cur_frame + 16 < total_avail_frames:
             end_frame = min(total_avail_frames, cur_frame + n_frames)
             actual = end_frame - cur_frame
-            byte_slice = raw_buf[cur_frame * 4 : end_frame * 4]
-            arr = np.frombuffer(byte_slice, dtype=np.int16).astype(np.float64) / 32768.0
-            arr = arr.reshape(-1, 2).T
+            byte_slice = raw_buf[cur_frame * fb : end_frame * fb]
+            arr = pcm_to_float_stereo(byte_slice, eng._store_float)
             if actual < n_frames:
                 pad = np.zeros((2, n_frames - actual), dtype=np.float64)
                 stereo_block = np.hstack((arr, pad))
@@ -788,38 +866,32 @@ class ContinuousDspStreamDevice(QIODevice):
         self._last_tail_frame = np.zeros((self.engine._channels, 1), dtype=np.float64)
 
     def _get_silence_bytes(self, channels: int) -> bytes:
-        return bytes(self.BLOCK_FRAMES * 2 * channels)
+        return bytes(self.BLOCK_FRAMES * channels * self.engine._out_bps)
 
     def _pack_pcm_bytes(self, proc_audio: np.ndarray, n_frames: int, channels: int) -> bytes:
-        if channels == 8:
-            interleaved = np.empty(n_frames * 8, dtype=np.int16)
-            for ch in range(8):
-                interleaved[ch::8] = np.clip(proc_audio[ch] * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            return interleaved.tobytes()
-        elif channels == 6:
-            interleaved = np.empty(n_frames * 6, dtype=np.int16)
-            for ch in range(6):
-                interleaved[ch::6] = np.clip(proc_audio[ch] * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            return interleaved.tobytes()
-        elif channels == 2:
-            interleaved = np.empty(n_frames * 2, dtype=np.int16)
-            interleaved[0::2] = np.clip(proc_audio[0] * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            interleaved[1::2] = np.clip(proc_audio[1] * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            return interleaved.tobytes()
-        mono = (proc_audio[0] + proc_audio[1]) * 0.5
-        pcm_mono = np.clip(mono * 32767.0, -32767.0, 32767.0).astype(np.int16)
-        return pcm_mono.tobytes()
+        """把 (声道数, n) 的 float 信号打包成声卡需要的交错字节（Float32 / Int32 / Int16，由输出协商结果决定）"""
+        if channels == 1:
+            inter = ((proc_audio[0] + proc_audio[1]) * 0.5)[:, np.newaxis]
+        else:
+            inter = np.ascontiguousarray(proc_audio[:channels].T)
+        out_fmt = self.engine._out_fmt
+        if out_fmt == QAudioFormat.SampleFormat.Float:
+            return np.clip(inter, -1.0, 1.0).astype(np.float32).tobytes()
+        if out_fmt == QAudioFormat.SampleFormat.Int32:
+            return np.clip(inter * 2147483647.0, -2147483647.0, 2147483647.0).astype(np.int32).tobytes()
+        return np.clip(inter * 32767.0, -32767.0, 32767.0).astype(np.int16).tobytes()
 
     def _compute_spectrum_24(self, stereo_block: np.ndarray) -> List[float]:
         mono = (stereo_block[0] + stereo_block[1]) * 0.5
-        if len(mono) < self.BLOCK_FRAMES:
-            padded = np.zeros(self.BLOCK_FRAMES, dtype=np.float64)
-            padded[: len(mono)] = mono
-            mono = padded
+        n = len(mono)
+        W = self._spec_len
+        # 滚动窗口：高采样率下一个处理块的时间太短，用最近 W 个采样（时长约 23ms）做 FFT
+        if n >= W:
+            self._spec_buf = mono[-W:].astype(np.float64, copy=True)
         else:
-            mono = mono[: self.BLOCK_FRAMES]
+            self._spec_buf = np.concatenate((self._spec_buf[n:], mono))
 
-        mag = np.abs(np.fft.rfft(mono * self._hann_win)) / (self.BLOCK_FRAMES * 0.25)
+        mag = np.abs(np.fft.rfft(self._spec_buf * self._hann_win)) / (W * 0.25)
         bands: List[float] = []
         edges = self._fft_edges
         for i in range(self.SPECTRUM_BANDS):
@@ -866,7 +938,9 @@ class ContinuousDspStreamDevice(QIODevice):
             return self._get_silence_bytes(eng._channels)
 
         raw_buf = eng._decoded_raw_bytes
-        total_avail_frames = len(raw_buf) // 4
+        fb = eng._fb
+        store_float = eng._store_float
+        total_avail_frames = len(raw_buf) // fb
 
         if total_avail_frames <= 64:
             if float(np.max(np.abs(self._last_tail_frame))) > 1e-4:
@@ -897,7 +971,9 @@ class ContinuousDspStreamDevice(QIODevice):
             if span_frames > xfade_frames * 2 and cur_frame >= target_end_frame - xfade_frames:
                 rem_frames = target_end_frame - cur_frame
                 if rem_frames > 0:
-                    eng._crossfade_tail_pcm = bytearray(raw_buf[cur_frame * 4 : target_end_frame * 4])
+                    # 尾部统一存成 float32 立体声：下一首的存储格式（int16/float32）可能和这一首不同
+                    tail_f = pcm_to_float_stereo(raw_buf[cur_frame * fb : target_end_frame * fb], store_float)
+                    eng._crossfade_tail_pcm = bytearray(float_stereo_to_store(tail_f, True))
                     eng._crossfade_tail_cursor = 0
                     eng._crossfade_tail_total_frames = rem_frames
                 eng._notify_eof_from_stream()
@@ -918,15 +994,12 @@ class ContinuousDspStreamDevice(QIODevice):
         if abs(rate - 1.0) < 0.01:
             end_frame = min(target_end_frame, cur_frame + n_frames)
             actual = end_frame - cur_frame
-            byte_slice = raw_buf[cur_frame * 4 : end_frame * 4]
-            byte_slice = byte_slice[: (len(byte_slice) // 4) * 4]
-            if len(byte_slice) < 4 or actual <= 0:
+            byte_slice = raw_buf[cur_frame * fb : end_frame * fb]
+            byte_slice = byte_slice[: (len(byte_slice) // fb) * fb]
+            if len(byte_slice) < fb or actual <= 0:
                 stereo_block = np.zeros((2, n_frames), dtype=np.float64)
             else:
-                arr = np.frombuffer(byte_slice, dtype=np.int16).astype(np.float64) / 32768.0
-                if len(arr) % 2 != 0:
-                    arr = arr[: (len(arr) // 2) * 2]
-                arr = arr.reshape(-1, 2).T
+                arr = pcm_to_float_stereo(byte_slice, store_float)
                 if actual < n_frames:
                     pad = np.zeros((2, n_frames - actual), dtype=np.float64)
                     stereo_block = np.hstack((arr, pad))
@@ -946,15 +1019,12 @@ class ContinuousDspStreamDevice(QIODevice):
 
             min_i = int(idx0[0])
             max_i = min(target_end_frame, int(idx0[-1]) + 2)
-            sub_raw = raw_buf[min_i * 4 : max_i * 4]
-            sub_raw = sub_raw[: (len(sub_raw) // 4) * 4]
-            if len(sub_raw) < 4:
+            sub_raw = raw_buf[min_i * fb : max_i * fb]
+            sub_raw = sub_raw[: (len(sub_raw) // fb) * fb]
+            if len(sub_raw) < fb:
                 stereo_block = np.zeros((2, n_frames), dtype=np.float64)
             else:
-                sub_arr = (np.frombuffer(sub_raw, dtype=np.int16).astype(np.float64) / 32768.0)
-                if len(sub_arr) % 2 != 0:
-                    sub_arr = sub_arr[: (len(sub_arr) // 2) * 2]
-                sub_arr = sub_arr.reshape(-1, 2)
+                sub_arr = np.ascontiguousarray(pcm_to_float_stereo(sub_raw, store_float).T)
                 if len(sub_arr) == 0:
                     stereo_block = np.zeros((2, n_frames), dtype=np.float64)
                 elif len(sub_arr) == 1:
@@ -980,8 +1050,8 @@ class ContinuousDspStreamDevice(QIODevice):
             t_tot = eng._crossfade_tail_total_frames
             t_end = min(t_tot, t_cur + n_frames)
             t_actual = t_end - t_cur
-            t_bytes = eng._crossfade_tail_pcm[t_cur * 4 : t_end * 4]
-            t_arr = (np.frombuffer(t_bytes, dtype=np.int16).astype(np.float64) / 32768.0).reshape(-1, 2).T
+            t_bytes = eng._crossfade_tail_pcm[t_cur * 8 : t_end * 8]  # 尾部固定是 float32 立体声（8 字节/帧）
+            t_arr = pcm_to_float_stereo(t_bytes, True)
             if t_actual < n_frames:
                 tail_stereo = np.hstack((t_arr, np.zeros((2, n_frames - t_actual), dtype=np.float64)))
             else:
@@ -1005,13 +1075,13 @@ class ContinuousDspStreamDevice(QIODevice):
 
         proc_stereo = eng.dsp.process_block(stereo_block, target_channels=eng._channels)
 
-        # ~80ms 微淡入包络 (每 1024 帧块推进 0.28，约 3.5 个块 = 81ms 完成平滑淡入)
+        # ~80ms 微淡入包络 (每处理一块推进 _env_step：44.1kHz 下约 0.28，约 3.5 个块完成平滑淡入)
         target_env = 1.0 if (eng.is_playing or eng._preview_frames_remaining > 0) else 0.0
         if abs(target_env - self._env_gain) > 0.001:
             if target_env > self._env_gain:
-                next_env = min(target_env, self._env_gain + 0.28)
+                next_env = min(target_env, self._env_gain + self._env_step)
             else:
-                next_env = max(target_env, self._env_gain - 0.28)
+                next_env = max(target_env, self._env_gain - self._env_step)
             env_curve = self._env_gain + (next_env - self._env_gain) * self._cos_fade_in
             proc_stereo = proc_stereo * env_curve
             self._env_gain = next_env
@@ -1077,7 +1147,18 @@ class NordicAudioEngine(QObject):
         self.vinyl_warmth: float = 0.0
         self.headphone_profile_id: str = "bypass"
 
-        self._sample_rate = 44100
+        # 流水线格式：每首曲目按"原始采样率 / 位深"解码（声卡不支持或内存超限时才向下取），
+        # 内部缓冲 16 位源存 int16、更高位深存 float32，DSP 一律用 float64 运算
+        self._sample_rate = DEFAULT_SAMPLE_RATE
+        self._store_float: bool = False
+        self._fb: int = stereo_frame_bytes(False)  # 缓冲里每个立体声帧的字节数
+        # 声卡输出格式（由设备协商得出）：样本格式与每样本字节数
+        self._out_fmt = QAudioFormat.SampleFormat.Int16
+        self._out_bps: int = 2
+        self._sink_format_cache: Dict[Tuple[str, int, int], Optional[QAudioFormat]] = {}
+        self._switch_token: int = 0          # 递增即作废尚未完成的"等待声卡排空再切格式"
+        self._draining_for_switch: bool = False
+        self._pre_plan: Tuple[int, bool] = (DEFAULT_SAMPLE_RATE, False)
         self._channels = 2
         self.output_channel_mode: str = "binaural"  # "binaural" (2.0) | "surround_51" (5.1) | "surround_71" (7.1)
         self.output_channels_actual: int = 2
@@ -1120,10 +1201,7 @@ class NordicAudioEngine(QObject):
         self._media_player.mediaStatusChanged.connect(self._on_media_status_changed)
 
         self._decoder = QAudioDecoder(self)
-        dec_fmt = QAudioFormat()
-        dec_fmt.setSampleRate(self._sample_rate)
-        dec_fmt.setChannelCount(2)
-        dec_fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        dec_fmt = self._make_decoder_format(self._sample_rate, self._store_float)
         self._decoder.setAudioFormat(dec_fmt)
         self._decoder.bufferReady.connect(self._on_decoder_buffer_ready)
         self._decoder.durationChanged.connect(self._on_media_duration_changed)
@@ -1175,6 +1253,173 @@ class NordicAudioEngine(QObject):
         self._stream_device._out_fifo.clear()
         self._init_continuous_sink()
 
+    # ------------------------------------------------------------------
+    # 流水线格式：解码格式 / 声卡格式协商 / 切换
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_decoder_format(rate: int, store_float: bool) -> QAudioFormat:
+        """让 Qt 解码器直接输出我们要的格式：立体声，16 位源 Int16、更高位深 Float32，采样率为指定值"""
+        f = QAudioFormat()
+        f.setSampleRate(int(rate))
+        f.setChannelCount(2)
+        f.setSampleFormat(QAudioFormat.SampleFormat.Float if store_float else QAudioFormat.SampleFormat.Int16)
+        return f
+
+    def _select_output_device(self):
+        device = QMediaDevices.defaultAudioOutput()
+        if self.selected_device_id and self.selected_device_id != "default":
+            for dev in QMediaDevices.audioOutputs():
+                dev_id = bytes(dev.id()).decode("utf-8", errors="ignore")
+                if dev_id == self.selected_device_id:
+                    return dev
+        return device
+
+    def _target_channel_count(self) -> int:
+        if self.output_channel_mode == "surround_51":
+            return 6
+        if self.output_channel_mode == "surround_71":
+            return 8
+        return 2
+
+    def _negotiate_sink_format(self, device, rate: int) -> Optional[QAudioFormat]:
+        """在声卡上为指定采样率协商输出格式：声道数 目标→立体声→单声道，样本格式 Float32→Int32→Int16。
+        返回第一个设备支持的格式；该采样率下完全不支持则返回 None。结果按（设备, 声道, 采样率）缓存。"""
+        dev_key = bytes(device.id()).decode("utf-8", errors="ignore") if not device.isNull() else ""
+        target = self._target_channel_count()
+        cache_key = (dev_key, target, int(rate))
+        if cache_key in self._sink_format_cache:
+            cached = self._sink_format_cache[cache_key]
+            return QAudioFormat(cached) if cached is not None else None
+
+        found: Optional[QAudioFormat] = None
+        sample_formats = (
+            QAudioFormat.SampleFormat.Float,
+            QAudioFormat.SampleFormat.Int32,
+            QAudioFormat.SampleFormat.Int16,
+        )
+        for ch in dict.fromkeys((target, 2, 1)):
+            for sf in sample_formats:
+                fmt = QAudioFormat()
+                fmt.setSampleRate(int(rate))
+                fmt.setChannelCount(ch)
+                fmt.setSampleFormat(sf)
+                if device.isFormatSupported(fmt):
+                    found = fmt
+                    break
+            if found is not None:
+                break
+        self._sink_format_cache[cache_key] = QAudioFormat(found) if found is not None else None
+        return found
+
+    def _plan_for(self, track: Optional[NordicTrack]) -> Tuple[int, bool]:
+        """决定一首曲目的解码格式 (采样率, 是否 float32 存储)。
+        目标是"别无谓地降级"：优先用文件原始采样率/位深；只有声卡不支持该采样率、或整首解码后会占用过多内存时才向下取。"""
+        if track is None or not track.file_path or not Path(track.file_path).is_file():
+            return DEFAULT_SAMPLE_RATE, False  # 内置合成示例曲目
+
+        native = int(getattr(track, "sample_rate", 0) or DEFAULT_SAMPLE_RATE)
+        native = max(8000, min(RATE_LADDER[0], native))
+        bits = int(getattr(track, "bit_depth", 16) or 16)
+        store_float = bits > 16
+
+        # 候选采样率：原始采样率，然后依次向下，最后兜底 44.1k/48k（采样率低于 44.1k 的文件让解码器升采样）
+        candidates: List[int] = [native] + [r for r in RATE_LADDER if r < native]
+        for fallback in (DEFAULT_SAMPLE_RATE, 48000):
+            if fallback not in candidates:
+                candidates.append(fallback)
+
+        # 整轨 CUE 的实际解码长度未知（可达一小时以上），按 1 小时估算，让它自然落在更低的采样率
+        est_sec = 3600.0 if track.cue_path else max(30.0, float(track.duration or 0.0))
+
+        device = self._select_output_device()
+        has_device = not device.isNull()
+        for i, r in enumerate(candidates):
+            too_big = r * stereo_frame_bytes(store_float) * est_sec > MAX_DECODED_BYTES
+            if too_big and i < len(candidates) - 1:
+                continue  # 整首解码会占太多内存：试更低的采样率
+            if has_device and self._negotiate_sink_format(device, r) is None:
+                continue  # 声卡不支持这个采样率
+            if too_big:
+                store_float = False  # 已经是最低采样率仍超限：退回 16 位存储（和以前的行为一致）
+            return r, store_float
+        return DEFAULT_SAMPLE_RATE, False
+
+    def _apply_stream_plan(self, rate: int, store_float: bool) -> None:
+        """切换到新的流水线格式。调用前必须已经清空旧的解码缓冲（旧数据的格式和新格式不同）。"""
+        self._store_float = bool(store_float)
+        self._fb = stereo_frame_bytes(self._store_float)
+        rate = int(rate)
+        if rate == self._sample_rate:
+            return
+        self._sample_rate = rate
+        self.dsp.update_sample_rate(rate)
+        self._stream_device.configure_for_rate(rate)
+        self._stream_device._out_fifo.clear()
+        self._stream_device._env_gain = 0.0
+        # 按新采样率重建声卡输出（不在这里喂数据：此刻缓冲是空的）
+        if self._audio_sink is not None:
+            try:
+                self._audio_sink.setVolume(0.0)
+                self._audio_sink.stop()
+                self._audio_sink.reset()
+                self._audio_sink.setParent(None)
+                self._audio_sink.deleteLater()
+            except Exception:
+                _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
+            self._audio_sink = None
+            self._push_io = None
+        self._init_continuous_sink()
+
+    def _append_decoder_buffer(self, buf, dst: bytearray, rate: int, store_float: bool) -> None:
+        """把解码器吐出的一块缓冲追加到目标 bytearray。正常情况下格式就是我们请求的，直接拷贝；
+        若解码器没有按请求输出（样本格式/声道数/采样率不符），则转换成目标格式，保证缓冲里永远是统一格式。"""
+        cnt = buf.byteCount()
+        if cnt <= 0:
+            return
+        raw = buf.constData().asstring(cnt)
+        fmt = buf.format()
+        want = QAudioFormat.SampleFormat.Float if store_float else QAudioFormat.SampleFormat.Int16
+        if fmt.sampleFormat() == want and fmt.channelCount() == 2 and fmt.sampleRate() == rate:
+            dst.extend(raw)
+            return
+        try:
+            dst.extend(self._convert_foreign_pcm(raw, fmt, rate, store_float))
+        except Exception:
+            _logging.getLogger(__name__).warning("无法转换解码缓冲格式 %s", fmt, exc_info=True)
+
+    @staticmethod
+    def _convert_foreign_pcm(raw: bytes, fmt: QAudioFormat, rate: int, store_float: bool) -> bytes:
+        sf = fmt.sampleFormat()
+        S = QAudioFormat.SampleFormat
+        if sf == S.UInt8:
+            x = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64) - 128.0) / 128.0
+        elif sf == S.Int16:
+            x = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
+        elif sf == S.Int32:
+            x = np.frombuffer(raw, dtype=np.int32).astype(np.float64) / 2147483648.0
+        else:
+            x = np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+        ch = max(1, fmt.channelCount())
+        x = x[: (len(x) // ch) * ch].reshape(-1, ch)
+        if ch == 1:
+            st = np.repeat(x, 2, axis=1)
+        elif ch == 2:
+            st = x
+        else:
+            # 多声道（5.1/7.1）折叠成立体声：前左右 + 0.707 × 中置/环绕
+            left = x[:, 0] + (0.707 * x[:, 2] if ch > 2 else 0.0) + (0.707 * x[:, 4] if ch > 4 else 0.0)
+            right = x[:, 1] + (0.707 * x[:, 2] if ch > 2 else 0.0) + (0.707 * x[:, 5] if ch > 5 else 0.0)
+            st = np.stack((left, right), axis=1) * 0.5
+        src_rate = fmt.sampleRate()
+        if src_rate and src_rate != rate:
+            from math import gcd
+            from scipy.signal import resample_poly
+
+            g = gcd(int(rate), int(src_rate))
+            st = resample_poly(st, int(rate) // g, int(src_rate) // g, axis=0)
+        return float_stereo_to_store(st.T, store_float)
+
     def _stop_decoder_safely(self) -> None:
         self._ignoring_decoder_signals = True
         try:
@@ -1212,9 +1457,12 @@ class NordicAudioEngine(QObject):
         self._pre_decoded_bytes.clear()
         self._pre_decoded_track_id = track.track_id
         self._pre_decoder_finished = False
+        # 预解码用这首曲目自己的格式（可能和当前曲目的采样率/位深不同），切歌时直接采用
+        self._pre_plan = self._plan_for(track)
 
         if track.file_path and Path(track.file_path).is_file():
             try:
+                self._pre_decoder.setAudioFormat(self._make_decoder_format(*self._pre_plan))
                 self._pre_decoder.setSource(QUrl.fromLocalFile(track.file_path))
                 self._pre_decoder.start()
             except Exception:
@@ -1226,11 +1474,10 @@ class NordicAudioEngine(QObject):
     def _drain_pre_decoder_buffers(self, max_buffers: int = 100000) -> None:
         try:
             read_cnt = 0
+            rate, store_float = self._pre_plan
             while read_cnt < max_buffers and self._pre_decoder.bufferAvailable():
                 buf = self._pre_decoder.read()
-                cnt = buf.byteCount()
-                if cnt > 0:
-                    self._pre_decoded_bytes.extend(buf.constData().asstring(cnt))
+                self._append_decoder_buffer(buf, self._pre_decoded_bytes, rate, store_float)
                 read_cnt += 1
         except Exception:
             _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
@@ -1270,17 +1517,19 @@ class NordicAudioEngine(QObject):
         if track.acoustic_dna and isinstance(track.acoustic_dna, dict) and "bpm" in track.acoustic_dna:
             self._dna_computed = True
             return
+        fb = self._fb
         total_bytes = len(self._decoded_raw_bytes)
-        start_byte = self._track_start_frame * 4
-        end_byte = self._track_end_frame * 4 if self._track_end_frame > self._track_start_frame else total_bytes
+        start_byte = self._track_start_frame * fb
+        end_byte = self._track_end_frame * fb if self._track_end_frame > self._track_start_frame else total_bytes
         avail_span = min(total_bytes, end_byte) - start_byte
-        if avail_span >= self._sample_rate * 4 * 12 or (self._decoder_finished and avail_span >= self._sample_rate * 4 * 3):
+        if avail_span >= self._sample_rate * fb * 12 or (self._decoder_finished and avail_span >= self._sample_rate * fb * 3):
             # 直接传整块缓冲区 + 帧范围，函数内部只会切出 12 秒窗口；不再先复制整首（CUE 整轨可达数百 MB）
             dna = compute_pcm_acoustic_dna(
                 self._decoded_raw_bytes,
                 self._sample_rate,
                 start_frame=self._track_start_frame,
-                end_frame=min(total_bytes, end_byte) // 4,
+                end_frame=min(total_bytes, end_byte) // fb,
+                store_float=self._store_float,
             )
             if dna:
                 track.acoustic_dna = dna
@@ -1370,8 +1619,9 @@ class NordicAudioEngine(QObject):
         # 当音频标签内未写入 REPLAYGAIN_TRACK_GAIN 时，基于已解码 PCM 的 RMS 能量动态估算响度 (目标 -16.5 dBFS)。
         # 两阶段：解码到 3 秒先给一个保守的临时增益（范围 -6~+4 dB，不写回曲目、不锁定），
         # 解码满 25 秒后再算最终增益并锁定。CUE 分轨从该轨的起始偏移开始量，而不是整轨文件的开头。
-        sr_bytes = self._sample_rate * 4
-        offset_bytes = int(max(0.0, float(getattr(track, "start_time", 0.0) or 0.0)) * self._sample_rate) * 4
+        fb = self._fb
+        sr_bytes = self._sample_rate * fb
+        offset_bytes = int(max(0.0, float(getattr(track, "start_time", 0.0) or 0.0)) * self._sample_rate) * fb
         avail = len(self._decoded_raw_bytes) - offset_bytes
         window = sr_bytes * 25
         if avail >= sr_bytes * 2:
@@ -1379,8 +1629,8 @@ class NordicAudioEngine(QObject):
             if not is_final and self._rms_rg_provisional_done:
                 return
             sample_slice = bytes(self._decoded_raw_bytes[offset_bytes : offset_bytes + min(avail, window)])
-            sample_slice = sample_slice[: (len(sample_slice) // 4) * 4]
-            pcm = np.frombuffer(sample_slice, dtype=np.int16).astype(np.float32) / 32768.0
+            sample_slice = sample_slice[: (len(sample_slice) // fb) * fb]
+            pcm = pcm_to_float_stereo(sample_slice, self._store_float).astype(np.float32).reshape(-1)
             abs_pcm = np.abs(pcm)
             active = pcm[abs_pcm > 0.008]
             if len(active) > 2048:
@@ -1404,47 +1654,35 @@ class NordicAudioEngine(QObject):
 
     def _init_continuous_sink(self) -> None:
         try:
-            device = QMediaDevices.defaultAudioOutput()
-            if self.selected_device_id and self.selected_device_id != "default":
-                for dev in QMediaDevices.audioOutputs():
-                    dev_id = bytes(dev.id()).decode("utf-8", errors="ignore")
-                    if dev_id == self.selected_device_id:
-                        device = dev
-                        break
+            device = self._select_output_device()
             if device.isNull():
                 self.output_device_name = "未检测到音频设备"
                 return
             self.output_device_name = device.description()
 
-            target_ch = 2
-            if self.output_channel_mode == "surround_51":
-                target_ch = 6
-            elif self.output_channel_mode == "surround_71":
-                target_ch = 8
-
-            fmt = QAudioFormat()
-            fmt.setSampleRate(self._sample_rate)
-            fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-            fmt.setChannelCount(target_ch)
-
-            if device.isFormatSupported(fmt):
-                self._channels = target_ch
-                self.output_channels_actual = target_ch
-            else:
+            fmt = self._negotiate_sink_format(device, self._sample_rate)
+            if fmt is None:
+                # 设备在当前采样率下一种格式都不接受（例如播放中热插拔了别的设备）：
+                # 退回最保守的立体声 Int16，由 Qt 自己去适配，和以前的行为一致
+                logger = _logging.getLogger(__name__)
+                logger.warning("声卡 %s 不支持 %d Hz，使用保守输出格式", self.output_device_name, self._sample_rate)
+                fmt = QAudioFormat()
+                fmt.setSampleRate(self._sample_rate)
                 fmt.setChannelCount(2)
-                if device.isFormatSupported(fmt):
-                    self._channels = 2
-                    self.output_channels_actual = 2
-                else:
-                    fmt.setChannelCount(1)
-                    self._channels = 1
-                    self.output_channels_actual = 1
+                fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+
+            self._channels = fmt.channelCount()
+            self.output_channels_actual = self._channels
+            self._out_fmt = fmt.sampleFormat()
+            self._out_bps = max(1, fmt.bytesPerSample())
 
             self._push_io = None
             self._audio_sink = QAudioSink(device, fmt, self)
-            buf_multiplier = max(1, self._channels // 2)
-            # 256KB 硬件缓冲 (~1.48s @ 44.1kHz)，彻底杜绝窗口切换、Alt+Tab、DWM 渲染或后台节流时的爆音断流
-            self._audio_sink.setBufferSize(262144 * buf_multiplier)
+            # 约 1.48 秒的硬件缓冲（原先 44.1kHz/16 位/立体声下的 256KB），杜绝窗口切换、Alt+Tab、
+            # DWM 渲染或后台节流时的爆音断流；按实际采样率/声道/位深换算，并对齐到整帧
+            frame_bytes = self._channels * self._out_bps
+            buf_size = int(1.48 * self._sample_rate) * frame_bytes
+            self._audio_sink.setBufferSize(max(65536, buf_size))
             self._audio_sink.setVolume(self.volume)
             self._stream_device._reset_tail_frame()
             self._stream_device.start_stream()
@@ -1487,14 +1725,16 @@ class NordicAudioEngine(QObject):
     def _feed_audio_sink(self) -> None:
         if self._audio_sink is None or self._push_io is None:
             return
-        block_bytes = ContinuousDspStreamDevice.BLOCK_FRAMES * 2 * self._channels
-        buf_multiplier = max(1, self._channels // 2)
-        fadeout_reserve = 16384 * buf_multiplier
+        if self._draining_for_switch:
+            return  # 正在等声卡把上一首的尾巴放完再切采样率：此时不能再往里写任何数据（包括静音）
+        block_bytes = ContinuousDspStreamDevice.BLOCK_FRAMES * self._channels * self._out_bps
+        # 预留给淡出块的空间：淡出块长度按时间（~81ms）算，随采样率/声道/位深变化
+        fadeout_reserve = self._stream_device.fadeout_frames * self._channels * self._out_bps + 2048
         waiting_for_initial_decode = (
             self._using_local_file
             and not self._decoder_finished
             and not self._decoder_failed
-            and ((len(self._decoded_raw_bytes) // 4) - self._frame_cursor) < ContinuousDspStreamDevice.BLOCK_FRAMES * 2
+            and ((len(self._decoded_raw_bytes) // self._fb) - self._frame_cursor) < ContinuousDspStreamDevice.BLOCK_FRAMES * 2
         )
         if waiting_for_initial_decode:
             buf_sz = self._audio_sink.bufferSize()
@@ -1516,9 +1756,7 @@ class NordicAudioEngine(QObject):
             read_cnt = 0
             while read_cnt < max_buffers and self._decoder.bufferAvailable():
                 buf = self._decoder.read()
-                cnt = buf.byteCount()
-                if cnt > 0:
-                    self._decoded_raw_bytes.extend(buf.constData().asstring(cnt))
+                self._append_decoder_buffer(buf, self._decoded_raw_bytes, self._sample_rate, self._store_float)
                 read_cnt += 1
         except Exception:
             _logging.getLogger(__name__).debug("ignored exception", exc_info=True)
@@ -1533,20 +1771,20 @@ class NordicAudioEngine(QObject):
             and self.current_track is not None
             and self.current_track.replay_gain_db is None
             and len(self._decoded_raw_bytes)
-            >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 3) * 4
+            >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 3) * self._fb
             and (
                 not self._rms_rg_provisional_done
                 or len(self._decoded_raw_bytes)
-                >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 25) * 4
+                >= (int(max(0.0, float(getattr(self.current_track, "start_time", 0.0) or 0.0)) * self._sample_rate) + self._sample_rate * 25) * self._fb
             )
         ):
             self._update_track_replay_gain()
-        if not self._dna_computed and len(self._decoded_raw_bytes) >= self._sample_rate * 4 * 14:
+        if not self._dna_computed and len(self._decoded_raw_bytes) >= self._sample_rate * self._fb * 14:
             self._update_track_acoustic_dna()
         if (
             self.is_playing
             and not self._initial_sink_fed
-            and (len(self._decoded_raw_bytes) // 4) - self._frame_cursor >= ContinuousDspStreamDevice.BLOCK_FRAMES * 2
+            and (len(self._decoded_raw_bytes) // self._fb) - self._frame_cursor >= ContinuousDspStreamDevice.BLOCK_FRAMES * 2
         ):
             self._initial_sink_fed = True
             self._feed_audio_sink()
@@ -1556,7 +1794,7 @@ class NordicAudioEngine(QObject):
             return
         self._drain_decoder_buffers(max_buffers=100000)
         self._decoder_finished = True
-        total_frames = len(self._decoded_raw_bytes) // 4
+        total_frames = len(self._decoded_raw_bytes) // self._fb
         if total_frames > 0:
             decoded_dur = total_frames / float(self._sample_rate)
             if self._track_start_frame == 0 and self._track_end_frame == 0:
@@ -1583,7 +1821,7 @@ class NordicAudioEngine(QObject):
         if self._ignoring_decoder_signals:
             return
         self._drain_decoder_buffers(max_buffers=100000)
-        decoded_dur = (len(self._decoded_raw_bytes) // 4) / float(self._sample_rate)
+        decoded_dur = (len(self._decoded_raw_bytes) // self._fb) / float(self._sample_rate)
         if decoded_dur >= max(15.0, self.duration * 0.5):
             QTimer.singleShot(
                 60,
@@ -1630,7 +1868,8 @@ class NordicAudioEngine(QObject):
         chords = track.chords or [[261.63, 329.63, 392.00, 493.88]]
         chord_span = 4.6
         n_steps = int(math.ceil(dur / chord_span))
-        step_samples = int(self._sample_rate * chord_span)
+        # 合成曲目固定生成 44.1kHz / int16（对应 _plan_for 对没有文件的曲目返回的格式）
+        step_samples = int(DEFAULT_SAMPLE_RATE * chord_span)
         t = np.linspace(0.0, chord_span, step_samples, endpoint=False, dtype=np.float32)
 
         out_bytes = bytearray()
@@ -1664,24 +1903,36 @@ class NordicAudioEngine(QObject):
             interleaved[1::2] = np.clip(sig_r * 24000.0, -32000, 32000).astype(np.int16)
             out_bytes.extend(interleaved.tobytes())
 
-        max_bytes = int(dur * self._sample_rate) * 4
+        max_bytes = int(dur * DEFAULT_SAMPLE_RATE) * 4
         return out_bytes[:max_bytes]
 
+    def _defer_load_until_drained(self, track: NordicTrack, auto_play: bool) -> None:
+        """自动连续切歌时，下一首的采样率与当前不同：声卡必须重建，但上一首最后约 1.4 秒还在声卡缓冲里没播完。
+        这里先停止喂数据，等缓冲自然放完（最多等 3 秒）再按"手动切歌"流程加载下一首，避免把上一首的结尾截掉。"""
+        token = self._switch_token
+        self._draining_for_switch = True
+        self._eof_triggered = False  # 否则 _handle_eof_on_main_thread 会在 trackEnded 之后把播放暂停
+        deadline = time.monotonic() + 3.0
+
+        def _poll() -> None:
+            if token != self._switch_token:
+                return  # 期间发生了别的加载/跳转，这次切换作废
+            sink = self._audio_sink
+            slack = ContinuousDspStreamDevice.BLOCK_FRAMES * self._channels * self._out_bps * 2
+            drained = sink is None or sink.bufferSize() <= 0 or sink.bytesFree() >= sink.bufferSize() - slack
+            if drained or time.monotonic() > deadline:
+                self._draining_for_switch = False
+                self.load_track(track, auto_play=auto_play, is_auto_transition=False)
+            else:
+                QTimer.singleShot(30, _poll)
+
+        QTimer.singleShot(0, _poll)
+
     def load_track(self, track: NordicTrack, auto_play: bool = False, is_auto_transition: bool = False) -> None:
+        self._switch_token += 1  # 作废任何尚未完成的"等声卡排空再切换格式"
+        self._draining_for_switch = False
         was_playing = self.is_playing
         should_play = bool(auto_play or was_playing)
-
-        if was_playing and not is_auto_transition:
-            self._flush_fadeout_to_sink()
-            if self._using_local_file and self._decoder_failed:
-                self._media_player.stop()
-        if not should_play and was_playing:
-            self.pause()
-
-        start_sec = max(0.0, float(getattr(track, "start_time", 0.0) or 0.0))
-        end_sec = max(0.0, float(getattr(track, "end_time", 0.0) or 0.0))
-        self._track_start_frame = int(start_sec * self._sample_rate)
-        self._track_end_frame = int(end_sec * self._sample_rate) if end_sec > start_sec else 0
 
         # 若切换的是同一整轨音频文件的不同 CUE 分轨且当前已解码完成，直接复用内存 PCM，实现 0ms 分轨切换
         same_completed_file = bool(
@@ -1690,10 +1941,49 @@ class NordicAudioEngine(QObject):
             and self._decoder_finished
             and len(self._decoded_raw_bytes) > 0
         )
+        prebuffer_hit = bool(
+            not same_completed_file
+            and self._pre_decoded_track_id == track.track_id
+            and self._pre_decoder_finished
+            and len(self._pre_decoded_bytes) > 0
+        )
+        # 本曲的解码格式：复用缓冲/命中预解码时沿用缓冲自己的格式，否则按曲目原始采样率/位深并结合声卡能力决定
+        if same_completed_file:
+            plan = (self._sample_rate, self._store_float)
+        elif prebuffer_hit:
+            plan = self._pre_plan
+        else:
+            plan = self._plan_for(track)
+
+        # 自动连续切歌且采样率变了：先让上一首的尾巴在声卡里放完，再走手动切歌流程
+        if (
+            is_auto_transition
+            and was_playing
+            and plan[0] != self._sample_rate
+            and self._audio_sink is not None
+        ):
+            self._defer_load_until_drained(track, auto_play)
+            return
+
+        if was_playing and not is_auto_transition:
+            self._flush_fadeout_to_sink()
+            if self._using_local_file and self._decoder_failed:
+                self._media_player.stop()
+        if not should_play and was_playing:
+            self.pause()
+
         if not same_completed_file:
             self._stop_decoder_safely()
             self._decoded_raw_bytes.clear()
             self._decoded_source_path = str(track.file_path or "")
+            # 缓冲已清空，可以安全切换流水线格式（必要时重建声卡输出）
+            self._apply_stream_plan(*plan)
+
+        # 起止帧必须在确定采样率之后计算
+        start_sec = max(0.0, float(getattr(track, "start_time", 0.0) or 0.0))
+        end_sec = max(0.0, float(getattr(track, "end_time", 0.0) or 0.0))
+        self._track_start_frame = int(start_sec * self._sample_rate)
+        self._track_end_frame = int(end_sec * self._sample_rate) if end_sec > start_sec else 0
 
         self.current_track = track
         if end_sec > start_sec:
@@ -1744,12 +2034,7 @@ class NordicAudioEngine(QObject):
 
         # 优先命中预解码缓冲队列 (Pre-buffering) 或同一整轨缓存，实现 0ms 无缝加载
         used_prebuffer = same_completed_file
-        if (
-            not used_prebuffer
-            and self._pre_decoded_track_id == track.track_id
-            and self._pre_decoder_finished
-            and len(self._pre_decoded_bytes) > 0
-        ):
+        if prebuffer_hit:
             self._decoded_raw_bytes = bytearray(self._pre_decoded_bytes)
             self._decoded_source_path = str(track.file_path or "")
             self._pre_decoded_bytes.clear()
@@ -1759,7 +2044,7 @@ class NordicAudioEngine(QObject):
             self._decoder_started = True
             self._decoder_finished = True
             self._initial_sink_fed = True
-            total_frames = len(self._decoded_raw_bytes) // 4
+            total_frames = len(self._decoded_raw_bytes) // self._fb
             if total_frames > 0 and self._track_start_frame == 0 and self._track_end_frame == 0:
                 decoded_dur = total_frames / float(self._sample_rate)
                 if decoded_dur >= 10.0 or self.duration < 10.0:
@@ -1773,6 +2058,8 @@ class NordicAudioEngine(QObject):
                 self._using_local_file = True
                 url = QUrl.fromLocalFile(track.file_path)
                 self._audio_output.setVolume(0.0)
+                # 解码器直接输出本曲的目标格式（原始采样率 / 位深），必须在 setSource 之前设置
+                self._decoder.setAudioFormat(self._make_decoder_format(self._sample_rate, self._store_float))
                 self._decoder.setSource(url)
                 if should_play:
                     self._decoder_started = True
@@ -2094,7 +2381,7 @@ class NordicAudioEngine(QObject):
         if self.is_playing:
             rel_frames = max(0, self._frame_cursor - self._track_start_frame)
             queued_bytes = max(0, self._audio_sink.bufferSize() - self._audio_sink.bytesFree()) if self._audio_sink else 0
-            latency_sec = queued_bytes / float(self._sample_rate * 2 * self._channels)
+            latency_sec = queued_bytes / float(self._sample_rate * self._out_bps * self._channels)
             self.current_time = max(0.0, min(self.duration, (rel_frames / float(self._sample_rate)) - latency_sec))
             self.timeUpdated.emit(self.current_time, self.duration, "tick")
             self.spectrumUpdated.emit(self.current_spectrum_bands)
