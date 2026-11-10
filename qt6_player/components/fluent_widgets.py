@@ -1399,6 +1399,7 @@ class WinUIModalDialog(QDialog):
         self.is_translucent_backdrop = self.backdrop_material in ("mica", "acrylic")
         self._drag_pos: Optional[QPoint] = None
         self.setWindowTitle(title)
+        self.setObjectName("WinUIModalDialog")
         self.setFixedSize(width, height)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -1462,20 +1463,29 @@ class WinUIModalDialog(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        is_fullscreen_parent = False
         if self.parentWidget():
             pw = self.parentWidget().window()
+            if pw and pw.isFullScreen():
+                is_fullscreen_parent = True
             pg = pw.frameGeometry()
             cx = pg.center().x() - self.width() // 2
             cy = pg.center().y() - self.height() // 2
             self._base_pos = QPoint(cx, cy)
-            self.move(cx, cy + 10)
+            self.move(cx, cy if is_fullscreen_parent else cy + 10)
         else:
             self._base_pos = self.pos()
-        self.setWindowOpacity(0.01)
-        self._entry_anim.stop()
-        self._entry_anim.setStartValue(0.0)
-        self._entry_anim.setEndValue(1.0)
-        self._entry_anim.start()
+
+        if is_fullscreen_parent:
+            # 全屏模式下直显 1.0 不透明度，杜绝 Windows DWM 与显卡 (如 Intel Arc) 渲染管道因半透过渡产生的闪屏
+            self.setWindowOpacity(1.0)
+            self._entry_anim.stop()
+        else:
+            self.setWindowOpacity(0.01)
+            self._entry_anim.stop()
+            self._entry_anim.setStartValue(0.0)
+            self._entry_anim.setEndValue(1.0)
+            self._entry_anim.start()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 48.0:

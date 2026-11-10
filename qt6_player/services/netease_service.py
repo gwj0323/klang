@@ -72,6 +72,24 @@ def CloudSearchSongs(keyword: str, limit: int = 30, offset: int = 0):
     return '/weapi/search/get', {'s': str(keyword), 'type': '1', 'limit': str(limit), 'offset': str(offset)}
 
 
+def parse_netease_cookie_string(raw: str) -> Dict[str, str]:
+    """
+    稳健解析网易云 Cookie 字符串：
+    支持分号或逗号分隔的 Set-Cookie 格式，自动兼容包含逗号的 Expires 日期字段，
+    提取 MUSIC_U, __csrf, NMTID 等核心键值并过滤标准 HTTP 属性指令。
+    """
+    if not raw:
+        return {}
+    import re
+    cookie_dict: Dict[str, str] = {}
+    ignored_keys = {"path", "domain", "expires", "max-age", "secure", "httponly", "samesite"}
+    for m in re.finditer(r'([A-Za-z0-9_\-\.]+)=([^;,\s][^;\r\n]*?)(?:;|,|$)', raw):
+        k, v = m.group(1).strip(), m.group(2).strip()
+        if k and k.lower() not in ignored_keys:
+            cookie_dict[k] = v
+    return cookie_dict
+
+
 class NeteaseCloudManager(QObject):
     """
     网易云音乐集成管理器 (基于 PyNCM 原生加密引擎)
@@ -212,20 +230,24 @@ class NeteaseCloudManager(QObject):
         app_data.mkdir(parents=True, exist_ok=True)
         return app_data
 
-    def _init_session(self) -> None:
-        sess = GetCurrentSession()
-        sess.headers["User-Agent"] = (
+    def _create_fresh_session(self) -> pyncm.Session:
+        """创建全新干净的 pyncm Session 并预先注入 PC 客户端标识，杜绝风控与 8821 频次"""
+        new_sess = pyncm.Session()
+        new_sess.headers["User-Agent"] = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/126.0.0.0 Safari/537.36"
         )
-        # 预先注入 PC 客户端标识 Cookie，降低网易云网关风控与 8821 频次
-        sess.cookies.set("os", "pc", domain=".music.163.com")
-        sess.cookies.set("appver", "3.0.18.203152", domain=".music.163.com")
-        sess.cookies.set("channel", "netease", domain=".music.163.com")
-        sess.cookies.set("os", "pc")
-        sess.cookies.set("appver", "3.0.18.203152")
+        new_sess.cookies.set("os", "pc", domain=".music.163.com")
+        new_sess.cookies.set("appver", "3.0.18.203152", domain=".music.163.com")
+        new_sess.cookies.set("channel", "netease", domain=".music.163.com")
+        new_sess.csrf_token = ""
+        new_sess.login_info = {"success": False, "tick": time.time(), "content": None}
+        SetCurrentSession(new_sess)
+        return new_sess
 
+    def _init_session(self) -> None:
+        sess = self._create_fresh_session()
         state = load_player_state()
         saved_cookies = state.get("netease_cookies")
         saved_profile = state.get("netease_profile")
@@ -233,7 +255,6 @@ class NeteaseCloudManager(QObject):
         if saved_cookies and isinstance(saved_cookies, dict):
             for k, v in saved_cookies.items():
                 sess.cookies.set(str(k), str(v), domain=".music.163.com")
-                sess.cookies.set(str(k), str(v))
             if "__csrf" in saved_cookies:
                 sess.csrf_token = str(saved_cookies["__csrf"])
 
@@ -319,6 +340,11 @@ class NeteaseCloudManager(QObject):
         申请二维码 Unikey 并生成适合显示的 PNG 原始数据字节
         （可在子线程安全调用，由主线程直接 loadFromData 转换为 QPixmap）
         """
+        if not self.is_logged_in:
+            sess = GetCurrentSession()
+            sess.cookies.set("os", "pc", domain=".music.163.com")
+            sess.cookies.set("appver", "3.0.18.203152", domain=".music.163.com")
+            sess.cookies.set("channel", "netease", domain=".music.163.com")
         res = LoginQrcodeKey()
         unikey = res.get("unikey", "")
         if not unikey:
@@ -358,26 +384,16 @@ class NeteaseCloudManager(QObject):
                 # 登录成功，从返回中提取并写入 Cookie
                 raw_cookie = res.get("cookie", "")
                 if raw_cookie:
-                    try:
-                        from http.cookies import SimpleCookie
-                        sc = SimpleCookie()
-                        sc.load(raw_cookie)
-                        for k, m in sc.items():
-                            sess.cookies.set(k, m.value, domain=".music.163.com")
-                            sess.cookies.set(k, m.value)
-                    except Exception:
-                        pass
-                    for item in raw_cookie.split(";"):
-                        item = item.strip()
-                        if "=" in item:
-                            k, v = item.split("=", 1)
-                            k, v = k.strip(), v.strip()
-                            if k and k.lower() not in ("path", "domain", "expires", "max-age", "secure", "httponly", "samesite"):
-                                sess.cookies.set(k, v, domain=".music.163.com")
-                                sess.cookies.set(k, v)
+                    extracted = parse_netease_cookie_string(raw_cookie)
+                    for k, v in extracted.items():
+                        sess.cookies.set(k, v, domain=".music.163.com")
+                    if "__csrf" in extracted:
+                        sess.csrf_token = str(extracted["__csrf"])
 
-                if "__csrf" in sess.cookies:
-                    sess.csrf_token = sess.cookies["__csrf"]
+                if not sess.csrf_token:
+                    csrf_candidate = sess.cookies.get("__csrf", domain=".music.163.com")
+                    if csrf_candidate:
+                        sess.csrf_token = str(csrf_candidate)
 
                 # 校验并提取登录账号资料
                 status_res = GetLoginStatus()
@@ -434,25 +450,20 @@ class NeteaseCloudManager(QObject):
         if "=" not in raw:
             raw = f"MUSIC_U={raw}"
 
-        sess = GetCurrentSession()
-        cookie_dict: Dict[str, str] = {}
-        for item in raw.split(";"):
-            item = item.strip()
-            if "=" in item:
-                k, v = item.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if k and k.lower() not in ("path", "domain", "expires", "max-age", "secure", "httponly", "samesite"):
-                    cookie_dict[k] = v
-
+        sess = self._create_fresh_session()
+        cookie_dict = parse_netease_cookie_string(raw)
         if not cookie_dict:
             return False, "未能识别到有效凭证键值", {}
 
         for k, v in cookie_dict.items():
             sess.cookies.set(k, v, domain=".music.163.com")
-            sess.cookies.set(k, v)
 
         if "__csrf" in cookie_dict:
-            sess.csrf_token = cookie_dict["__csrf"]
+            sess.csrf_token = str(cookie_dict["__csrf"])
+        else:
+            csrf_candidate = sess.cookies.get("__csrf", domain=".music.163.com")
+            if csrf_candidate:
+                sess.csrf_token = str(csrf_candidate)
 
         try:
             status_res = GetLoginStatus()
@@ -479,9 +490,7 @@ class NeteaseCloudManager(QObject):
 
     def logout(self) -> None:
         """退出当前网易云账号"""
-        sess = GetCurrentSession()
-        sess.cookies.clear()
-        sess.login_info = {"success": False, "tick": time.time(), "content": None}
+        self._create_fresh_session()
         self.is_logged_in = False
         self.user_profile = {}
         self.user_playlists = []

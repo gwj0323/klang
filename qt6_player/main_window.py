@@ -760,6 +760,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self.immersive_window.seekRatioRequested.connect(
             lambda ratio: self.audio.seek(ratio * self.audio.duration, auto_play_on_seek=False, source="seek")
         )
+        self.immersive_window.seekRatioScrubbing.connect(self._on_immersive_scrubbing)
         self.immersive_window.seekTimeRequested.connect(
             lambda sec: self.audio.seek(sec, auto_play_on_seek=False, source="seek")
         )
@@ -822,6 +823,7 @@ class NordicWinUI3Window(AcrylicWindow):
         self.transport_bar.seekRatioRequested.connect(
             lambda ratio: self.audio.seek(ratio * self.audio.duration, auto_play_on_seek=False, source="seek")
         )
+        self.transport_bar.timelineScrubbing.connect(self._on_timeline_scrubbing)
         self.transport_bar.volumeChanged.connect(self.audio.set_volume)
         self.transport_bar.muteToggled.connect(self.audio.toggle_mute)
 
@@ -1120,19 +1122,51 @@ class NordicWinUI3Window(AcrylicWindow):
             self.lyrics_stage._show_toast(f"窗口材质: {mat_labels.get(mode, mode)}")
         self.schedule_save()
 
+    def _on_timeline_scrubbing(self, ratio: float) -> None:
+        if self.audio.duration > 0:
+            target_t = max(0.0, min(self.audio.duration, ratio * self.audio.duration))
+            if hasattr(self, "lyrics_stage"):
+                self.lyrics_stage.sync_time(target_t, source="scrub")
+            if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
+                self.immersive_window.update_time(target_t, self.audio.duration)
+
+    def _on_immersive_scrubbing(self, ratio: float) -> None:
+        if self.audio.duration > 0:
+            target_t = max(0.0, min(self.audio.duration, ratio * self.audio.duration))
+            if hasattr(self, "lyrics_stage"):
+                self.lyrics_stage.sync_time(target_t, source="scrub")
+            if hasattr(self, "transport_bar"):
+                self.transport_bar.update_progress(target_t, self.audio.duration)
+            if hasattr(self, "immersive_window") and self.immersive_window.isVisible():
+                self.immersive_window.lyrics_view.sync_time(target_t)
+
     def _open_lyric_poster_dialog(self, line_index: int = -1) -> None:
         cur_track = self.tracks[self.current_track_index] if (0 <= self.current_track_index < len(self.tracks)) else None
         if not cur_track:
             return
         idx = line_index if line_index >= 0 else getattr(self.lyrics_stage, "active_index", 0)
+        is_fs = hasattr(self, "immersive_window") and self.immersive_window.isVisible()
+        active_parent = self.immersive_window if is_fs else self
         dlg = LyricPosterDialog(
             track=cur_track,
             lyrics=cur_track.lyrics or [],
             current_index=idx,
             theme=self.theme,
-            parent=self,
+            parent=active_parent,
         )
-        dlg.exec()
+        if is_fs and hasattr(self.immersive_window, "fluid_shader"):
+            try:
+                self.immersive_window.fluid_shader.stop_animation()
+            except Exception:
+                pass
+        try:
+            dlg.exec()
+        finally:
+            if is_fs and hasattr(self.immersive_window, "fluid_shader"):
+                try:
+                    self.immersive_window.fluid_shader.start_animation()
+                except Exception:
+                    pass
 
     def _open_audio_settings_dialog(self, default_tab: int = 0) -> None:
         cur_offset = (
@@ -1140,6 +1174,8 @@ class NordicWinUI3Window(AcrylicWindow):
             if (0 <= self.current_track_index < len(self.tracks))
             else 0.0
         )
+        is_fs = hasattr(self, "immersive_window") and self.immersive_window.isVisible()
+        active_parent = self.immersive_window if is_fs else self
         dlg = AudioSettingsDialog(
             current_profile=self.audio.sound_profile,
             current_gains=self.audio.eq_gains_db,
@@ -1171,7 +1207,7 @@ class NordicWinUI3Window(AcrylicWindow):
             backdrop_material=getattr(self, "backdrop_material", "mica"),
             current_netease_quality=getattr(netease_manager, "preferred_quality", "lossless"),
             theme=self.theme,
-            parent=self,
+            parent=active_parent,
         )
         dlg.neteaseQualityChanged.connect(self._on_netease_quality_changed)
         dlg.dolbyAtmosModeChanged.connect(self._on_dolby_mode_changed)
@@ -1219,7 +1255,19 @@ class NordicWinUI3Window(AcrylicWindow):
         dlg.backdropMaterialChanged.connect(self.set_backdrop_material)
         dlg.scrapeRequested.connect(self._open_online_scraper_dialog)
         self._active_eq_dialog = dlg
-        dlg.exec()
+        if is_fs and hasattr(self.immersive_window, "fluid_shader"):
+            try:
+                self.immersive_window.fluid_shader.stop_animation()
+            except Exception:
+                pass
+        try:
+            dlg.exec()
+        finally:
+            if is_fs and hasattr(self.immersive_window, "fluid_shader"):
+                try:
+                    self.immersive_window.fluid_shader.start_animation()
+                except Exception:
+                    pass
         self._active_eq_dialog = None
         self.schedule_save()
 

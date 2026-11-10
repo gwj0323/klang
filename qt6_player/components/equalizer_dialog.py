@@ -434,7 +434,7 @@ class AudioSettingsDialog(WinUIModalDialog):
 
     def _wrap_tab_in_scroll(self, content_widget: QWidget) -> QScrollArea:
         content_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        content_widget.setStyleSheet("background: transparent;")
+        content_widget.setStyleSheet("background: transparent; border: none;")
 
         scroll = QScrollArea(self.tab_container)
         scroll.setWidgetResizable(True)
@@ -442,9 +442,10 @@ class AudioSettingsDialog(WinUIModalDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        scroll.setStyleSheet("background: transparent; border: none;")
         if scroll.viewport():
             scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-            scroll.viewport().setStyleSheet("background: transparent;")
+            scroll.viewport().setStyleSheet("background: transparent; border: none;")
 
         self._apply_scroll_style(scroll)
         scroll.setWidget(content_widget)
@@ -489,6 +490,8 @@ class AudioSettingsDialog(WinUIModalDialog):
         vbox.addWidget(self.category_tabs)
 
         self.tab_container = QWidget(self)
+        self.tab_container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.tab_container.setStyleSheet("background: transparent; border: none;")
         self.stacked_layout = QStackedLayout(self.tab_container)
         self.stacked_layout.setContentsMargins(0, 0, 0, 0)
 

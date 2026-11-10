@@ -168,6 +168,7 @@ class DolbyAtmosSpatializer:
 
     def set_mode(self, mode: str) -> None:
         if mode in self.MODES:
+            prev_mode = self.mode
             self.mode = mode
             if mode == "off":
                 self._target_wet_gain = 0.0
@@ -175,6 +176,10 @@ class DolbyAtmosSpatializer:
                 self._target_wet_gain = 0.65
             else:  # "dolby_atmos"
                 self._target_wet_gain = 1.0
+            if prev_mode != mode:
+                self._delay_ring.fill(0.0)
+                self._head_shadow_l = 0.0
+                self._head_shadow_r = 0.0
 
     def set_parameters(self, width: float, height: float) -> None:
         self.spatial_width = max(0.8, min(2.0, float(width)))
@@ -957,13 +962,19 @@ class ContinuousDspStreamDevice(QIODevice):
             end_frame = min(target_end_frame, cur_frame + n_frames)
             actual = end_frame - cur_frame
             byte_slice = raw_buf[cur_frame * 4 : end_frame * 4]
-            arr = np.frombuffer(byte_slice, dtype=np.int16).astype(np.float64) / 32768.0
-            arr = arr.reshape(-1, 2).T
-            if actual < n_frames:
-                pad = np.zeros((2, n_frames - actual), dtype=np.float64)
-                stereo_block = np.hstack((arr, pad))
+            byte_slice = byte_slice[: (len(byte_slice) // 4) * 4]
+            if len(byte_slice) < 4 or actual <= 0:
+                stereo_block = np.zeros((2, n_frames), dtype=np.float64)
             else:
-                stereo_block = arr
+                arr = np.frombuffer(byte_slice, dtype=np.int16).astype(np.float64) / 32768.0
+                if len(arr) % 2 != 0:
+                    arr = arr[: (len(arr) // 2) * 2]
+                arr = arr.reshape(-1, 2).T
+                if actual < n_frames:
+                    pad = np.zeros((2, n_frames - actual), dtype=np.float64)
+                    stereo_block = np.hstack((arr, pad))
+                else:
+                    stereo_block = arr
             if advance_cursor:
                 eng._frame_cursor = end_frame
         else:
@@ -984,19 +995,26 @@ class ContinuousDspStreamDevice(QIODevice):
             min_i = int(idx0[0])
             max_i = min(target_end_frame, int(idx0[-1]) + 2)
             sub_raw = raw_buf[min_i * 4 : max_i * 4]
-            sub_arr = (np.frombuffer(sub_raw, dtype=np.int16).astype(np.float64) / 32768.0).reshape(-1, 2)
-            if len(sub_arr) == 0:
+            sub_raw = sub_raw[: (len(sub_raw) // 4) * 4]
+            if len(sub_raw) < 4:
                 stereo_block = np.zeros((2, n_frames), dtype=np.float64)
-            elif len(sub_arr) == 1:
-                s0 = np.repeat(sub_arr[0:1], n_frames, axis=0)
-                interp = s0 * valid_mask[:, np.newaxis]
-                stereo_block = interp.T.copy()
             else:
-                rel0 = np.clip(idx0 - min_i, 0, len(sub_arr) - 2)
-                s0 = sub_arr[rel0]
-                s1 = sub_arr[rel0 + 1]
-                interp = (s0 + (s1 - s0) * frac[:, np.newaxis]) * valid_mask[:, np.newaxis]
-                stereo_block = interp.T.copy()
+                sub_arr = (np.frombuffer(sub_raw, dtype=np.int16).astype(np.float64) / 32768.0)
+                if len(sub_arr) % 2 != 0:
+                    sub_arr = sub_arr[: (len(sub_arr) // 2) * 2]
+                sub_arr = sub_arr.reshape(-1, 2)
+                if len(sub_arr) == 0:
+                    stereo_block = np.zeros((2, n_frames), dtype=np.float64)
+                elif len(sub_arr) == 1:
+                    s0 = np.repeat(sub_arr[0:1], n_frames, axis=0)
+                    interp = s0 * valid_mask[:, np.newaxis]
+                    stereo_block = interp.T.copy()
+                else:
+                    rel0 = np.clip(idx0 - min_i, 0, len(sub_arr) - 2)
+                    s0 = sub_arr[rel0]
+                    s1 = sub_arr[rel0 + 1]
+                    interp = (s0 + (s1 - s0) * frac[:, np.newaxis]) * valid_mask[:, np.newaxis]
+                    stereo_block = interp.T.copy()
             if advance_cursor:
                 eng._frame_cursor = next_cursor
 
@@ -1732,11 +1750,14 @@ class NordicAudioEngine(QObject):
             self._stream_device._tt_speed = 1.0
             self._stream_device._last_tail_frame.fill(0.0)
             self._stream_device._crossfade_on_next_block = False
-            # 彻底重置 QAudioSink 硬件环形缓冲区，排空上一首残留的 PCM 音频，杜绝切歌泄漏重放
+            # 彻底重置 QAudioSink 硬件环形缓冲区，排空上一首残留的 PCM 音频，杜绝切歌泄漏重放与爆音
             if self._audio_sink is not None:
                 try:
+                    curr_vol = self.volume if not self.is_muted else 0.0
+                    self._audio_sink.setVolume(0.0)
                     self._audio_sink.reset()
                     self._push_io = self._audio_sink.start()
+                    self._audio_sink.setVolume(curr_vol)
                 except Exception:
                     pass
         else:
@@ -1858,13 +1879,17 @@ class NordicAudioEngine(QObject):
         self._crossfade_tail_total_frames = 0
         if self._audio_sink is not None:
             try:
+                curr_vol = self.volume if not self.is_muted else 0.0
+                self._audio_sink.setVolume(0.0)
                 self._audio_sink.reset()
                 self._push_io = self._audio_sink.start()
+                self._audio_sink.setVolume(curr_vol)
             except Exception:
                 pass
 
     def seek(self, target_seconds: float, auto_play_on_seek: bool = True, source: str = "seek") -> None:
-        clamped = max(0.0, min(self.duration, float(target_seconds)))
+        max_sec = max(0.0, self.duration - 0.05) if self.duration > 0 else 0.0
+        clamped = max(0.0, min(max_sec, float(target_seconds)))
         if self.is_playing:
             self._flush_fadeout_to_sink()
         self.current_time = clamped
@@ -1878,10 +1903,16 @@ class NordicAudioEngine(QObject):
         self._stream_device._env_gain = 0.0
         self._stream_device._last_tail_frame.fill(0.0)
 
-        # 立即重置 QAudioSink 硬件缓冲，清空旧位置音频，确保 0ms 定位即播
+        # 立即重置 QAudioSink 硬件缓冲，清空旧位置音频，确保 0ms 定位即播且不爆音
         if self._audio_sink is not None:
-            self._audio_sink.reset()
-            self._push_io = self._audio_sink.start()
+            try:
+                curr_vol = self.volume if not self.is_muted else 0.0
+                self._audio_sink.setVolume(0.0)
+                self._audio_sink.reset()
+                self._push_io = self._audio_sink.start()
+                self._audio_sink.setVolume(curr_vol)
+            except Exception:
+                pass
 
         if self._using_local_file and self._decoder_failed:
             abs_sec = (self._track_start_frame / float(self._sample_rate)) + clamped
@@ -1955,16 +1986,25 @@ class NordicAudioEngine(QObject):
         self.reconfigure_sink()
 
     def reconfigure_sink(self) -> None:
-        """平滑重建音频输出槽 (支持动态切换输出声道数)"""
+        """平滑重建音频输出槽 (支持动态切换输出声道数，彻底释放旧槽防止重音叠加)"""
         was_playing = self.is_playing
         if self._audio_sink is not None:
             try:
+                self._audio_sink.setVolume(0.0)
                 self._audio_sink.stop()
+                self._audio_sink.reset()
+                self._audio_sink.setParent(None)
+                self._audio_sink.deleteLater()
             except Exception:
                 pass
             self._audio_sink = None
             self._push_io = None
         self._stream_device._out_fifo.clear()
+        self._stream_device._env_gain = 0.0
+        self._stream_device._last_tail_frame.fill(0.0)
+        self.dsp.reset_state()
+        if self.duration > 0:
+            self._frame_cursor = self._track_start_frame + max(0, int(self.current_time * self._sample_rate))
         self._init_continuous_sink()
         if was_playing:
             self._ensure_sink_running()

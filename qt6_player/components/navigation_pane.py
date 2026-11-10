@@ -1029,6 +1029,14 @@ class NavigationPane(QWidget):
         self.btn_netease_logout.hide()
         sub_hbox.addWidget(self.btn_netease_logout)
 
+        self.btn_netease_login = QPushButton("登录", self.sub_bar)
+        self.btn_netease_login.setFixedHeight(24)
+        self.btn_netease_login.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_netease_login.setFont(get_nordic_font(11, QFont.Weight.Medium))
+        self.btn_netease_login.clicked.connect(self._open_netease_login_dialog)
+        self.btn_netease_login.hide()
+        sub_hbox.addWidget(self.btn_netease_login)
+
         layout.addWidget(self.sub_bar)
 
         # 4. 可滚动曲目容器
@@ -1336,6 +1344,12 @@ class NavigationPane(QWidget):
         self.btn_sort.setText(f"{self._SORT_LABELS.get(self.sort_mode, '默认排序')} ▾")
         if hasattr(self, "btn_netease_logout"):
             self.btn_netease_logout.setStyleSheet(muted_btn_style)
+        if hasattr(self, "btn_netease_login"):
+            self.btn_netease_login.setStyleSheet(
+                f"QPushButton {{ background: {self.theme.sage_accent.name()}; color: #FFFFFF; "
+                f"border: none; border-radius: 4px; padding: 0 10px; font-weight: 600; font-size: 11px; }} "
+                f"QPushButton:hover {{ background: {self.theme.sage_border.name()}; }}"
+            )
 
         if self.view_mode in (0, 1):
             self.lbl_count.show()
@@ -1345,6 +1359,8 @@ class NavigationPane(QWidget):
             self.btn_sort.show()
             if hasattr(self, "btn_netease_logout"):
                 self.btn_netease_logout.hide()
+            if hasattr(self, "btn_netease_login"):
+                self.btn_netease_login.hide()
         elif self.view_mode == 2:
             self.lbl_count.hide()
             self.btn_sub_selector.show()
@@ -1357,6 +1373,8 @@ class NavigationPane(QWidget):
             self.btn_sort.hide()
             if hasattr(self, "btn_netease_logout"):
                 self.btn_netease_logout.hide()
+            if hasattr(self, "btn_netease_login"):
+                self.btn_netease_login.hide()
         elif self.view_mode == 3:
             self.lbl_count.hide()
             self.btn_sub_selector.show()
@@ -1369,6 +1387,8 @@ class NavigationPane(QWidget):
             self.btn_sort.show()
             if hasattr(self, "btn_netease_logout"):
                 self.btn_netease_logout.hide()
+            if hasattr(self, "btn_netease_login"):
+                self.btn_netease_login.hide()
         elif self.view_mode == 4:
             if not netease_manager.is_logged_in:
                 self.lbl_count.setText("未登录网易云")
@@ -1379,6 +1399,8 @@ class NavigationPane(QWidget):
                 self.btn_sort.hide()
                 if hasattr(self, "btn_netease_logout"):
                     self.btn_netease_logout.hide()
+                if hasattr(self, "btn_netease_login"):
+                    self.btn_netease_login.show()
             else:
                 self.lbl_count.hide()
                 self.btn_sub_selector.show()
@@ -1388,6 +1410,8 @@ class NavigationPane(QWidget):
                 self.btn_new_playlist.hide()
                 self.btn_del_playlist.hide()
                 self.btn_sort.show()
+                if hasattr(self, "btn_netease_login"):
+                    self.btn_netease_login.hide()
                 if hasattr(self, "btn_netease_logout"):
                     nickname = netease_manager.user_profile.get("nickname") or "账号"
                     self.btn_netease_logout.setToolTip(f"退出网易云账号: {nickname}")

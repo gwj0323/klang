@@ -39,7 +39,36 @@ from qt6_player.theme.nordic_palette import apply_apple_sans_globally
 from qt6_player.main_window import NordicWinUI3Window
 
 
+def _install_safe_excepthook() -> None:
+    """PyQt6 中槽函数内未捕获异常会直接 qFatal 终止进程；此处改为记录日志而非闪退"""
+    import os
+    import traceback
+    import datetime
+
+    log_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Klang"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    log_file = log_dir / "crash.log"
+
+    def _hook(exc_type, exc_value, exc_tb) -> None:
+        msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n[{datetime.datetime.now().isoformat()}]\n{msg}")
+        except Exception:
+            pass
+        try:
+            sys.__stderr__.write(msg)
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+
 def main() -> int:
+    _install_safe_excepthook()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )

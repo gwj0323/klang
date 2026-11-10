@@ -26,12 +26,14 @@ from qt6_player.components.fluent_widgets import draw_nordic_icon
 
 class WinUISlider(QWidget):
     valueChangedByUser = pyqtSignal(float)
+    sliderScrubbing = pyqtSignal(float)
 
-    def __init__(self, initial_ratio: float = 0.0, parent: Optional[QWidget] = None):
+    def __init__(self, initial_ratio: float = 0.0, parent: Optional[QWidget] = None, continuous: bool = False):
         super().__init__(parent)
         self.theme: NordicThemeColors = DAYLIGHT_THEME
         self.ratio: float = max(0.0, min(1.0, initial_ratio))
         self.is_dragging: bool = False
+        self.continuous: bool = continuous
         self._hover_prog: float = 0.0
         self.setFixedHeight(22)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -58,11 +60,14 @@ class WinUISlider(QWidget):
                 if self.isVisible():
                     self.update()
 
-    def _update_from_pos(self, x: float) -> None:
+    def _update_from_pos(self, x: float, is_commit: bool = False) -> None:
         margin = 8.0
         usable_w = max(1.0, self.width() - margin * 2.0)
         self.ratio = max(0.0, min(1.0, (x - margin) / usable_w))
-        self.valueChangedByUser.emit(self.ratio)
+        if self.continuous or is_commit:
+            self.valueChangedByUser.emit(self.ratio)
+        else:
+            self.sliderScrubbing.emit(self.ratio)
         self.update()
 
     def enterEvent(self, event) -> None:
@@ -83,18 +88,18 @@ class WinUISlider(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.is_dragging = True
-            self._update_from_pos(event.position().x())
+            self._update_from_pos(event.position().x(), is_commit=False)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self.is_dragging:
-            self._update_from_pos(event.position().x())
+            self._update_from_pos(event.position().x(), is_commit=False)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.is_dragging:
             self.is_dragging = False
-            self._update_from_pos(event.position().x())
+            self._update_from_pos(event.position().x(), is_commit=True)
             if not self.underMouse():
                 self._hover_anim.stop()
                 self._hover_anim.setStartValue(self._hover_prog)
@@ -480,6 +485,7 @@ class TransportBar(QWidget):
     audioSettingsClicked = pyqtSignal()
     coverThumbClicked = pyqtSignal()
     seekRatioRequested = pyqtSignal(float)
+    timelineScrubbing = pyqtSignal(float)
     volumeChanged = pyqtSignal(float)
     muteToggled = pyqtSignal()
 
@@ -580,8 +586,9 @@ class TransportBar(QWidget):
         self.lbl_cur_time.setFixedWidth(40)
         self.lbl_cur_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self.timeline_slider = WinUISlider(0.0, self)
+        self.timeline_slider = WinUISlider(0.0, self, continuous=False)
         self.timeline_slider.valueChangedByUser.connect(self.seekRatioRequested.emit)
+        self.timeline_slider.sliderScrubbing.connect(self._on_timeline_scrubbing)
 
         self.lbl_dur_time = QLabel("00:00", self)
         self.lbl_dur_time.setFont(get_nordic_font(11, QFont.Weight.Normal, mono=True))
@@ -614,7 +621,7 @@ class TransportBar(QWidget):
         self.btn_mute.clicked.connect(self.muteToggled.emit)
         right_layout.addWidget(self.btn_mute)
 
-        self.volume_slider = WinUISlider(0.72, right_box)
+        self.volume_slider = WinUISlider(0.72, right_box, continuous=True)
         self.volume_slider.setFixedWidth(94)
         self.volume_slider.valueChangedByUser.connect(self.volumeChanged.emit)
         right_layout.addWidget(self.volume_slider)
@@ -685,16 +692,24 @@ class TransportBar(QWidget):
         self.btn_play.set_playing_animated(is_playing)
 
     def update_progress(self, current_time: float, duration: float) -> None:
-        safe_dur = max(1.0, duration)
+        self._duration = max(1.0, duration)
+        safe_dur = self._duration
         cur_str = format_timecode(current_time)
         dur_str = format_timecode(safe_dur)
-        if getattr(self, "_last_cur_str", None) != cur_str:
-            self._last_cur_str = cur_str
-            self.lbl_cur_time.setText(cur_str)
-        if getattr(self, "_last_dur_str", None) != dur_str:
-            self._last_dur_str = dur_str
-            self.lbl_dur_time.setText(dur_str)
-        self.timeline_slider.set_ratio(current_time / safe_dur)
+        if not self.timeline_slider.is_dragging:
+            if getattr(self, "_last_cur_str", None) != cur_str:
+                self._last_cur_str = cur_str
+                self.lbl_cur_time.setText(cur_str)
+            if getattr(self, "_last_dur_str", None) != dur_str:
+                self._last_dur_str = dur_str
+                self.lbl_dur_time.setText(dur_str)
+            self.timeline_slider.set_ratio(current_time / safe_dur)
+
+    def _on_timeline_scrubbing(self, ratio: float) -> None:
+        safe_dur = getattr(self, "_duration", 1.0)
+        cur = max(0.0, min(safe_dur, ratio * safe_dur))
+        self.lbl_cur_time.setText(format_timecode(cur))
+        self.timelineScrubbing.emit(ratio)
 
     def update_volume(self, volume: float, is_muted: bool) -> None:
         self.btn_mute.is_muted = is_muted

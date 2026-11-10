@@ -159,6 +159,7 @@ class ImmersiveArtworkView(QWidget):
     prevClicked = pyqtSignal()
     nextClicked = pyqtSignal()
     seekRatioRequested = pyqtSignal(float)
+    seekRatioScrubbing = pyqtSignal(float)
     modeCycled = pyqtSignal()
     volumeChanged = pyqtSignal(float)
 
@@ -271,6 +272,8 @@ class ImmersiveArtworkView(QWidget):
     def update_time(self, cur_time: float, dur: float) -> None:
         self.duration = max(1.0, dur)
         cur_time = max(0.0, cur_time)
+        if self.is_dragging_progress:
+            return
         if not self.is_playing or abs(cur_time - self.current_time) > 0.12:
             self.current_time = cur_time
             if not self.is_playing and not self.is_dragging_progress:
@@ -529,12 +532,16 @@ class ImmersiveArtworkView(QWidget):
 
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
-            # 1. 进度条点击与拖拽
+            # 1. 进度条点击与拖拽 (拖拽过程仅平滑刷新界面与预览，松开鼠标时才提交 seek，彻底解决卡顿与破音)
             if self._rect_slider.adjusted(-8.0, -8.0, 8.0, 8.0).contains(pos):
                 self.is_dragging_progress = True
+                try:
+                    self.grabMouse()
+                except Exception:
+                    pass
                 ratio = max(0.0, min(1.0, (pos.x() - self._rect_slider.left()) / max(1.0, self._rect_slider.width())))
                 self._scrub_ratio = ratio
-                self.seekRatioRequested.emit(ratio)
+                self.seekRatioScrubbing.emit(ratio)
                 self.update()
                 event.accept()
                 return
@@ -542,6 +549,10 @@ class ImmersiveArtworkView(QWidget):
             # 2. 音量滑条点击与拖拽
             if self._rect_vol_track.adjusted(-8.0, -8.0, 8.0, 8.0).contains(pos):
                 self.is_dragging_volume = True
+                try:
+                    self.grabMouse()
+                except Exception:
+                    pass
                 vol = max(0.0, min(1.0, (pos.x() - self._rect_vol_track.left()) / max(1.0, self._rect_vol_track.width())))
                 self.set_volume(vol)
                 self.volumeChanged.emit(vol)
@@ -595,7 +606,7 @@ class ImmersiveArtworkView(QWidget):
         if self.is_dragging_progress:
             ratio = max(0.0, min(1.0, (pos.x() - self._rect_slider.left()) / max(1.0, self._rect_slider.width())))
             self._scrub_ratio = ratio
-            self.seekRatioRequested.emit(ratio)
+            self.seekRatioScrubbing.emit(ratio)
             self.update()
             event.accept()
             return
@@ -643,15 +654,34 @@ class ImmersiveArtworkView(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self.is_dragging_progress:
             self.is_dragging_progress = False
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
+            self.seekRatioRequested.emit(self._scrub_ratio)
             self.update()
             event.accept()
             return
         if self.is_dragging_volume:
             self.is_dragging_volume = False
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
             self.update()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def hideEvent(self, event) -> None:
+        if self.is_dragging_progress or self.is_dragging_volume:
+            self.is_dragging_progress = False
+            self.is_dragging_volume = False
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
+        super().hideEvent(event)
 
     def _render_sleeve_card(self, sleeve_sz: int) -> QPixmap:
         """预渲染带 3 层弥散阴影与圆角玻璃高光的专辑封面卡片，避免每帧重复裁剪与重绘"""
@@ -881,8 +911,9 @@ class ImmersiveArtworkView(QWidget):
         time_y = sl_y + 8.0
         p.setFont(self._font_time)
         p.setPen(QColor(255, 255, 255, 175))
-        left_time_str = format_timecode(self.current_time)
-        rem_sec = max(0.0, self.duration - self.current_time)
+        disp_time = (self._scrub_ratio * self.duration) if self.is_dragging_progress else self.current_time
+        left_time_str = format_timecode(disp_time)
+        rem_sec = max(0.0, self.duration - disp_time)
         right_time_str = f"-{format_timecode(rem_sec)}"
         p.drawText(QRectF(sleeve_left, time_y, 80.0, 16.0), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), left_time_str)
         p.drawText(QRectF(sleeve_rect.right() - 80.0, time_y, 80.0, 16.0), int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), right_time_str)
@@ -1471,6 +1502,7 @@ class ImmersiveControlDock(QWidget):
     prevClicked = pyqtSignal()
     nextClicked = pyqtSignal()
     seekRatioRequested = pyqtSignal(float)
+    seekRatioScrubbing = pyqtSignal(float)
     modeCycled = pyqtSignal()
     volumeChanged = pyqtSignal(float)
 
@@ -1507,7 +1539,7 @@ class ImmersiveControlDock(QWidget):
             self.is_dragging_progress = True
             ratio = max(0.0, min(1.0, (pos.x() - sl_rect.left()) / sl_rect.width()))
             self._scrub_ratio = ratio
-            self.seekRatioRequested.emit(ratio)
+            self.seekRatioScrubbing.emit(ratio)
             self.update()
             event.accept()
             return
@@ -1544,7 +1576,7 @@ class ImmersiveControlDock(QWidget):
             sl_rect = self._get_slider_rect()
             ratio = max(0.0, min(1.0, (event.position().x() - sl_rect.left()) / sl_rect.width()))
             self._scrub_ratio = ratio
-            self.seekRatioRequested.emit(ratio)
+            self.seekRatioScrubbing.emit(ratio)
             self.update()
             event.accept()
             return
@@ -1553,6 +1585,7 @@ class ImmersiveControlDock(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self.is_dragging_progress:
             self.is_dragging_progress = False
+            self.seekRatioRequested.emit(self._scrub_ratio)
             self.update()
             event.accept()
             return
@@ -1712,6 +1745,7 @@ class ImmersiveFullscreenWindow(QWidget):
     prevRequested = pyqtSignal()
     nextRequested = pyqtSignal()
     seekRatioRequested = pyqtSignal(float)
+    seekRatioScrubbing = pyqtSignal(float)
     seekTimeRequested = pyqtSignal(float)
     modeCycled = pyqtSignal()
     volumeRequested = pyqtSignal(float)
@@ -1727,7 +1761,8 @@ class ImmersiveFullscreenWindow(QWidget):
         self.setWindowTitle("Klang — 极光沉浸视界")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setStyleSheet("background: #080B10; border: none;")
+        self.setObjectName("ImmersiveFullscreenWindow")
+        self.setStyleSheet("#ImmersiveFullscreenWindow { background: #080B10; border: none; }")
         self.setMouseTracking(True)
 
         self.setFont(get_nordic_font(14, QFont.Weight.Normal))
@@ -1802,6 +1837,7 @@ class ImmersiveFullscreenWindow(QWidget):
 
         # 1. 顶部悬浮工具条 (绝对坐标悬浮于中央舞台上方，绝不因隐藏重新排版引起画面抖动上移)
         self.top_bar_widget = QWidget(self)
+        self.top_bar_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.top_bar_widget.setFixedHeight(48)
         self.top_bar_widget.setGeometry(0, 26, max(800, self.width()), 48)
         top_hbox = QHBoxLayout(self.top_bar_widget)
@@ -1810,10 +1846,37 @@ class ImmersiveFullscreenWindow(QWidget):
 
         self.lbl_title_badge = QLabel("KLANG", self.top_bar_widget)
         self.lbl_title_badge.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
-        self.lbl_title_badge.setStyleSheet("color: rgba(255, 255, 255, 0.76); padding-left: 6px; letter-spacing: 0.5px;")
+        self.lbl_title_badge.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.08); "
+            "border: 1px solid rgba(255, 255, 255, 0.14); "
+            "border-radius: 14px; "
+            "padding: 4px 12px; "
+            "color: rgba(255, 255, 255, 0.88); "
+            "letter-spacing: 0.8px;"
+        )
         top_hbox.addWidget(self.lbl_title_badge)
 
         top_hbox.addStretch(1)
+
+        pill_btn_base = (
+            "QPushButton { "
+            "background: rgba(255, 255, 255, 0.08); "
+            "border: 1px solid rgba(255, 255, 255, 0.16); "
+            "border-radius: 15px; "
+            "color: rgba(255, 255, 255, 0.90); "
+            "font-weight: 600; font-size: 13px; "
+            "font-family: 'SF Pro Display', 'PingFang SC', sans-serif; "
+            "} "
+            "QPushButton:hover { "
+            "background: rgba(255, 255, 255, 0.18); "
+            "border-color: rgba(255, 255, 255, 0.30); "
+            "color: #FFFFFF; "
+            "} "
+            "QPushButton:pressed { "
+            "background: rgba(255, 255, 255, 0.26); "
+            "border-color: rgba(255, 255, 255, 0.40); "
+            "}"
+        )
 
         # 译文开关
         self.btn_trans = QPushButton("译", self.top_bar_widget)
@@ -1821,11 +1884,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_trans.setFixedSize(36, 30)
         self.btn_trans.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_trans.setToolTip("显示 / 隐藏歌词翻译")
-        self.btn_trans.setStyleSheet(
-            "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
-        )
+        self.btn_trans.setStyleSheet(pill_btn_base)
         self.btn_trans.clicked.connect(self._on_toggle_translation)
         top_hbox.addWidget(self.btn_trans)
 
@@ -1835,11 +1894,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_roma.setFixedSize(36, 30)
         self.btn_roma.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_roma.setToolTip("显示 / 隐藏假名注音与罗马音")
-        self.btn_roma.setStyleSheet(
-            "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
-        )
+        self.btn_roma.setStyleSheet(pill_btn_base)
         self.btn_roma.clicked.connect(self._on_toggle_romaji)
         top_hbox.addWidget(self.btn_roma)
 
@@ -1850,9 +1905,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_settings.setToolTip("设置 (音效、歌词、刷新率等)")
         self.btn_settings.setStyleSheet(
-            "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 12px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
+            pill_btn_base.replace("QPushButton {", "QPushButton { padding: 0 14px;")
         )
         self.btn_settings.clicked.connect(self.settingsRequested.emit)
         top_hbox.addWidget(self.btn_settings)
@@ -1871,9 +1924,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_poster.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_poster.setToolTip("生成歌词卡片")
         self.btn_poster.setStyleSheet(
-            "QPushButton { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.22); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 12px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.25); }"
+            pill_btn_base.replace("QPushButton {", "QPushButton { padding: 0 14px;")
         )
         self.btn_poster.clicked.connect(self.posterRequested.emit)
         top_hbox.addWidget(self.btn_poster)
@@ -1885,9 +1936,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.btn_exit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_exit.setToolTip("退出全屏 (Esc)")
         self.btn_exit.setStyleSheet(
-            "QPushButton { background: rgba(255, 255, 255, 0.16); border: 1px solid rgba(255, 255, 255, 0.28); "
-            "border-radius: 7px; color: #FFFFFF; font-weight: 600; font-size: 13px; padding: 0 14px; font-family: 'SF Pro Display', 'PingFang SC', sans-serif; }"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.32); }"
+            pill_btn_base.replace("QPushButton {", "QPushButton { padding: 0 16px;")
         )
         self.btn_exit.clicked.connect(self.exit_immersive)
         top_hbox.addWidget(self.btn_exit)
@@ -1905,6 +1954,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.artwork_view.prevClicked.connect(self.prevRequested.emit)
         self.artwork_view.nextClicked.connect(self.nextRequested.emit)
         self.artwork_view.seekRatioRequested.connect(self.seekRatioRequested.emit)
+        self.artwork_view.seekRatioScrubbing.connect(self.seekRatioScrubbing.emit)
         self.artwork_view.modeCycled.connect(self.modeCycled.emit)
         self.artwork_view.volumeChanged.connect(self.volumeRequested.emit)
         split_hbox.addWidget(self.artwork_view, 45)
