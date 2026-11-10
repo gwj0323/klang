@@ -955,6 +955,7 @@ class NordicWinUI3Window(AcrylicWindow):
             self.schedule_save()
 
         dlg.metadataSaved.connect(_apply_meta)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def _on_lyric_offset_changed(self, new_offset: float) -> None:
@@ -1156,6 +1157,7 @@ class NordicWinUI3Window(AcrylicWindow):
             except Exception:
                 pass
         try:
+            dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
         finally:
             if is_fs and hasattr(self.immersive_window, "fluid_shader"):
@@ -1255,6 +1257,7 @@ class NordicWinUI3Window(AcrylicWindow):
             except Exception:
                 pass
         try:
+            dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
         finally:
             if is_fs and hasattr(self.immersive_window, "fluid_shader"):
@@ -1292,6 +1295,7 @@ class NordicWinUI3Window(AcrylicWindow):
 
         dlg.watchedFoldersChanged.connect(_on_changed)
         dlg.rescanRequested.connect(self._scan_watched_folders_async)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
         if self.watched_folders:
             self._scan_watched_folders_async()
@@ -1550,6 +1554,7 @@ class NordicWinUI3Window(AcrylicWindow):
                 i, lyrics, cover_bytes, album_name
             )
         )
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def _apply_scraped_to_track(

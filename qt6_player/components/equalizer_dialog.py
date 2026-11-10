@@ -844,6 +844,7 @@ class AudioSettingsDialog(WinUIModalDialog):
             else:
                 from qt6_player.components.netease_login_dialog import NeteaseLoginDialog
                 dlg = NeteaseLoginDialog(theme=self.theme, parent=self.window())
+                dlg.finished.connect(dlg.deleteLater)
                 dlg.exec()
                 _update_ne_account_ui()
                 self.lbl_cache_size.setText(f"已占用: {netease_manager.get_cache_size_str()}")

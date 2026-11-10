@@ -45,7 +45,7 @@ def _make_json_safe(obj: Any) -> Any:
     return obj
 
 
-def load_player_state() -> Dict[str, Any]:
+def _load_state_from_disk() -> Dict[str, Any]:
     default_state: Dict[str, Any] = {
         "volume": 0.72,
         "is_muted": False,
@@ -132,6 +132,52 @@ def _write_payload_to_disk(safe_payload: Dict[str, Any]) -> bool:
             return False
 
 
+# ── 单写线程 + 内存最新快照 ───────────────────────────────────────────
+# 所有“读-改-写”都在 _STATE_LOCK 内基于内存缓存完成（不再重读可能尚未落盘的旧文件），
+# 后台线程只写最新快照；连续多次保存会被合并，旧快照不会覆盖新状态。
+_STATE_LOCK = threading.RLock()
+_STATE_CACHE: Optional[Dict[str, Any]] = None
+_WRITE_EVENT = threading.Event()
+_WRITER_STARTED = False
+
+
+def load_player_state() -> Dict[str, Any]:
+    """返回最新状态：已有内存快照时用快照（可能尚未落盘），否则读磁盘。"""
+    with _STATE_LOCK:
+        if _STATE_CACHE is not None:
+            return dict(_STATE_CACHE)
+    return _load_state_from_disk()
+
+
+def _current_state_locked() -> Dict[str, Any]:
+    global _STATE_CACHE
+    if _STATE_CACHE is None:
+        _STATE_CACHE = _load_state_from_disk()
+    return _STATE_CACHE
+
+
+def _writer_loop() -> None:
+    while True:
+        _WRITE_EVENT.wait()
+        _WRITE_EVENT.clear()
+        with _STATE_LOCK:
+            snapshot = _make_json_safe(dict(_current_state_locked()))
+        _write_payload_to_disk(snapshot)
+
+
+def _commit_state(new_state: Dict[str, Any], sync: bool) -> bool:
+    """在 _STATE_LOCK 内调用：更新内存快照，并同步写盘或交给后台写线程。"""
+    global _STATE_CACHE, _WRITER_STARTED
+    _STATE_CACHE = new_state
+    if sync:
+        return _write_payload_to_disk(_make_json_safe(dict(new_state)))
+    if not _WRITER_STARTED:
+        _WRITER_STARTED = True
+        threading.Thread(target=_writer_loop, daemon=True, name="klang-state-writer").start()
+    _WRITE_EVENT.set()
+    return True
+
+
 def save_player_state(
     tracks: List[NordicTrack],
     settings: Dict[str, Any],
@@ -202,39 +248,21 @@ def save_player_state(
         playlist_data.append(raw)
         local_tracks_data.append(raw)
 
-    current_state = load_player_state()
-    payload = dict(current_state)
-    payload.update(settings)
-    payload["playlist"] = playlist_data
-    payload["local_tracks"] = local_tracks_data
-    payload["builtin_overrides"] = builtin_overrides
-
-    safe_payload = _make_json_safe(payload)
-
-    if sync:
-        return _write_payload_to_disk(safe_payload)
-
-    threading.Thread(
-        target=_write_payload_to_disk,
-        args=(safe_payload,),
-        daemon=True,
-    ).start()
-    return True
+    with _STATE_LOCK:
+        payload = dict(_current_state_locked())
+        payload.update(settings)
+        payload["playlist"] = playlist_data
+        payload["local_tracks"] = local_tracks_data
+        payload["builtin_overrides"] = builtin_overrides
+        return _commit_state(payload, sync)
 
 
 def update_player_state_fields(updates: Dict[str, Any], sync: bool = False) -> bool:
     """Safely update specific key-value fields in player_state.json without touching others."""
-    state = load_player_state()
-    state.update(updates)
-    safe_payload = _make_json_safe(state)
-    if sync:
-        return _write_payload_to_disk(safe_payload)
-    threading.Thread(
-        target=_write_payload_to_disk,
-        args=(safe_payload,),
-        daemon=True,
-    ).start()
-    return True
+    with _STATE_LOCK:
+        state = dict(_current_state_locked())
+        state.update(updates)
+        return _commit_state(state, sync)
 
 
 def _parse_saved_lyrics(lyrics_list: list) -> List[LyricLine]:

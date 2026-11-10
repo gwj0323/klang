@@ -2149,8 +2149,9 @@ class ImmersiveFullscreenWindow(QWidget):
         if hasattr(self, "fluid_shader"):
             self.fluid_shader.setGeometry(self.rect())
             self.fluid_shader.lower()
-            self.fluid_shader.show()
-            self.fluid_shader.start_animation()
+            if not self.fluid_shader._init_failed:
+                self.fluid_shader.show()
+                self.fluid_shader.start_animation()
         if not self._render_timer.isActive():
             self._render_timer.start()
 
@@ -2328,7 +2329,7 @@ class ImmersiveFullscreenWindow(QWidget):
         self.artwork_view.controls_opacity = self._hud_opacity
 
         # 极光慢速等离子流背景限频 ~30Hz 更新（当 GPU Fluid 着色器未激活时作为纯 CPU 降级保底）
-        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.isVisible()
+        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.gpu_active
         if not has_gpu:
             now_ms = self._clock.elapsed()
             if self._aurora_pixmap is None or (now_ms - self._last_aurora_ms) >= 32:
@@ -2414,7 +2415,7 @@ class ImmersiveFullscreenWindow(QWidget):
         if w < 10 or h < 10:
             return
 
-        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.isVisible()
+        has_gpu = hasattr(self, "fluid_shader") and self.fluid_shader.gpu_active
         if has_gpu:
             return
 

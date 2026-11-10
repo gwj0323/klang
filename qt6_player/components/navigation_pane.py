@@ -1118,6 +1118,7 @@ class NavigationPane(QWidget):
             self.playlistsChanged.emit()
 
         dlg.playlistCreated.connect(_on_created)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def add_track_to_playlist(self, playlist_name: str, track_id: str) -> bool:
@@ -1573,6 +1574,7 @@ class NavigationPane(QWidget):
 
     def _open_netease_login_dialog(self) -> None:
         dlg = NeteaseLoginDialog(theme=self.theme, parent=self.window())
+        dlg.finished.connect(dlg.deleteLater)
         dlg.exec()
 
     def _prefetch_thumbnails_for_tracks(self, tracks: List[NordicTrack]) -> None:
