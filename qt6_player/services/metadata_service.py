@@ -507,6 +507,26 @@ def extract_audio_properties(file_path: str) -> dict:
     return props
 
 
+_COVER_CACHE_DIR = Path(os.getenv("APPDATA", str(Path.home()))) / "Klang" / "cover_cache"
+
+
+def _spill_cover_to_cache(cover_bytes: Optional[bytes]) -> Optional[str]:
+    """把内嵌封面原图写入缓存目录（按内容哈希去重）并返回路径，避免原始字节常驻内存。失败返回 None。"""
+    if not cover_bytes:
+        return None
+    try:
+        ext = ".png" if cover_bytes.startswith(b"\x89PNG") else ".jpg"
+        target = _COVER_CACHE_DIR / (hashlib.sha1(cover_bytes).hexdigest()[:20] + ext)
+        if not target.is_file() or target.stat().st_size != len(cover_bytes):
+            _COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_bytes(cover_bytes)
+            tmp.replace(target)
+        return str(target)
+    except Exception:
+        return None
+
+
 def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
     """从本地音频文件构建 NordicTrack，自动解析标签、内嵌封面、同名 LRC 与高解析度音频参数"""
     path_obj = Path(file_path)
@@ -541,6 +561,12 @@ def create_track_from_file(file_path: str, index_hint: int = 0) -> NordicTrack:
                 {"time": 4.0, "text": "暂无歌词", "sub": "可点击封面或设置中的搜索按钮匹配歌词"},
             ]
         )
+
+    # 内嵌封面优先于文件夹封面（与原先 get_cover_pixmap 的取用顺序一致）；落盘后不再在内存里保留原始字节
+    spilled_cover = _spill_cover_to_cache(cover_bytes)
+    if spilled_cover:
+        local_cover_path = spilled_cover
+        cover_bytes = None
 
     palette = dict(_NORDIC_PALETTES[index_hint % len(_NORDIC_PALETTES)])
     resolved_str = str(path_obj.resolve())
@@ -776,6 +802,12 @@ def parse_cue_file(cue_path: str, base_index_hint: int = 0) -> List[NordicTrack]
         digest_key = f"{resolved_cue_str}#{track_num:02d}"
         stable_digest = hashlib.md5(digest_key.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
+        cue_cover_path = loc_cov
+        cue_cover_bytes = cov_bytes
+        spilled = _spill_cover_to_cache(cov_bytes)
+        if spilled:
+            cue_cover_path, cue_cover_bytes = spilled, None
+
         result.append(
             NordicTrack(
                 track_id=f"cue-{stable_digest}-{track_num:02d}",
@@ -784,8 +816,8 @@ def parse_cue_file(cue_path: str, base_index_hint: int = 0) -> List[NordicTrack]
                 album=album_title,
                 duration=round(sub_dur, 2),
                 file_path=resolved_audio,
-                cover_path=loc_cov,
-                cover_bytes=cov_bytes,
+                cover_path=cue_cover_path,
+                cover_bytes=cue_cover_bytes,
                 sample_rate=props["sample_rate"],
                 bit_depth=props["bit_depth"],
                 bitrate_kbps=props["bitrate_kbps"],
