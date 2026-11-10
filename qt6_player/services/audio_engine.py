@@ -911,7 +911,6 @@ class ContinuousDspStreamDevice(QIODevice):
             return self._get_silence_bytes(eng._channels)
 
         advance_cursor = eng.is_playing or eng._preview_frames_remaining > 0
-        tt_start = 1.0
         self._tt_speed = 1.0
 
         if abs(rate - 1.0) < 0.01:
@@ -934,14 +933,9 @@ class ContinuousDspStreamDevice(QIODevice):
             if advance_cursor:
                 eng._frame_cursor = end_frame
         else:
-            if tt_start < 0.995:
-                step_vec = rate * np.linspace(tt_start, tt_end, n_frames, dtype=np.float64)
-                float_indices = cur_frame + (np.cumsum(step_vec) - step_vec[0])
-                next_cursor = min(target_end_frame, int(float_indices[-1] + step_vec[-1]))
-            else:
-                step = rate
-                float_indices = cur_frame + np.arange(n_frames, dtype=np.float64) * step
-                next_cursor = min(target_end_frame, int(cur_frame + n_frames * step))
+            step = rate
+            float_indices = cur_frame + np.arange(n_frames, dtype=np.float64) * step
+            next_cursor = min(target_end_frame, int(cur_frame + n_frames * step))
 
             valid_mask = float_indices < (target_end_frame - 1)
             clamped_idx = np.clip(float_indices, 0, max(0, target_end_frame - 2))
