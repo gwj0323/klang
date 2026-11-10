@@ -68,7 +68,6 @@ def load_player_state() -> Dict[str, Any]:
         "crossfade_sec": 0.0,
         "replay_gain_enabled": False,
         "vocal_balance": 0.0,
-        "turntable_physics": True,
         "vinyl_warmth": 0.0,
         "headphone_profile": "bypass",
         "desktop_lyric_open": False,

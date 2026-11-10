@@ -1,3 +1,4 @@
+import concurrent.futures
 import math
 import os
 import subprocess
@@ -501,8 +502,9 @@ class NavTrackItemButton(QPushButton):
         self._hover_anim.start()
         super().leaveEvent(event)
 
-    def refresh_thumbnail(self) -> None:
-        self._thumb_pixmap = None
+    def refresh_thumbnail(self, force: bool = False) -> None:
+        if not force and self._thumb_pixmap is not None and not self._thumb_pixmap.isNull():
+            return
         base_pix = self.track.get_cover_pixmap() if self.track is not None else None
         if base_pix is not None and not base_pix.isNull():
             self._thumb_pixmap = base_pix.scaled(
@@ -511,7 +513,7 @@ class NavTrackItemButton(QPushButton):
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        self.update()
+            self.update()
 
     def set_theme(self, theme: NordicThemeColors) -> None:
         self.theme = theme
@@ -1575,19 +1577,39 @@ class NavigationPane(QWidget):
 
     def _prefetch_thumbnails_for_tracks(self, tracks: List[NordicTrack]) -> None:
         def _worker():
-            updated = False
-            for t in tracks[:30]:
-                url = getattr(t, "_cover_url", None) or (t.cover_path if t.cover_path and t.cover_path.startswith("http") else None)
-                if url:
-                    song_id = getattr(t, "_netease_song_id", None) or t.track_id.replace("netease_", "")
-                    p = netease_manager.cache_cover_image(song_id, url)
-                    if p:
-                        t.cover_path = p
-                        t._cached_cover_pix = None
-                        t._cover_cache_loaded = False
-                        updated = True
-            if updated:
-                self._thumbnailsRefreshed.emit()
+            target_tracks = [
+                t for t in tracks[:100]
+                if not (t.cover_path and not t.cover_path.startswith("http") and Path(t.cover_path).exists())
+            ]
+            if not target_tracks:
+                return
+
+            def _fetch_one(t: NordicTrack) -> bool:
+                try:
+                    url = getattr(t, "_cover_url", None) or (t.cover_path if t.cover_path and t.cover_path.startswith("http") else None)
+                    if url:
+                        song_id = getattr(t, "_netease_song_id", None) or t.track_id.replace("netease_", "")
+                        p = netease_manager.cache_cover_image(song_id, url)
+                        if p:
+                            t.cover_path = p
+                            t._cached_cover_pix = None
+                            t._cover_cache_loaded = False
+                            return True
+                except Exception:
+                    pass
+                return False
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+                futures = [executor.submit(_fetch_one, t) for t in target_tracks]
+                done_count = 0
+                for fut in concurrent.futures.as_completed(futures):
+                    try:
+                        if fut.result():
+                            done_count += 1
+                            if done_count % 4 == 0 or done_count == len(target_tracks):
+                                self._thumbnailsRefreshed.emit()
+                    except Exception:
+                        pass
         threading.Thread(target=_worker, daemon=True).start()
 
     def _refresh_item_thumbnails(self) -> None:

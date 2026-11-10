@@ -951,34 +951,9 @@ class AudioSettingsDialog(WinUIModalDialog):
         rg_row.addWidget(self.switch_replay_gain)
         play_vbox.addLayout(rg_row)
 
-        # 3.5 黑胶物理起停与模拟味 (Turntable Physics & Analog Warmth)
-        tt_box = QVBoxLayout()
-        tt_box.setSpacing(8)
-        tt_header = QHBoxLayout()
-        tt_text_col = QVBoxLayout()
-        tt_text_col.setSpacing(2)
-        lbl_tt = QLabel("黑胶物理断电起停", self.tab_playback)
-        lbl_tt.setFont(get_nordic_font(12, QFont.Weight.DemiBold))
-        lbl_tt.setStyleSheet(f"color: {self.theme.charcoal.name()}; background: transparent;")
-        tt_text_col.addWidget(lbl_tt)
-
-        lbl_tt_desc = QLabel("模拟唱盘断电降速与启动加速效果，避免声音生硬切断", self.tab_playback)
-        lbl_tt_desc.setFont(get_nordic_font(10, QFont.Weight.Normal))
-        lbl_tt_desc.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
-        tt_text_col.addWidget(lbl_tt_desc)
-        tt_header.addLayout(tt_text_col, 1)
-
-        self.switch_turntable = WinUIToggleSwitch(
-            checked=self.turntable_physics,
-            text_on="开启",
-            text_off="关闭",
-            parent=self.tab_playback,
-        )
-        self.switch_turntable.set_theme(self.theme)
-        self.switch_turntable.toggled.connect(self.turntablePhysicsToggled.emit)
-        tt_header.addWidget(self.switch_turntable)
-        tt_box.addLayout(tt_header)
-
+        # 3.5 黑胶模拟味 (Analog Warmth)
+        warmth_box = QVBoxLayout()
+        warmth_box.setSpacing(8)
         warmth_row = QHBoxLayout()
         lbl_warm = QLabel("黑胶模拟质感 (微底噪与电子管温暖度)", self.tab_playback)
         lbl_warm.setFont(get_nordic_font(11, QFont.Weight.Medium))
@@ -999,8 +974,8 @@ class AudioSettingsDialog(WinUIModalDialog):
         self.lbl_warmth_pct.setFont(get_nordic_font(11, QFont.Weight.Medium, mono=True))
         self.lbl_warmth_pct.setStyleSheet(f"color: {self.theme.slate_muted.name()}; background: transparent;")
         warmth_row.addWidget(self.lbl_warmth_pct)
-        tt_box.addLayout(warmth_row)
-        play_vbox.addLayout(tt_box)
+        warmth_box.addLayout(warmth_row)
+        play_vbox.addLayout(warmth_box)
 
         # 4. 播放倍速
         rate_box = QVBoxLayout()
@@ -1772,7 +1747,6 @@ class AudioSettingsDialog(WinUIModalDialog):
         if hasattr(self, "lbl_cache_title"):
             self.lbl_cache_title.setStyleSheet(f"color: {theme.charcoal.name()}; background: transparent;")
         self.switch_replay_gain.set_theme(theme)
-        self.switch_turntable.set_theme(theme)
         self.vinyl_warmth_slider.set_theme(theme)
         self.rate_tabs.set_theme(theme)
         self.sleep_tabs.set_theme(theme)

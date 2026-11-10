@@ -589,7 +589,7 @@ class NeteaseCloudManager(QObject):
         threading.Thread(target=_worker, daemon=True).start()
 
     def search_tracks(self, keyword: str, limit: int = 50) -> List[NordicTrack]:
-        """通过网易云云端接口搜索单曲"""
+        """通过网易云云端接口搜索单曲（自动拉取单曲详情以获取完整专辑封面与元数据）"""
         kw = (keyword or "").strip()
         if not kw:
             return []
@@ -598,6 +598,25 @@ class NeteaseCloudManager(QObject):
             if res.get("code") == 200:
                 result = res.get("result", {})
                 songs = result.get("songs") or []
+                if songs:
+                    song_ids = [s.get("id") for s in songs if s.get("id")]
+                    try:
+                        detail_res = track.GetTrackDetail(song_ids)
+                        if detail_res.get("code") == 200 and detail_res.get("songs"):
+                            detail_map = {str(d.get("id")): d for d in detail_res["songs"] if d.get("id")}
+                            for s in songs:
+                                sid = str(s.get("id", ""))
+                                if sid in detail_map:
+                                    d = detail_map[sid]
+                                    if d.get("al"):
+                                        s["al"] = d["al"]
+                                        s["album"] = d["al"]
+                                    if d.get("dt"):
+                                        s["dt"] = d["dt"]
+                                    if d.get("ar"):
+                                        s["ar"] = d["ar"]
+                    except Exception as e:
+                        logger.warning(f"获取单曲封面详情异常: {e}")
                 return self._parse_songs_to_tracks(songs)
         except Exception as e:
             logger.warning(f"网易云在线搜索异常 [{kw}]: {e}")
@@ -628,11 +647,19 @@ class NeteaseCloudManager(QObject):
             img_url = url + "?param=400y400" if "?" not in url else url
             resp = requests.get(img_url, timeout=6)
             if resp.status_code == 200 and len(resp.content) > 1024:
-                tmp_p = p.with_suffix(".tmp")
+                tmp_p = self._cache_dir / f"{song_id}_{time.time_ns()}_{threading.get_ident()}.tmp"
                 with open(tmp_p, "wb") as f:
                     f.write(resp.content)
-                tmp_p.replace(p)
-                return str(p.resolve())
+                try:
+                    tmp_p.replace(p)
+                except Exception:
+                    if tmp_p.exists():
+                        try:
+                            tmp_p.unlink()
+                        except Exception:
+                            pass
+                if p.exists() and p.stat().st_size > 1024:
+                    return str(p.resolve())
         except Exception:
             pass
         return None

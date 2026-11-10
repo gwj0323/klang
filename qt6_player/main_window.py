@@ -559,7 +559,6 @@ class NordicWinUI3Window(AcrylicWindow):
         saved_xfade = float(st.get("crossfade_sec", 0.0))
         saved_rg = bool(st.get("replay_gain_enabled", False))
         saved_vb = float(st.get("vocal_balance", 0.0))
-        saved_tt = bool(st.get("turntable_physics", True))
         saved_vw = float(st.get("vinyl_warmth", 0.0))
         saved_hp = str(st.get("headphone_profile", "bypass"))
         if hasattr(self.audio, "set_output_device"):
@@ -572,8 +571,6 @@ class NordicWinUI3Window(AcrylicWindow):
             self.audio.set_replay_gain_enabled(saved_rg)
         if hasattr(self.audio, "set_vocal_balance"):
             self.audio.set_vocal_balance(saved_vb)
-        if hasattr(self.audio, "set_turntable_physics_enabled"):
-            self.audio.set_turntable_physics_enabled(saved_tt)
         if hasattr(self.audio, "set_vinyl_warmth"):
             self.audio.set_vinyl_warmth(saved_vw)
         if hasattr(self.audio, "set_headphone_profile"):
@@ -688,7 +685,6 @@ class NordicWinUI3Window(AcrylicWindow):
             "crossfade_sec": float(getattr(self.audio, "crossfade_sec", 0.0)),
             "replay_gain_enabled": bool(getattr(self.audio, "replay_gain_enabled", False)),
             "vocal_balance": float(getattr(self.audio, "vocal_balance", 0.0)),
-            "turntable_physics": bool(getattr(self.audio, "turntable_physics_enabled", True)),
             "vinyl_warmth": float(getattr(self.audio, "vinyl_warmth", 0.0)),
             "headphone_profile": str(getattr(self.audio, "headphone_profile_id", "bypass")),
             "desktop_lyric_open": bool(hasattr(self, "desktop_lyric") and self.desktop_lyric.isVisible()),
@@ -1194,7 +1190,6 @@ class NordicWinUI3Window(AcrylicWindow):
             crossfade_sec=getattr(self.audio, "crossfade_sec", 0.0),
             replay_gain_enabled=getattr(self.audio, "replay_gain_enabled", False),
             vocal_balance=getattr(self.audio, "vocal_balance", 0.0),
-            turntable_physics=getattr(self.audio, "turntable_physics_enabled", True),
             vinyl_warmth=getattr(self.audio, "vinyl_warmth", 0.0),
             headphone_profile_id=getattr(self.audio, "headphone_profile_id", "bypass"),
             default_tab=default_tab,
@@ -1217,7 +1212,6 @@ class NordicWinUI3Window(AcrylicWindow):
         dlg.crossfadeChanged.connect(self._on_crossfade_changed)
         dlg.replayGainToggled.connect(self._on_replay_gain_toggled)
         dlg.vocalBalanceChanged.connect(self._on_vocal_balance_changed)
-        dlg.turntablePhysicsToggled.connect(self._on_turntable_physics_toggled)
         dlg.vinylWarmthChanged.connect(self._on_vinyl_warmth_changed)
         dlg.headphoneProfileChanged.connect(self._on_headphone_profile_changed)
         dlg.soundProfileChanged.connect(
@@ -1747,6 +1741,7 @@ class NordicWinUI3Window(AcrylicWindow):
                         self.immersive_window.update_track(track)
                     self.transport_bar.set_status_message("")
                     self.nav_pane.set_active_index(self.current_track_index, track_id=track.track_id)
+                    self.nav_pane.refresh_item(self.current_track_index)
                 else:
                     self.transport_bar.set_status_message(f"歌曲加载失败，请检查网络或VIP状态: {track.title}")
                     if hasattr(self, "lyrics_stage") and hasattr(self.lyrics_stage, "_show_toast"):
@@ -2300,14 +2295,6 @@ class NordicWinUI3Window(AcrylicWindow):
 
     def _on_vocal_balance_changed(self, val: float) -> None:
         self.audio.set_vocal_balance(val)
-        self.schedule_save()
-
-    def _on_turntable_physics_toggled(self, enabled: bool) -> None:
-        self.audio.set_turntable_physics_enabled(enabled)
-        if hasattr(self.lyrics_stage, "_show_toast"):
-            self.lyrics_stage._show_toast(
-                "已开启黑胶物理断电起停" if enabled else "已关闭黑胶物理起停"
-            )
         self.schedule_save()
 
     def _on_vinyl_warmth_changed(self, val: float) -> None:

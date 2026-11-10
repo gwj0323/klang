@@ -713,7 +713,6 @@ class NordicDspProcessor:
 class ContinuousDspStreamDevice(QIODevice):
     BLOCK_FRAMES = 1024
     FADEOUT_FRAMES = 3584  # ~81.3ms @ 44.1kHz，消除切歌/暂停时的数字截断爆音 (Click/Pop)
-    TURNTABLE_BRAKE_FRAMES = 6144  # ~139.3ms @ 44.1kHz，B&O 黑胶唱盘断电惯性降调降速阻尼曲线
     SPECTRUM_BANDS = 24
 
     def __init__(self, engine: "NordicAudioEngine"):
@@ -748,7 +747,7 @@ class ContinuousDspStreamDevice(QIODevice):
         self._crossfade_on_next_block = True
 
     def render_smooth_fadeout_block(self, is_pause_brake: bool = False) -> Optional[bytes]:
-        """渲染 80ms 余弦微淡出块，或在开启黑胶物理起停时渲染 B&O 唱盘断电降调降速制动块"""
+        """渲染 80ms 余弦微淡出块，确保暂停/停止时音频平滑淡出，杜绝截断爆音"""
         eng = self.engine
         if self._env_gain <= 0.001 and float(np.max(np.abs(self._last_tail_frame))) <= 1e-4:
             self._env_gain = 0.0
@@ -758,42 +757,6 @@ class ContinuousDspStreamDevice(QIODevice):
         raw_buf = eng._decoded_raw_bytes
         total_avail_frames = len(raw_buf) // 4
         cur_frame = eng._frame_cursor
-
-        if is_pause_brake and eng.turntable_physics_enabled and cur_frame + 64 < total_avail_frames:
-            n_brake = self.TURNTABLE_BRAKE_FRAMES
-            start_spd = max(0.25, float(self._tt_speed)) * eng.playback_rate
-            end_spd = 0.08 * eng.playback_rate
-            # 模拟真实唱盘断电后铝质转盘惯性阻尼：音高与转速耦合平滑下降
-            speed_curve = end_spd + (start_spd - end_spd) * (
-                np.linspace(1.0, 0.0, n_brake, dtype=np.float64) ** 1.32
-            )
-            rel_offsets = np.cumsum(speed_curve) - speed_curve[0]
-            float_indices = cur_frame + rel_offsets
-            clamped_idx = np.clip(float_indices, 0, max(0, total_avail_frames - 2))
-            idx0 = clamped_idx.astype(np.int32)
-            frac = clamped_idx - idx0
-
-            min_i = int(idx0[0])
-            max_i = min(total_avail_frames, int(idx0[-1]) + 2)
-            sub_raw = raw_buf[min_i * 4 : max_i * 4]
-            sub_arr = (np.frombuffer(sub_raw, dtype=np.int16).astype(np.float64) / 32768.0).reshape(-1, 2)
-            if len(sub_arr) >= 2:
-                rel0 = np.clip(idx0 - min_i, 0, len(sub_arr) - 2)
-                s0 = sub_arr[rel0]
-                s1 = sub_arr[rel0 + 1]
-                interp = s0 + (s1 - s0) * frac[:, np.newaxis]
-                stereo_block = interp.T.copy()
-                eng._frame_cursor = min(total_avail_frames, int(float_indices[-1]))
-                proc_stereo = eng.dsp.process_block(stereo_block, target_channels=eng._channels)
-                brake_env = (
-                    np.sin(np.linspace(math.pi * 0.5, 0.0, n_brake, dtype=np.float64)) ** 0.72
-                )[np.newaxis, :]
-                proc_stereo = proc_stereo * (self._env_gain * brake_env)
-                self._env_gain = 0.0
-                self._tt_speed = 0.22
-                self._last_tail_frame.fill(0.0)
-                self._crossfade_on_next_block = False
-                return self._pack_pcm_bytes(proc_stereo, n_brake, eng._channels)
 
         n_frames = self.FADEOUT_FRAMES
         if cur_frame + 16 < total_avail_frames:
@@ -947,18 +910,10 @@ class ContinuousDspStreamDevice(QIODevice):
             return self._get_silence_bytes(eng._channels)
 
         advance_cursor = eng.is_playing or eng._preview_frames_remaining > 0
+        tt_start = 1.0
+        self._tt_speed = 1.0
 
-        # 黑胶唱盘物理起动扭矩曲线：启动时从 0.22x 柔顺加速至 1.0x 正常转速（音高与转速同步爬升）
-        tt_start = self._tt_speed if (eng.turntable_physics_enabled and eng.is_playing) else 1.0
-        if tt_start < 0.995:
-            tt_end = min(1.0, tt_start + 0.16)
-            self._tt_speed = tt_end
-        else:
-            tt_start = 1.0
-            tt_end = 1.0
-            self._tt_speed = 1.0
-
-        if abs(rate - 1.0) < 0.01 and tt_start >= 0.995:
+        if abs(rate - 1.0) < 0.01:
             end_frame = min(target_end_frame, cur_frame + n_frames)
             actual = end_frame - cur_frame
             byte_slice = raw_buf[cur_frame * 4 : end_frame * 4]
@@ -1118,9 +1073,9 @@ class NordicAudioEngine(QObject):
         self._rms_rg_computed: bool = False
         self._dna_computed: bool = False
 
-        # Klang 三大独家听感控制
+        # Klang 听感控制
         self.vocal_balance: float = 0.0
-        self.turntable_physics_enabled: bool = True
+        self.turntable_physics_enabled: bool = False
         self.vinyl_warmth: float = 0.0
         self.headphone_profile_id: str = "bypass"
 
@@ -1306,11 +1261,8 @@ class NordicAudioEngine(QObject):
         self.vinylWarmthChanged.emit(self.vinyl_warmth)
 
     def set_turntable_physics_enabled(self, enabled: bool) -> None:
-        """开启或关闭 B&O 黑胶物理断电起停惯性曲线"""
-        self.turntable_physics_enabled = bool(enabled)
-        if not self.turntable_physics_enabled:
-            self._stream_device._tt_speed = 1.0
-        self.turntablePhysicsChanged.emit(self.turntable_physics_enabled)
+        self.turntable_physics_enabled = False
+        self._stream_device._tt_speed = 1.0
 
     def _update_track_acoustic_dna(self) -> None:
         """离线提取当前曲目的声学 DNA 特征向量 (BPM / 能量密度 / 频谱明暗度 / 温暖度)"""
@@ -1835,7 +1787,7 @@ class NordicAudioEngine(QObject):
 
         self._pause_drain_ticks = 0
         self._preview_frames_remaining = 0
-        self._stream_device._tt_speed = 0.22 if self.turntable_physics_enabled else 1.0
+        self._stream_device._tt_speed = 1.0
         self.is_playing = True
         self._ensure_sink_running()
         self._feed_audio_sink()
@@ -1852,8 +1804,8 @@ class NordicAudioEngine(QObject):
         self._crossfade_tail_pcm = None
         self._crossfade_tail_cursor = 0
         self._crossfade_tail_total_frames = 0
-        self._flush_fadeout_to_sink(is_pause_brake=True)
-        self._pause_drain_ticks = 16 if self.turntable_physics_enabled else 6
+        self._flush_fadeout_to_sink(is_pause_brake=False)
+        self._pause_drain_ticks = 4
         if not self._tick_timer.isActive():
             self._tick_timer.start()
         if self._using_local_file and self._decoder_failed:

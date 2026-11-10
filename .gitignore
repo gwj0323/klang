@@ -31,6 +31,7 @@ venv.bak/
 # User data & cache
 player_state.json
 .cache/
+cache/
 *.log
 scraper_cache/
 scratch/

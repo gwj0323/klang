@@ -154,7 +154,6 @@ class NordicTrack:
     def get_cover_pixmap(self):
         if self._cover_cache_loaded:
             return self._cached_cover_pix
-        self._cover_cache_loaded = True
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QPixmap
 
@@ -162,7 +161,7 @@ class NordicTrack:
         loaded = False
         if self.cover_bytes and pix.loadFromData(self.cover_bytes):
             loaded = True
-        elif self.cover_path and pix.load(self.cover_path):
+        elif self.cover_path and not self.cover_path.startswith("http") and pix.load(self.cover_path):
             loaded = True
         if loaded and not pix.isNull():
             if pix.width() > 512 or pix.height() > 512:
@@ -173,8 +172,12 @@ class NordicTrack:
                     Qt.TransformationMode.SmoothTransformation,
                 )
             self._cached_cover_pix = pix
+            self._cover_cache_loaded = True
         else:
             self._cached_cover_pix = None
+            # 若封面路径是远程 URL 或尚未准备就绪，不锁定缓存标记，允许后续下载完成后载入
+            if not (self.cover_path and self.cover_path.startswith("http")):
+                self._cover_cache_loaded = True
         return self._cached_cover_pix
 
 
