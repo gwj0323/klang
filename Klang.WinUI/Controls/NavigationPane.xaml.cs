@@ -21,7 +21,7 @@ public sealed class GroupHeader
 {
     public string Title { get; init; } = "";
     public int Count { get; init; }
-    public string CountText => $"{Count} 首";
+    public string CountText => L.F("{0} 首", Count);
 }
 
 /// <summary>歌单列表中的一项。</summary>
@@ -32,7 +32,7 @@ public sealed class PlaylistEntry
     public bool IsSmart { get; init; }
     public bool IsBuiltIn { get; init; }
     public string Glyph => IsSmart ? "" : "";
-    public string CountText => $"{Count} 首";
+    public string CountText => L.F("{0} 首", Count);
 }
 
 /// <summary>专辑墙里的一张专辑。</summary>
@@ -42,7 +42,7 @@ public sealed class AlbumEntry
     public string Artist { get; init; } = "";
     public int Count { get; init; }
     public Microsoft.UI.Xaml.Media.ImageSource? Cover { get; init; }
-    public string Subtitle => string.IsNullOrEmpty(Artist) ? $"{Count} 首" : $"{Artist} · {Count} 首";
+    public string Subtitle => string.IsNullOrEmpty(Artist) ? L.F("{0} 首", Count) : L.F("{0} · {1} 首", Artist, Count);
 }
 
 public sealed class TrackListTemplateSelector : DataTemplateSelector
@@ -94,13 +94,13 @@ public sealed partial class NavigationPane : UserControl
 
     private static readonly Dictionary<string, string> SortLabels = new()
     {
-        ["default"] = "默认排序", ["title"] = "按歌名", ["artist"] = "按歌手", ["album"] = "按专辑", ["duration"] = "按时长",
-        ["added"] = "最近添加", ["played"] = "最近播放", ["plays"] = "播放最多"
+        ["default"] = L.T("默认排序"), ["title"] = L.T("按歌名"), ["artist"] = L.T("按歌手"), ["album"] = L.T("按专辑"), ["duration"] = L.T("按时长"),
+        ["added"] = L.T("最近添加"), ["played"] = L.T("最近播放"), ["plays"] = L.T("播放最多")
     };
 
     private static readonly Dictionary<string, string> GroupLabels = new()
     {
-        ["none"] = "不分组", ["artist"] = "按歌手", ["album"] = "按专辑", ["folder"] = "按目录"
+        ["none"] = L.T("不分组"), ["artist"] = L.T("按歌手"), ["album"] = L.T("按专辑"), ["folder"] = L.T("按目录")
     };
 
     public NavigationPane()
@@ -110,6 +110,9 @@ public sealed partial class NavigationPane : UserControl
         PlaylistsListView.ItemsSource = _playlistEntries;
         AlbumsGridView.ItemsSource = _albumEntries;
         UpdateEmptyState();
+
+        // 切换语言后重建列表区的文字（“共 N 首”、空状态提示这些是代码拼出来的）
+        L.LanguageChanged += () => DispatcherQueue.TryEnqueue(RefreshView);
 
         UiAnimations.AttachFade(PlaylistsPanel);
         UiAnimations.AttachFade(CloudView);
@@ -361,7 +364,7 @@ public sealed partial class NavigationPane : UserControl
             }
             DisplayTracks.Clear();
             _listItems.Clear();
-            TrackCountText.Text = $"共 {_playlistEntries.Count} 个歌单";
+            TrackCountText.Text = L.F("共 {0} 个歌单", _playlistEntries.Count);
             EmptyStatePanel.Visibility = Visibility.Collapsed;
             return;
         }
@@ -380,14 +383,14 @@ public sealed partial class NavigationPane : UserControl
                 _albumEntries.Add(new AlbumEntry
                 {
                     Name = g.Key,
-                    Artist = artists.Count == 1 ? artists[0] : "群星",
+                    Artist = artists.Count == 1 ? artists[0] : L.T("群星"),
                     Count = members.Count,
                     Cover = withCover?.CoverThumb
                 });
             }
             DisplayTracks.Clear();
             _listItems.Clear();
-            TrackCountText.Text = $"共 {_albumEntries.Count} 张专辑";
+            TrackCountText.Text = L.F("共 {0} 张专辑", _albumEntries.Count);
             EmptyStatePanel.Visibility = Visibility.Collapsed;
             return;
         }
@@ -396,7 +399,7 @@ public sealed partial class NavigationPane : UserControl
         {
             DisplayTracks.Clear();
             _listItems.Clear();
-            TrackCountText.Text = "云端";
+            TrackCountText.Text = L.T("云端");
             EmptyIcon.Glyph = "";
             EmptyImportBtn.Visibility = Visibility.Collapsed;
             EmptyStatePanel.Visibility = Visibility.Collapsed;
@@ -513,35 +516,35 @@ public sealed partial class NavigationPane : UserControl
     private void UpdateEmptyState()
     {
         bool isEmpty = DisplayTracks.Count == 0;
-        TrackCountText.Text = FilterActive ? $"共 {DisplayTracks.Count} 首 · 已筛选" : $"共 {DisplayTracks.Count} 首";
-        ViewOptionsText.Text = FilterActive ? "整理 ●" : "整理";
+        TrackCountText.Text = FilterActive ? L.F("共 {0} 首 · 已筛选", DisplayTracks.Count) : L.F("共 {0} 首", DisplayTracks.Count);
+        ViewOptionsText.Text = FilterActive ? L.T("整理 ●") : L.T("整理");
         EmptyStatePanel.Visibility = isEmpty ? Visibility.Visible : Visibility.Collapsed;
         TracksListView.Visibility = isEmpty ? Visibility.Collapsed : Visibility.Visible;
 
         EmptyIcon.Glyph = "";
         if (FilterActive)
         {
-            EmptyText.Text = "没有符合筛选条件的歌曲\n可以在“整理 → 筛选”里清除筛选";
+            EmptyText.Text = L.T("没有符合筛选条件的歌曲\n可以在“整理 → 筛选”里清除筛选");
             EmptyImportBtn.Visibility = Visibility.Collapsed;
         }
         else if (SearchBox.Text.Trim().Length > 0)
         {
-            EmptyText.Text = "没有找到匹配的歌曲";
+            EmptyText.Text = L.T("没有找到匹配的歌曲");
             EmptyImportBtn.Visibility = Visibility.Collapsed;
         }
         else if (_currentTab == "fav")
         {
-            EmptyText.Text = "还没有喜欢的歌曲\n点击播放栏的爱心即可收藏";
+            EmptyText.Text = L.T("还没有喜欢的歌曲\n点击播放栏的爱心即可收藏");
             EmptyImportBtn.Visibility = Visibility.Collapsed;
         }
         else if (_currentTab == "playlists" && _openPlaylist != null)
         {
-            EmptyText.Text = "歌单是空的\n在曲目上右键选择“添加到歌单”";
+            EmptyText.Text = L.T("歌单是空的\n在曲目上右键选择“添加到歌单”");
             EmptyImportBtn.Visibility = Visibility.Collapsed;
         }
         else
         {
-            EmptyText.Text = "曲库暂无音乐";
+            EmptyText.Text = L.T("曲库暂无音乐");
             EmptyImportBtn.Visibility = Visibility.Visible;
         }
     }
@@ -612,7 +615,7 @@ public sealed partial class NavigationPane : UserControl
     {
         var flyout = new MenuFlyout();
 
-        var play = new MenuFlyoutItem { Text = "播放", Icon = new FontIcon { Glyph = "" } };
+        var play = new MenuFlyoutItem { Text = L.T("播放"), Icon = new FontIcon { Glyph = "" } };
         play.Click += (s, e) =>
         {
             Queue = DisplayTracks.ToList();
@@ -621,19 +624,19 @@ public sealed partial class NavigationPane : UserControl
         play.IsEnabled = !track.IsMissing;
         flyout.Items.Add(play);
 
-        var playNext = new MenuFlyoutItem { Text = "下一首播放", Icon = new FontIcon { Glyph = "" } };
+        var playNext = new MenuFlyoutItem { Text = L.T("下一首播放"), Icon = new FontIcon { Glyph = "" } };
         playNext.IsEnabled = !track.IsMissing;
         playNext.Click += (s, e) => PlayNextInQueue(track);
         flyout.Items.Add(playNext);
 
-        var addQueue = new MenuFlyoutItem { Text = "加入播放队列", Icon = new FontIcon { Glyph = "" } };
+        var addQueue = new MenuFlyoutItem { Text = L.T("加入播放队列"), Icon = new FontIcon { Glyph = "" } };
         addQueue.IsEnabled = !track.IsMissing;
         addQueue.Click += (s, e) => AddToQueueEnd(track);
         flyout.Items.Add(addQueue);
 
         var fav = new MenuFlyoutItem
         {
-            Text = track.IsFavorite ? "取消喜欢" : "喜欢",
+            Text = track.IsFavorite ? L.T("取消喜欢") : L.T("加入喜欢"),
             Icon = new FontIcon { Glyph = track.IsFavorite ? "" : "" }
         };
         fav.Click += (s, e) => FavoriteToggled?.Invoke(this, track);
@@ -641,7 +644,7 @@ public sealed partial class NavigationPane : UserControl
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
-        var addSub = new MenuFlyoutSubItem { Text = "添加到歌单", Icon = new FontIcon { Glyph = "" } };
+        var addSub = new MenuFlyoutSubItem { Text = L.T("添加到歌单"), Icon = new FontIcon { Glyph = "" } };
         foreach (var name in LibraryService.Instance.PlaylistNames.OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase))
         {
             var item = new MenuFlyoutItem { Text = name };
@@ -653,10 +656,10 @@ public sealed partial class NavigationPane : UserControl
             addSub.Items.Add(item);
         }
         if (addSub.Items.Count > 0) addSub.Items.Add(new MenuFlyoutSeparator());
-        var newPl = new MenuFlyoutItem { Text = "新建歌单…" };
+        var newPl = new MenuFlyoutItem { Text = L.T("新建歌单…") };
         newPl.Click += async (s, e) =>
         {
-            var name = await PromptTextAsync("新建歌单", "歌单名称", "");
+            var name = await PromptTextAsync(L.T("新建歌单"), L.T("歌单名称"), "");
             if (name != null && LibraryService.Instance.CreatePlaylist(name))
             {
                 LibraryService.Instance.AddToPlaylist(name.Trim(), track);
@@ -668,7 +671,7 @@ public sealed partial class NavigationPane : UserControl
         if (_currentTab == "playlists" && _openPlaylist != null && !_openIsSmart)
         {
             var playlistName = _openPlaylist;
-            var rm = new MenuFlyoutItem { Text = "从歌单移除", Icon = new FontIcon { Glyph = "" } };
+            var rm = new MenuFlyoutItem { Text = L.T("从歌单移除"), Icon = new FontIcon { Glyph = "" } };
             rm.Click += (s, e) =>
             {
                 LibraryService.Instance.RemoveFromPlaylist(playlistName, track);
@@ -679,11 +682,11 @@ public sealed partial class NavigationPane : UserControl
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
-        var editTag = new MenuFlyoutItem { Text = "编辑标签…", Icon = new FontIcon { Glyph = "" } };
+        var editTag = new MenuFlyoutItem { Text = L.T("编辑标签…"), Icon = new FontIcon { Glyph = "" } };
         editTag.Click += async (s, e) => await EditTrackTagsAsync(track);
         flyout.Items.Add(editTag);
 
-        var del = new MenuFlyoutItem { Text = "从曲库移除", Icon = new FontIcon { Glyph = "" } };
+        var del = new MenuFlyoutItem { Text = L.T("从曲库移除"), Icon = new FontIcon { Glyph = "" } };
         del.Click += (s, e) =>
         {
             LibraryService.Instance.RemoveTrack(track);
@@ -702,7 +705,7 @@ public sealed partial class NavigationPane : UserControl
 
     private async Task EditTrackTagsAsync(TrackItem track)
     {
-        if (track.IsOnline) { await ShowMessageAsync("云端曲目不能编辑标签", "只能编辑本地曲库里的歌曲。"); return; }
+        if (track.IsOnline) { await ShowMessageAsync(L.T("云端曲目不能编辑标签"), L.T("只能编辑本地曲库里的歌曲。")); return; }
         int sameAlbum = LibraryService.Instance.Tracks.Count(t => t.Album == track.Album && !ReferenceEquals(t, track));
         var r = await Dialogs.LibraryDialogs.ShowTagEditAsync(XamlRoot, track, sameAlbum);
         if (r == null) return;
@@ -722,7 +725,7 @@ public sealed partial class NavigationPane : UserControl
         }
         lib.SaveLibrary();
         RefreshView();
-        if (failed.Count > 0) await ShowMessageAsync("写入标签时出现问题", string.Join("\n", failed.Take(6)));
+        if (failed.Count > 0) await ShowMessageAsync(L.T("写入标签时出现问题"), string.Join("\n", failed.Take(6)));
     }
 
     #endregion
@@ -761,7 +764,7 @@ public sealed partial class NavigationPane : UserControl
         var groups = LibraryService.Instance.FindDuplicateGroups();
         if (groups.Count == 0)
         {
-            await ShowMessageAsync("没有发现重复歌曲", "按“歌名 + 歌手 + 时长”检查，曲库里没有重复的歌。");
+            await ShowMessageAsync(L.T("没有发现重复歌曲"), L.T("按“歌名 + 歌手 + 时长”检查，曲库里没有重复的歌。"));
             return;
         }
         var toRemove = await Dialogs.LibraryDialogs.ShowDuplicatesAsync(XamlRoot, groups);
@@ -778,7 +781,7 @@ public sealed partial class NavigationPane : UserControl
         var missing = lib.MissingTracks();
         if (missing.Count == 0)
         {
-            await ShowMessageAsync("没有丢失的文件", "曲库里的歌曲文件都还在。");
+            await ShowMessageAsync(L.T("没有丢失的文件"), L.T("曲库里的歌曲文件都还在。"));
             RefreshView();
             return;
         }
@@ -792,11 +795,11 @@ public sealed partial class NavigationPane : UserControl
         else if (choice == Dialogs.MissingChoice.Relocate)
         {
             IntPtr hwnd = App.MainWindowInstance != null ? WindowNative.GetWindowHandle(App.MainWindowInstance) : IntPtr.Zero;
-            string? root = FolderPickerHelper.PickFolder(hwnd, "选择文件现在所在的文件夹");
+            string? root = FolderPickerHelper.PickFolder(hwnd, L.T("选择文件现在所在的文件夹"));
             if (!string.IsNullOrEmpty(root))
             {
                 int fixedCount = await lib.RelocateMissingAsync(root);
-                await ShowMessageAsync("重新定位完成", $"找回了 {fixedCount} 首（共 {missing.Count} 首丢失）。\n只有在新文件夹里文件名唯一匹配的才会被找回。");
+                await ShowMessageAsync(L.T("重新定位完成"), L.F("找回了 {0} 首（共 {1} 首丢失）。\n只有在新文件夹里文件名唯一匹配的才会被找回。", fixedCount, missing.Count));
             }
         }
         RefreshView();
@@ -808,10 +811,10 @@ public sealed partial class NavigationPane : UserControl
         {
             Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
             XamlRoot = XamlRoot,
-            Title = "重置漫游学习记录",
-            Content = $"漫游模式已经从 {RoamingService.Instance.Samples} 次听歌反馈里学到了你的口味。\n重置后会从头开始学，歌曲库和播放统计不受影响。",
-            PrimaryButtonText = "重置",
-            CloseButtonText = "取消"
+            Title = L.T("重置漫游学习记录"),
+            Content = L.F("漫游模式已经从 {0} 次听歌反馈里学到了你的口味。\n重置后会从头开始学，歌曲库和播放统计不受影响。", RoamingService.Instance.Samples),
+            PrimaryButtonText = L.T("重置"),
+            CloseButtonText = L.T("取消")
         };
         if (await dlg.ShowAsync() == ContentDialogResult.Primary) RoamingService.Instance.Reset();
     }
@@ -829,7 +832,7 @@ public sealed partial class NavigationPane : UserControl
         }
         await lib.RefreshMissingAsync();
         RefreshView();
-        await ShowMessageAsync("扫描完成", total > 0 ? $"新增了 {total} 首歌曲。" : "没有发现新歌曲（未改动的文件已跳过）。");
+        await ShowMessageAsync(L.T("扫描完成"), total > 0 ? L.F("新增了 {0} 首歌曲。", total) : L.T("没有发现新歌曲（未改动的文件已跳过）。"));
     }
 
     #endregion
@@ -851,7 +854,7 @@ public sealed partial class NavigationPane : UserControl
         if (sender is not FrameworkElement fe || fe.DataContext is not AlbumEntry album) return;
         var flyout = new MenuFlyout();
 
-        var play = new MenuFlyoutItem { Text = "播放专辑", Icon = new FontIcon { Glyph = "" } };
+        var play = new MenuFlyoutItem { Text = L.T("播放专辑"), Icon = new FontIcon { Glyph = "" } };
         play.Click += (s, e) =>
         {
             var list = LibraryService.Instance.Tracks.Where(t => t.Album == album.Name && !t.IsMissing).ToList();
@@ -861,7 +864,7 @@ public sealed partial class NavigationPane : UserControl
         };
         flyout.Items.Add(play);
 
-        var edit = new MenuFlyoutItem { Text = "批量编辑专辑信息…", Icon = new FontIcon { Glyph = "" } };
+        var edit = new MenuFlyoutItem { Text = L.T("批量编辑专辑信息…"), Icon = new FontIcon { Glyph = "" } };
         edit.Click += (s, e) => _ = EditAlbumAsync(album.Name);
         flyout.Items.Add(edit);
 
@@ -888,7 +891,7 @@ public sealed partial class NavigationPane : UserControl
         if (_openAlbum == albumName) _openAlbum = r.Value.Album.Trim();
         RefreshView();
         if (errors.Count > 0)
-            await ShowMessageAsync("部分歌曲没能写入文件", string.Join("\n", errors.Take(8)) + (errors.Count > 8 ? $"\n…另有 {errors.Count - 8} 首" : ""));
+            await ShowMessageAsync(L.T("部分歌曲没能写入文件"), string.Join("\n", errors.Take(8)) + (errors.Count > 8 ? L.F("\n…另有 {0} 首", errors.Count - 8) : ""));
     }
 
     #endregion
@@ -937,7 +940,7 @@ public sealed partial class NavigationPane : UserControl
         if (def == null) return;
         if (!LibraryService.Instance.CreateSmartPlaylist(def))
         {
-            await ShowMessageAsync("无法创建智能歌单", "名称不能为空，也不能与已有歌单重名。");
+            await ShowMessageAsync(L.T("无法创建智能歌单"), L.T("名称不能为空，也不能与已有歌单重名。"));
             return;
         }
         RefreshView();
@@ -960,15 +963,15 @@ public sealed partial class NavigationPane : UserControl
             var (name, imported, notFound) = await LibraryService.Instance.ImportPlaylistM3uAsync(file.Path);
             if (name == null)
             {
-                await ShowMessageAsync("导入失败", "没有从这个文件里读到任何曲目路径。");
+                await ShowMessageAsync(L.T("导入失败"), L.T("没有从这个文件里读到任何曲目路径。"));
                 return;
             }
             RefreshView();
-            await ShowMessageAsync("导入完成", $"已创建歌单“{name}”，导入 {imported} 首" + (notFound > 0 ? $"，{notFound} 首找不到文件。" : "。"));
+            await ShowMessageAsync(L.T("导入完成"), L.F("已创建歌单“{0}”，导入 {1} 首", name, imported) + (notFound > 0 ? L.F("，{0} 首找不到文件。", notFound) : "。"));
         }
         catch (Exception ex)
         {
-            await ShowMessageAsync("导入失败", ex.Message);
+            await ShowMessageAsync(L.T("导入失败"), ex.Message);
         }
     }
 
@@ -980,14 +983,14 @@ public sealed partial class NavigationPane : UserControl
             var tracks = isSmart && lib.FindSmart(name) is { } def ? lib.GetSmartTracks(def) : lib.GetPlaylistTracks(name);
             var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = name };
             WinRT.Interop.InitializeWithWindow.Initialize(picker, MainHwnd());
-            picker.FileTypeChoices.Add("M3U8 播放列表", new List<string> { ".m3u8" });
+            picker.FileTypeChoices.Add(L.T("M3U8 播放列表"), new List<string> { ".m3u8" });
             var file = await picker.PickSaveFileAsync();
             if (file == null) return;
             lib.ExportPlaylistM3u(tracks, file.Path);
         }
         catch (Exception ex)
         {
-            await ShowMessageAsync("导出失败", ex.Message);
+            await ShowMessageAsync(L.T("导出失败"), ex.Message);
         }
     }
 
@@ -1023,11 +1026,11 @@ public sealed partial class NavigationPane : UserControl
 
     private async void NewPlaylistBtn_Click(object sender, RoutedEventArgs e)
     {
-        var name = await PromptTextAsync("新建歌单", "歌单名称", "");
+        var name = await PromptTextAsync(L.T("新建歌单"), L.T("歌单名称"), "");
         if (name == null) return;
         if (!LibraryService.Instance.CreatePlaylist(name))
         {
-            await ShowMessageAsync("无法创建歌单", "名称不能为空，也不能与已有歌单重名。");
+            await ShowMessageAsync(L.T("无法创建歌单"), L.T("名称不能为空，也不能与已有歌单重名。"));
             return;
         }
         RefreshView();
@@ -1039,7 +1042,7 @@ public sealed partial class NavigationPane : UserControl
         {
             var flyout = new MenuFlyout();
 
-            var open = new MenuFlyoutItem { Text = "打开", Icon = new FontIcon { Glyph = "" } };
+            var open = new MenuFlyoutItem { Text = L.T("打开"), Icon = new FontIcon { Glyph = "" } };
             open.Click += (s, e) =>
             {
                 _openPlaylist = entry.Name;
@@ -1048,7 +1051,7 @@ public sealed partial class NavigationPane : UserControl
             };
             flyout.Items.Add(open);
 
-            var export = new MenuFlyoutItem { Text = "导出为 M3U…" };
+            var export = new MenuFlyoutItem { Text = L.T("导出为 M3U…") };
             export.Click += (s, e) => _ = ExportPlaylistAsync(entry.Name, entry.IsSmart);
             flyout.Items.Add(export);
 
@@ -1056,7 +1059,7 @@ public sealed partial class NavigationPane : UserControl
             {
                 if (!entry.IsBuiltIn)
                 {
-                    var delSmart = new MenuFlyoutItem { Text = "删除智能歌单" };
+                    var delSmart = new MenuFlyoutItem { Text = L.T("删除智能歌单") };
                     delSmart.Click += (s, e) =>
                     {
                         LibraryService.Instance.DeleteSmartPlaylist(entry.Name);
@@ -1069,21 +1072,21 @@ public sealed partial class NavigationPane : UserControl
                 return;
             }
 
-            var rename = new MenuFlyoutItem { Text = "重命名", Icon = new FontIcon { Glyph = "" } };
+            var rename = new MenuFlyoutItem { Text = L.T("重命名"), Icon = new FontIcon { Glyph = "" } };
             rename.Click += async (s, e) =>
             {
-                var newName = await PromptTextAsync("重命名歌单", "歌单名称", entry.Name);
+                var newName = await PromptTextAsync(L.T("重命名歌单"), L.T("歌单名称"), entry.Name);
                 if (newName == null) return;
                 if (!LibraryService.Instance.RenamePlaylist(entry.Name, newName))
                 {
-                    await ShowMessageAsync("无法重命名", "名称不能为空，也不能与已有歌单重名。");
+                    await ShowMessageAsync(L.T("无法重命名"), L.T("名称不能为空，也不能与已有歌单重名。"));
                     return;
                 }
                 RefreshView();
             };
             flyout.Items.Add(rename);
 
-            var delete = new MenuFlyoutItem { Text = "删除歌单", Icon = new FontIcon { Glyph = "" } };
+            var delete = new MenuFlyoutItem { Text = L.T("删除歌单"), Icon = new FontIcon { Glyph = "" } };
             delete.Click += (s, e) =>
             {
                 LibraryService.Instance.DeletePlaylist(entry.Name);
@@ -1108,8 +1111,8 @@ public sealed partial class NavigationPane : UserControl
             XamlRoot = XamlRoot,
             Title = title,
             Content = box,
-            PrimaryButtonText = "确定",
-            CloseButtonText = "取消",
+            PrimaryButtonText = L.T("确定"),
+            CloseButtonText = L.T("取消"),
             DefaultButton = ContentDialogButton.Primary
         };
         var result = await dlg.ShowAsync();
@@ -1127,7 +1130,7 @@ public sealed partial class NavigationPane : UserControl
             XamlRoot = XamlRoot,
             Title = title,
             Content = message,
-            CloseButtonText = "好的"
+            CloseButtonText = L.T("好的")
         };
         await dlg.ShowAsync();
     }

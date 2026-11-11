@@ -17,6 +17,8 @@ public sealed partial class EqualizerDialog : ContentDialog
 
         PopulateHeadphoneProfiles();
         LoadCurrentState();
+        L.Apply(this);
+        Loaded += (s, e) => L.Apply(this);
 
         this.PrimaryButtonClick += (s, e) =>
         {

@@ -24,11 +24,17 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         InitializeComponent();
 
+        // 语言：跟随系统 + Languages 文件夹里的每一门
+        LanguageComboBox.Items.Add(new ComboBoxItem { Content = L.T("跟随系统"), Tag = "auto" });
+        foreach (var lang in L.Available())
+            LanguageComboBox.Items.Add(new ComboBoxItem { Content = lang.Name, Tag = lang.Code });
+        SelectByTag(LanguageComboBox, State.Language, "auto");
+
         SelectByTag(ThemeComboBox, State.Theme, "system");
         SelectByTag(BackdropComboBox, State.BackdropMaterial, "mica");
         SelectByTag(LatencyComboBox, State.WasapiLatencyMs.ToString(), "50");
         // 输出设备列表
-        DeviceComboBox.Items.Add(new ComboBoxItem { Content = "系统默认", Tag = "default" });
+        DeviceComboBox.Items.Add(new ComboBoxItem { Content = L.T("系统默认"), Tag = "default" });
         foreach (var d in AudioEngineService.GetOutputDevices())
             DeviceComboBox.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Id });
         SelectByTag(DeviceComboBox, State.SelectedDeviceId, "default");
@@ -42,7 +48,7 @@ public sealed partial class SettingsDialog : ContentDialog
         if (sleepEnd.HasValue)
         {
             int remain = (int)Math.Ceiling((sleepEnd.Value - DateTime.UtcNow).TotalMinutes);
-            SleepStatusText.Text = $"约 {Math.Max(1, remain)} 分钟后暂停播放";
+            SleepStatusText.Text = L.F("约 {0} 分钟后暂停播放", Math.Max(1, remain));
             SleepComboBox.SelectedIndex = -1;
         }
         else
@@ -52,12 +58,25 @@ public sealed partial class SettingsDialog : ContentDialog
 
         LyricSizeSlider.Value = Math.Clamp(State.LyricFontSize, 14, 40);
         LyricSizeText.Text = ((int)LyricSizeSlider.Value).ToString();
-        StatePathText.Text = "配置文件：" + Path.Combine(
+        StatePathText.Text = L.T("配置文件：") + Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Klang", "player_state.json");
         RebuildFolderList();
-        AppVersionText.Text = $"版本 {UpdateService.CurrentVersionText}（WinUI 3）";
+        AppVersionText.Text = L.F("版本 {0}（WinUI 3）", UpdateService.CurrentVersionText);
 
         _loading = false;
+
+        L.Apply(this);
+        Loaded += (s, e) => L.Apply(this);   // 模板展开后（导航栏等）再翻译一遍
+    }
+
+    private void LanguageComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || TagOf(LanguageComboBox) is not string tag) return;
+        L.SetLanguage(tag);          // 保存 + 通知各窗口重新翻译
+        L.Apply(this);               // 设置对话框自己也立刻刷新
+        // 语言下拉里“跟随系统”这一项是代码生成的，单独刷新
+        if (LanguageComboBox.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string?)i.Tag == "auto") is { } auto)
+            auto.Content = L.T("跟随系统");
     }
 
     #region 分类切换
@@ -84,34 +103,34 @@ public sealed partial class SettingsDialog : ContentDialog
         UpdateRing.Visibility = Visibility.Visible;
         UpdateRing.IsActive = true;
         UpdateResultPanel.Visibility = Visibility.Collapsed;
-        UpdateStatusText.Text = "正在检查…";
+        UpdateStatusText.Text = L.T("正在检查…");
         try
         {
             _update = await UpdateService.CheckAsync();
             if (_update.Latest == null)
             {
-                UpdateStatusText.Text = "没有在 GitHub 上找到 WinUI 版本的发布。";
+                UpdateStatusText.Text = L.T("没有在 GitHub 上找到 WinUI 版本的发布。");
             }
             else if (_update.HasUpdate)
             {
-                UpdateStatusText.Text = $"发现新版本 {_update.Latest.ToString(3)}（当前 {UpdateService.CurrentVersionText}）";
+                UpdateStatusText.Text = L.F("发现新版本 {0}（当前 {1}）", _update.Latest.ToString(3), UpdateService.CurrentVersionText);
                 UpdateTitleText.Text = string.IsNullOrWhiteSpace(_update.Name) ? _update.Tag : _update.Name;
-                UpdateNotesText.Text = string.IsNullOrWhiteSpace(_update.Notes) ? "（发布说明为空）" : _update.Notes.Trim();
+                UpdateNotesText.Text = string.IsNullOrWhiteSpace(_update.Notes) ? L.T("（发布说明为空）") : _update.Notes.Trim();
                 DownloadUpdateBtn.IsEnabled = UpdateService.IsTrustedUrl(_update.DownloadUrl);
                 UpdateResultPanel.Visibility = Visibility.Visible;
             }
             else
             {
-                UpdateStatusText.Text = $"已是最新版本（{UpdateService.CurrentVersionText}）";
+                UpdateStatusText.Text = L.F("已是最新版本（{0}）", UpdateService.CurrentVersionText);
             }
         }
         catch (TaskCanceledException)
         {
-            UpdateStatusText.Text = "连接 GitHub 超时，请检查网络后重试。";
+            UpdateStatusText.Text = L.T("连接 GitHub 超时，请检查网络后重试。");
         }
         catch (Exception ex)
         {
-            UpdateStatusText.Text = "检查失败：" + ex.Message;
+            UpdateStatusText.Text = L.T("检查失败：") + ex.Message;
         }
         finally
         {
@@ -197,7 +216,7 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         if (_loading || TagOf(SleepComboBox) is not string tag || !int.TryParse(tag, out var minutes)) return;
         AudioEngineService.Instance.SetSleepTimer(minutes);
-        SleepStatusText.Text = minutes > 0 ? $"{minutes} 分钟后暂停播放" : "到点自动暂停播放";
+        SleepStatusText.Text = minutes > 0 ? L.F("{0} 分钟后暂停播放", minutes) : L.T("到点自动暂停播放");
     }
 
     private void AutoMetaSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -217,7 +236,7 @@ public sealed partial class SettingsDialog : ContentDialog
     private void RefreshCacheInfo()
     {
         var (count, bytes) = Services.Netease.NeteaseService.Instance.GetCacheInfo();
-        CacheInfoText.Text = $"已缓存 {count} 首，占用 {FormatBytes(bytes)}";
+        CacheInfoText.Text = L.F("已缓存 {0} 首，占用 {1}", count, FormatBytes(bytes));
     }
 
     private void CacheLimitBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -231,7 +250,7 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         var (n, bytes) = Services.Netease.NeteaseService.Instance.ClearCache();
         RefreshCacheInfo();
-        CacheInfoText.Text += $"（已清理 {n} 个文件，释放 {FormatBytes(bytes)}）";
+        CacheInfoText.Text += L.F("（已清理 {0} 个文件，释放 {1}）", n, FormatBytes(bytes));
     }
 
     #endregion
@@ -245,7 +264,7 @@ public sealed partial class SettingsDialog : ContentDialog
         {
             FoldersPanel.Children.Add(new TextBlock
             {
-                Text = "（还没有添加文件夹）",
+                Text = L.T("（还没有添加文件夹）"),
                 FontSize = 12,
                 Opacity = 0.6
             });
@@ -273,7 +292,7 @@ public sealed partial class SettingsDialog : ContentDialog
                 Content = new FontIcon { Glyph = "", FontSize = 11 },
                 Padding = new Thickness(6, 3, 6, 3)
             };
-            ToolTipService.SetToolTip(remove, "不再监视此文件夹（已导入的歌曲保留）");
+            ToolTipService.SetToolTip(remove, L.T("不再监视此文件夹（已导入的歌曲保留）"));
             var captured = folder;
             remove.Click += (s, e) =>
             {
@@ -290,16 +309,16 @@ public sealed partial class SettingsDialog : ContentDialog
     private async void RescanBtn_Click(object sender, RoutedEventArgs e)
     {
         RescanBtn.IsEnabled = false;
-        LibraryStatusText.Text = "正在扫描…";
+        LibraryStatusText.Text = L.T("正在扫描…");
         try
         {
             int added = await LibraryService.Instance.RescanWatchedFoldersAsync();
-            LibraryStatusText.Text = added > 0 ? $"扫描完成，新增 {added} 首" : "扫描完成，没有新的歌曲";
+            LibraryStatusText.Text = added > 0 ? L.F("扫描完成，新增 {0} 首", added) : L.T("扫描完成，没有新的歌曲");
             if (added > 0) LibraryChanged?.Invoke();
         }
         catch (Exception ex)
         {
-            LibraryStatusText.Text = "扫描失败：" + ex.Message;
+            LibraryStatusText.Text = L.T("扫描失败：") + ex.Message;
         }
         RescanBtn.IsEnabled = true;
     }
@@ -310,16 +329,16 @@ public sealed partial class SettingsDialog : ContentDialog
         if (!_clearArmed)
         {
             _clearArmed = true;
-            ClearLibraryBtn.Content = "再次点击确认清空";
-            LibraryStatusText.Text = "将清空曲库与文件夹列表（不会删除磁盘上的音乐文件）";
+            ClearLibraryBtn.Content = L.T("再次点击确认清空");
+            LibraryStatusText.Text = L.T("将清空曲库与文件夹列表（不会删除磁盘上的音乐文件）");
             return;
         }
 
         _clearArmed = false;
-        ClearLibraryBtn.Content = "清空曲库";
+        ClearLibraryBtn.Content = L.T("清空曲库");
         LibraryService.Instance.ClearLibrary();
         RebuildFolderList();
-        LibraryStatusText.Text = "曲库已清空";
+        LibraryStatusText.Text = L.T("曲库已清空");
         LibraryChanged?.Invoke();
     }
 

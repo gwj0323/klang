@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -28,7 +28,8 @@ public sealed partial class MiniPlayerWindow : Window
     public MiniPlayerWindow()
     {
         InitializeComponent();
-        Title = "迷你播放器";
+        Title = L.T("迷你播放器");
+        if (Content is FrameworkElement miniRoot) L.Attach(miniRoot, this);
 
         try { SystemBackdrop = new DesktopAcrylicBackdrop(); } catch { }
 
@@ -77,14 +78,14 @@ public sealed partial class MiniPlayerWindow : Window
     {
         if (track == null)
         {
-            MiniTitleText.Text = "暂无播放曲目";
+            MiniTitleText.Text = L.T("暂无播放曲目");
             MiniArtistText.Text = "Klang";
             MiniLyricText.Text = "";
             ShowCover(null);
             return;
         }
 
-        MiniTitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? "未命名曲目" : track.Title;
+        MiniTitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? L.T("未命名曲目") : track.Title;
         MiniArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知歌手" : track.Artist;
         MiniLyricText.Text = "";
         ShowCover(track.CoverPath);

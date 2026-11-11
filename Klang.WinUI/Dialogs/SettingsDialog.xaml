@@ -40,7 +40,7 @@
         IsBackButtonVisible="Collapsed"
         IsPaneToggleButtonVisible="False"
         IsSettingsVisible="False"
-        OpenPaneLength="148"
+        OpenPaneLength="160"
         PaneDisplayMode="Left"
         SelectionChanged="SettingsNav_SelectionChanged">
         <NavigationView.MenuItems>
@@ -75,8 +75,26 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="语言 / Language" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="界面语言，立即生效" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox
+                                x:Name="LanguageComboBox"
+                                Grid.Column="1"
+                                Width="150"
+                                SelectionChanged="LanguageComboBox_SelectionChanged" />
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="主题" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="浅色 / 深色 / 跟随系统" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="浅色 / 深色 / 跟随系统" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="ThemeComboBox"
@@ -98,7 +116,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="背景材质" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="云母 (Mica) / 亚克力 (Acrylic)" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="云母 (Mica) / 亚克力 (Acrylic)" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="BackdropComboBox"
@@ -121,7 +139,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="歌词字号" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="快捷键 Ctrl + / Ctrl - 也可调节" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="快捷键 Ctrl + / Ctrl - 也可调节" TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
                                 <Slider
@@ -157,7 +175,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="输出设备" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="下一首开始生效" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="下一首开始生效" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="DeviceComboBox"
@@ -175,7 +193,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="越大越不易卡顿，下一首开始生效" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="越大越不易卡顿，下一首开始生效" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="LatencyComboBox"
@@ -199,7 +217,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="回放增益 (ReplayGain)" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按标签统一不同歌曲的响度" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按标签统一不同歌曲的响度" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
                                 x:Name="ReplayGainSwitch"
@@ -229,7 +247,7 @@
                                 Grid.Column="1"
                                 Width="150"
                                 SelectionChanged="SleepComboBox_SelectionChanged">
-                                <ComboBoxItem Content="关闭" Tag="0" />
+                                <ComboBoxItem Content="不设定时" Tag="0" />
                                 <ComboBoxItem Content="15 分钟" Tag="15" />
                                 <ComboBoxItem Content="30 分钟" Tag="30" />
                                 <ComboBoxItem Content="45 分钟" Tag="45" />
@@ -249,7 +267,7 @@
                     <TextBlock Style="{StaticResource GroupTitle}" Text="音乐文件夹" />
                     <Border Style="{StaticResource SettingCard}">
                         <StackPanel Spacing="8">
-                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="这些文件夹里的新增、改动和删除会自动同步" />
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="这些文件夹里的新增、改动和删除会自动同步" TextWrapping="Wrap" />
                             <StackPanel x:Name="FoldersPanel" Spacing="4" />
                             <TextBlock
                                 x:Name="LibraryStatusText"
@@ -344,7 +362,7 @@
                                 Width="56"
                                 Height="56"
                                 VerticalAlignment="Top"
-                                Source="ms-appx:///Assets/AppIcon.ico" />
+                                Source="ms-appx:///Assets/AppLogo.png" />
                             <StackPanel Grid.Column="1" Spacing="3">
                                 <TextBlock FontSize="18" FontWeight="SemiBold" Text="Klang" />
                                 <TextBlock

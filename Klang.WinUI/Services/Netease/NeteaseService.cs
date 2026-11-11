@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -20,7 +20,7 @@ public sealed class NeteasePlaylist
     public string Name { get; init; } = "";
     public int TrackCount { get; init; }
     public bool IsLiked { get; init; }
-    public string CountText => $"{TrackCount} 首";
+    public string CountText => L.F("{0} 首", TrackCount);
 }
 
 /// <summary>网易云业务层（对应 Qt 版 netease_service）：登录、歌单、搜索、取音源与缓存、歌词。</summary>
@@ -31,11 +31,11 @@ public sealed class NeteaseService
 
     public static readonly (string Key, string Label)[] Qualities =
     {
-        ("standard", "标准 128k"),
-        ("higher", "极高 320k"),
-        ("lossless", "无损 FLAC"),
-        ("hires", "Hi-Res 无损"),
-        ("jymaster", "超清母带"),
+        ("standard", L.T("标准 128k")),
+        ("higher", L.T("极高 320k")),
+        ("lossless", L.T("无损 FLAC")),
+        ("hires", L.T("Hi-Res 无损")),
+        ("jymaster", L.T("超清母带")),
     };
 
     private static readonly string[] LevelOrder = { "jymaster", "hires", "lossless", "higher", "standard" };
@@ -145,7 +145,7 @@ public sealed class NeteaseService
     private void ApplyProfile(JsonNode profile, JsonNode? account)
     {
         State.NeteaseUserId = (long?)profile["userId"] ?? (long?)account?["id"] ?? 0;
-        State.NeteaseNickname = (string?)profile["nickname"] ?? "网易云用户";
+        State.NeteaseNickname = (string?)profile["nickname"] ?? L.T("网易云用户");
         State.NeteaseAvatarUrl = (string?)profile["avatarUrl"] ?? "";
         IsLoggedIn = State.NeteaseUserId != 0;
     }
@@ -178,8 +178,8 @@ public sealed class NeteaseService
             {
                 var raw = (string?)res?["cookie"] ?? "";
                 if (raw.Length > 0) _client.SetCookies(NeteaseClient.ParseCookieString(raw));
-                if (!await FinishLoginAsync()) return (-1, "登录校验失败");
-                return (803, "登录成功");
+                if (!await FinishLoginAsync()) return (-1, L.T("登录校验失败"));
+                return (803, L.T("登录成功"));
             }
             return (code, msg);
         }
@@ -192,20 +192,20 @@ public sealed class NeteaseService
     public async Task<(bool Ok, string Message)> LoginWithCookieAsync(string input)
     {
         var raw = (input ?? "").Trim();
-        if (raw.Length == 0) return (false, "请输入 Cookie 或 MUSIC_U");
+        if (raw.Length == 0) return (false, L.T("请输入 Cookie 或 MUSIC_U"));
         if (!raw.Contains('=')) raw = "MUSIC_U=" + raw;
         var dict = NeteaseClient.ParseCookieString(raw);
-        if (!dict.ContainsKey("MUSIC_U")) return (false, "没有找到 MUSIC_U");
+        if (!dict.ContainsKey("MUSIC_U")) return (false, L.T("没有找到 MUSIC_U"));
 
         _client.ResetCookies();
         _client.SetCookies(dict);
         try
         {
-            return await FinishLoginAsync() ? (true, "登录成功") : (false, "Cookie 无效或已过期");
+            return await FinishLoginAsync() ? (true, L.T("登录成功")) : (false, L.T("Cookie 无效或已过期"));
         }
         catch (Exception ex)
         {
-            return (false, "验证失败：" + ex.Message);
+            return (false, L.T("验证失败：") + ex.Message);
         }
     }
 
@@ -249,7 +249,7 @@ public sealed class NeteaseService
             list.Add(new NeteasePlaylist
             {
                 Id = (long?)pl["id"] ?? 0,
-                Name = (string?)pl["name"] ?? "未命名歌单",
+                Name = (string?)pl["name"] ?? L.T("未命名歌单"),
                 TrackCount = (int?)pl["trackCount"] ?? 0,
                 IsLiked = (int?)pl["specialType"] == 5
             });
@@ -347,18 +347,18 @@ public sealed class NeteaseService
                 Index = index++,
                 Id = "netease_" + id,
                 NeteaseId = id,
-                Title = (string?)s["name"] ?? "未知曲目",
+                Title = (string?)s["name"] ?? L.T("未知曲目"),
                 Artist = artist.Length > 0 ? artist : "未知歌手",
                 Album = (string?)album?["name"] ?? "",
                 Duration = ms / 1000.0,
                 CoverUrl = (string?)album?["picUrl"] ?? (string?)s["picUrl"] ?? "",
-                FormatBadge = "云端"
+                FormatBadge = L.T("云端")
             };
             var cached = FindCachedAudio(id);
             if (cached != null)
             {
                 t.FilePath = cached;
-                t.FormatBadge = "已缓存";
+                t.FormatBadge = L.T("已缓存");
             }
             var cover = CachedCoverPath(id);
             t.CoverPath = File.Exists(cover) ? cover : null;
@@ -502,11 +502,11 @@ public sealed class NeteaseService
         string e = ext.ToUpperInvariant();
         switch (quality)
         {
-            case "jymaster": t.FormatBadge = "FLAC 超清母带"; t.BitDepth = 24; t.SampleRate = 96000; break;
+            case "jymaster": t.FormatBadge = L.T("FLAC 超清母带"); t.BitDepth = 24; t.SampleRate = 96000; break;
             case "hires": t.FormatBadge = "FLAC Hi-Res"; t.BitDepth = 24; t.SampleRate = 96000; break;
-            case "lossless": t.FormatBadge = $"{e} 无损"; t.BitDepth = 16; t.SampleRate = 44100; break;
+            case "lossless": t.FormatBadge = L.F("{0} 无损", e); t.BitDepth = 16; t.SampleRate = 44100; break;
             case "higher": t.FormatBadge = $"{e} 320k"; t.BitDepth = 16; t.SampleRate = 44100; break;
-            default: t.FormatBadge = $"{e} 标准"; t.BitDepth = 16; t.SampleRate = 44100; break;
+            default: t.FormatBadge = L.F("{0} 标准", e); t.BitDepth = 16; t.SampleRate = 44100; break;
         }
     }
 

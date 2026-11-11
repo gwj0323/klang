@@ -71,6 +71,7 @@ public class AppState
 {
     public double Volume { get; set; } = 0.85;
     public string PlayMode { get; set; } = "loop_list";
+    public string Language { get; set; } = "auto";          // auto（跟随系统）| zh-CN | en | Languages 文件夹里其他语言
     public string Theme { get; set; } = "system";          // system | light | dark
     public string BackdropMaterial { get; set; } = "mica"; // mica | acrylic | solid
     public bool SidebarCollapsed { get; set; }

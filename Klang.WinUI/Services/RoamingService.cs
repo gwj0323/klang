@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Klang_WinUI.Models;
@@ -23,8 +23,8 @@ public sealed class RoamingService
     private const int F = 12;                 // 特征数（不含偏置）
     private static readonly string[] FeatureNames =
     {
-        "你常在上一首之后听它", "同一位歌手", "同一张专辑", "同一目录", "音色和节奏相近", "音质相当",
-        "时长相近", "你常听完它", "你喜欢的歌", "（近期放过）", "你常播放它", "这个时段你常听它"
+        L.T("你常在上一首之后听它"), L.T("同一位歌手"), L.T("同一张专辑"), L.T("同一目录"), L.T("音色和节奏相近"), L.T("音质相当"),
+        L.T("时长相近"), L.T("你常听完它"), L.T("你喜欢的歌"), L.T("（近期放过）"), L.T("你常播放它"), L.T("这个时段你常听它")
     };
     private static readonly float[] Prior = { 2.0f, 0.6f, 0.4f, 0.1f, 1.4f, 0.2f, 0.3f, 1.5f, 0.5f, -2.5f, 0.3f, 0.5f, 0f };
 
@@ -234,11 +234,11 @@ public sealed class RoamingService
         EnsureWeights();
         var pool = candidates.Where(t => !t.IsMissing && !t.IsOnline && !ReferenceEquals(t, current)).ToList();
         if (pool.Count == 0) return null;
-        if (current == null) return new Pick(pool[_rand.Next(pool.Count)], "随机开始");
+        if (current == null) return new Pick(pool[_rand.Next(pool.Count)], L.T("随机开始"));
 
         // 偶尔纯随机探索，防止模型只在已知口味里打转
         if (pool.Count > 3 && _rand.NextDouble() < 0.07)
-            return new Pick(pool[_rand.Next(pool.Count)], "随便走走，换个口味");
+            return new Pick(pool[_rand.Next(pool.Count)], L.T("随便走走，换个口味"));
 
         EnsureNorm(library);
         var w = Model.Weights;
@@ -273,6 +273,6 @@ public sealed class RoamingService
             double c = w[i] * f[i];
             if (c > bestV) { bestV = c; best = i; }
         }
-        return best < 0 ? "按你的口味挑的" : FeatureNames[best];
+        return best < 0 ? L.T("按你的口味挑的") : FeatureNames[best];
     }
 }

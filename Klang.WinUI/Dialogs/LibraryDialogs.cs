@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -28,7 +28,7 @@ public static class LibraryDialogs
     private static string Describe(TrackItem t)
     {
         string bitrate = t.Bitrate > 0 ? $" · {t.Bitrate}kbps" : "";
-        string missing = t.IsMissing ? " · 文件丢失" : "";
+        string missing = t.IsMissing ? L.T(" · 文件丢失") : "";
         return $"{t.FormatBadge}{bitrate}{missing}\n{t.FilePath}";
     }
 
@@ -42,7 +42,7 @@ public static class LibraryDialogs
 
         panel.Children.Add(new TextBlock
         {
-            Text = $"发现 {groups.Count} 组重复。每组第一首是建议保留的（音质更高 / 文件在），其余默认勾选移除。\n只会从曲库里移除，不会删除磁盘上的文件。",
+            Text = L.F("发现 {0} 组重复。每组第一首是建议保留的（音质更高 / 文件在），其余默认勾选移除。\n只会从曲库里移除，不会删除磁盘上的文件。", groups.Count),
             TextWrapping = TextWrapping.Wrap,
             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
             FontSize = 12,
@@ -65,7 +65,7 @@ public static class LibraryDialogs
                     IsChecked = i > 0,
                     Content = new TextBlock
                     {
-                        Text = (i == 0 ? "【建议保留】" : "") + Describe(g[i]),
+                        Text = (i == 0 ? L.T("【建议保留】") : "") + Describe(g[i]),
                         FontSize = 12,
                         TextWrapping = TextWrapping.Wrap
                     }
@@ -75,8 +75,8 @@ public static class LibraryDialogs
             }
         }
 
-        var dlg = NewDialog(root, "重复歌曲",
-            new ScrollViewer { Content = panel, MaxHeight = 420, MinWidth = 460 }, "从曲库移除所选", "关闭");
+        var dlg = NewDialog(root, L.T("重复歌曲"),
+            new ScrollViewer { Content = panel, MaxHeight = 420, MinWidth = 460 }, L.T("从曲库移除所选"), L.T("关闭"));
         var res = await dlg.ShowAsync();
         if (res != ContentDialogResult.Primary) return null;
         return boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Track).ToList();
@@ -89,25 +89,25 @@ public static class LibraryDialogs
         var panel = new StackPanel { Spacing = 6 };
         panel.Children.Add(new TextBlock
         {
-            Text = $"有 {missing.Count} 首歌的文件找不到了（被移走、重命名，或外接盘没插）。",
+            Text = L.F("有 {0} 首歌的文件找不到了（被移走、重命名，或外接盘没插）。", missing.Count),
             TextWrapping = TextWrapping.Wrap
         });
         var list = new StackPanel { Spacing = 2 };
         foreach (var t in missing.Take(30))
             list.Children.Add(new TextBlock { Text = $"{t.Title} — {t.FilePath}", FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis });
         if (missing.Count > 30)
-            list.Children.Add(new TextBlock { Text = $"…另有 {missing.Count - 30} 首", FontSize = 12 });
+            list.Children.Add(new TextBlock { Text = L.F("…另有 {0} 首", missing.Count - 30), FontSize = 12 });
         panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 220 });
         panel.Children.Add(new TextBlock
         {
-            Text = "“重新定位”会在你选的文件夹里按文件名找回（收藏和歌单会保留）；“清理”会把它们从曲库移除。",
+            Text = L.T("“重新定位”会在你选的文件夹里按文件名找回（收藏和歌单会保留）；“清理”会把它们从曲库移除。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
         });
 
-        var dlg = NewDialog(root, "丢失的文件", new Grid { Children = { panel }, MinWidth = 440 }, "重新定位…", "关闭");
-        dlg.SecondaryButtonText = "从曲库清理";
+        var dlg = NewDialog(root, L.T("丢失的文件"), new Grid { Children = { panel }, MinWidth = 440 }, L.T("重新定位…"), L.T("关闭"));
+        dlg.SecondaryButtonText = L.T("从曲库清理");
         var res = await dlg.ShowAsync();
         return res switch
         {
@@ -123,23 +123,23 @@ public static class LibraryDialogs
 
     public static async Task<TagEditResult?> ShowTagEditAsync(XamlRoot root, TrackItem track, int sameAlbumOthers)
     {
-        var title = new TextBox { Header = "歌名", Text = track.Title };
-        var artist = new TextBox { Header = "歌手", Text = track.Artist };
-        var album = new TextBox { Header = "专辑", Text = track.Album };
+        var title = new TextBox { Header = L.T("歌名"), Text = track.Title };
+        var artist = new TextBox { Header = L.T("歌手"), Text = track.Artist };
+        var album = new TextBox { Header = L.T("专辑名"), Text = track.Album };
         var apply = new CheckBox
         {
-            Content = $"把歌手和专辑同步到同专辑的另外 {sameAlbumOthers} 首",
+            Content = L.F("把歌手和专辑同步到同专辑的另外 {0} 首", sameAlbumOthers),
             Visibility = sameAlbumOthers > 0 ? Visibility.Visible : Visibility.Collapsed
         };
         var note = new TextBlock
         {
-            Text = track.IsCueTrack ? "CUE 分轨只修改曲库里的显示，不写入音频文件。" : "修改会写回音频文件的标签。",
+            Text = track.IsCueTrack ? L.T("CUE 分轨只修改曲库里的显示，不写入音频文件。") : L.T("修改会写回音频文件的标签。"),
             FontSize = 12,
             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
         };
         var panel = new StackPanel { Spacing = 10, MinWidth = 380, Children = { title, artist, album, apply, note } };
 
-        var dlg = NewDialog(root, "编辑标签", panel, "保存");
+        var dlg = NewDialog(root, L.T("编辑标签"), panel, L.T("保存"));
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return null;
         if (string.IsNullOrWhiteSpace(title.Text)) return null;
         return new TagEditResult(title.Text, artist.Text, album.Text, track.Album, apply.IsChecked == true);
@@ -147,20 +147,20 @@ public static class LibraryDialogs
 
     public static async Task<(string Album, string Artist)?> ShowAlbumEditAsync(XamlRoot root, string album, string artist, int count)
     {
-        var albumBox = new TextBox { Header = "专辑名", Text = album };
-        var artistBox = new TextBox { Header = "歌手（留空则不改）", Text = artist };
+        var albumBox = new TextBox { Header = L.T("专辑名"), Text = album };
+        var artistBox = new TextBox { Header = L.T("歌手（留空则不改）"), Text = artist };
         var panel = new StackPanel
         {
             Spacing = 10,
             MinWidth = 380,
             Children =
             {
-                new TextBlock { Text = $"将修改这张专辑的 {count} 首歌，并写回各自的音频文件。", TextWrapping = TextWrapping.Wrap, FontSize = 12 },
+                new TextBlock { Text = L.F("将修改这张专辑的 {0} 首歌，并写回各自的音频文件。", count), TextWrapping = TextWrapping.Wrap, FontSize = 12 },
                 albumBox,
                 artistBox
             }
         };
-        var dlg = NewDialog(root, "批量编辑专辑信息", panel, "保存");
+        var dlg = NewDialog(root, L.T("批量编辑专辑信息"), panel, L.T("保存"));
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return null;
         if (string.IsNullOrWhiteSpace(albumBox.Text)) return null;
         return (albumBox.Text, artistBox.Text);
@@ -170,32 +170,32 @@ public static class LibraryDialogs
 
     public static async Task<SmartPlaylistDef?> ShowSmartPlaylistAsync(XamlRoot root)
     {
-        var name = new TextBox { Header = "名称", PlaceholderText = "例如：无损 · 我喜欢", MaxLength = 40 };
+        var name = new TextBox { Header = L.T("名称"), PlaceholderText = L.T("例如：无损 · 我喜欢"), MaxLength = 40 };
 
-        var quality = new ComboBox { Header = "音质", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var s in new[] { "不限", "无损及以上", "仅 Hi-Res" }) quality.Items.Add(s);
+        var quality = new ComboBox { Header = L.T("音质"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        foreach (var s in new[] { L.T("不限"), L.T("无损及以上"), L.T("仅 Hi-Res") }) quality.Items.Add(s);
         quality.SelectedIndex = 0;
 
-        var fav = new CheckBox { Content = "只要我喜欢的" };
+        var fav = new CheckBox { Content = L.T("只要我喜欢的") };
 
-        var added = new ComboBox { Header = "添加时间", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var s in new[] { "不限", "最近 7 天", "最近 30 天", "最近 90 天" }) added.Items.Add(s);
+        var added = new ComboBox { Header = L.T("添加时间"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        foreach (var s in new[] { L.T("不限"), L.T("最近 7 天"), L.T("最近 30 天"), L.T("最近 90 天") }) added.Items.Add(s);
         added.SelectedIndex = 0;
 
-        var plays = new ComboBox { Header = "播放次数", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var s in new[] { "不限", "至少 1 次", "至少 3 次", "至少 10 次" }) plays.Items.Add(s);
+        var plays = new ComboBox { Header = L.T("播放次数"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        foreach (var s in new[] { L.T("不限"), L.T("至少 1 次"), L.T("至少 3 次"), L.T("至少 10 次") }) plays.Items.Add(s);
         plays.SelectedIndex = 0;
 
-        var sort = new ComboBox { Header = "排序", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var s in new[] { "最近添加", "最近播放", "播放最多", "歌名" }) sort.Items.Add(s);
+        var sort = new ComboBox { Header = L.T("排序"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        foreach (var s in new[] { L.T("最近添加"), L.T("最近播放"), L.T("播放最多"), L.T("歌名") }) sort.Items.Add(s);
         sort.SelectedIndex = 0;
 
-        var limit = new ComboBox { Header = "最多显示", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var s in new[] { "不限", "50 首", "100 首", "200 首" }) limit.Items.Add(s);
+        var limit = new ComboBox { Header = L.T("最多显示"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        foreach (var s in new[] { L.T("不限"), L.T("50 首"), L.T("100 首"), L.T("200 首") }) limit.Items.Add(s);
         limit.SelectedIndex = 0;
 
         var panel = new StackPanel { Spacing = 10, MinWidth = 380, Children = { name, quality, fav, added, plays, sort, limit } };
-        var dlg = NewDialog(root, "新建智能歌单", new ScrollViewer { Content = panel, MaxHeight = 480 }, "创建");
+        var dlg = NewDialog(root, L.T("新建智能歌单"), new ScrollViewer { Content = panel, MaxHeight = 480 }, L.T("创建"));
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return null;
 
         return new SmartPlaylistDef

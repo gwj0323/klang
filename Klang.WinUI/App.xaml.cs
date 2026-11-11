@@ -26,6 +26,7 @@ public partial class App : Application
 
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        L.Init();   // 必须在创建任何界面之前：代码里的 L.T 靠它加载翻译表
         MainWindowInstance = new MainWindow();
         MainWindowInstance.Activate();
     }

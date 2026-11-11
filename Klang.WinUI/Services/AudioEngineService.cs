@@ -426,7 +426,7 @@ public class AudioEngineService : IDisposable
         {
             EqGains[i] = gains[i];
         }
-        CurrentPreset = "自定义";
+        CurrentPreset = L.T("自定义");
         _dspProvider?.Processor.SetGains(EqGains);
     }
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -121,7 +121,7 @@ public sealed partial class CloudPanel : UserControl
         _qrBusy = true;
         _qrTimer.Stop();
         QrRing.IsActive = true;
-        QrStatusText.Text = "正在获取二维码…";
+        QrStatusText.Text = L.T("正在获取二维码…");
         try
         {
             var (key, png) = await Svc.CreateQrAsync();
@@ -129,7 +129,7 @@ public sealed partial class CloudPanel : UserControl
             {
                 _qrKey = "";
                 QrImage.Source = null;
-                QrStatusText.Text = "获取二维码失败，请检查网络后点击“刷新二维码”";
+                QrStatusText.Text = L.T("获取二维码失败，请检查网络后点击“刷新二维码”");
                 return;
             }
             _qrKey = key;
@@ -144,12 +144,12 @@ public sealed partial class CloudPanel : UserControl
             var bmp = new BitmapImage();
             await bmp.SetSourceAsync(stream);
             QrImage.Source = bmp;
-            QrStatusText.Text = "使用网易云音乐 App 扫码登录";
+            QrStatusText.Text = L.T("使用网易云音乐 App 扫码登录");
             if (_active) _qrTimer.Start();
         }
         catch (Exception ex)
         {
-            QrStatusText.Text = "获取二维码失败：" + ex.Message;
+            QrStatusText.Text = L.T("获取二维码失败：") + ex.Message;
         }
         finally
         {
@@ -167,22 +167,22 @@ public sealed partial class CloudPanel : UserControl
             var (code, msg) = await Svc.PollQrAsync(_qrKey);
             switch (code)
             {
-                case 801: QrStatusText.Text = "等待扫码…"; break;
-                case 802: QrStatusText.Text = "已扫码，请在手机上确认登录"; break;
+                case 801: QrStatusText.Text = L.T("等待扫码…"); break;
+                case 802: QrStatusText.Text = L.T("已扫码，请在手机上确认登录"); break;
                 case 800:
                     _qrTimer.Stop();
                     _qrKey = "";
-                    QrStatusText.Text = "二维码已过期，正在刷新…";
+                    QrStatusText.Text = L.T("二维码已过期，正在刷新…");
                     _qrBusy = false;
                     await RefreshQrAsync();
                     return;
                 case 803:
                     _qrTimer.Stop();
                     _qrKey = "";
-                    QrStatusText.Text = "登录成功";
+                    QrStatusText.Text = L.T("登录成功");
                     break;
                 default:
-                    QrStatusText.Text = "登录出错：" + msg;
+                    QrStatusText.Text = L.T("登录出错：") + msg;
                     break;
             }
         }
@@ -201,7 +201,7 @@ public sealed partial class CloudPanel : UserControl
     private async void CookieLogin_Click(object sender, RoutedEventArgs e)
     {
         CookieLoginBtn.IsEnabled = false;
-        CookieStatusText.Text = "正在验证…";
+        CookieStatusText.Text = L.T("正在验证…");
         var (ok, msg) = await Svc.LoginWithCookieAsync(CookieBox.Text);
         CookieStatusText.Text = msg;
         CookieLoginBtn.IsEnabled = true;
@@ -231,17 +231,17 @@ public sealed partial class CloudPanel : UserControl
     private async Task LoadHomeAsync()
     {
         _homeLoading = true;
-        ShowBusy("正在加载歌单…", spinning: true);
+        ShowBusy(L.T("正在加载歌单…"), spinning: true);
         try
         {
             var playlists = await Svc.GetUserPlaylistsAsync();
             _entries.Clear();
-            _entries.Add(new CloudEntry { Title = "每日推荐", Subtitle = "", Glyph = "", IsDaily = true });
+            _entries.Add(new CloudEntry { Title = L.T("每日推荐"), Subtitle = "", Glyph = "", IsDaily = true });
             foreach (var pl in playlists)
             {
                 _entries.Add(new CloudEntry
                 {
-                    Title = pl.IsLiked ? "我喜欢的音乐" : pl.Name,
+                    Title = pl.IsLiked ? L.T("我喜欢的音乐") : pl.Name,
                     Subtitle = pl.CountText,
                     Glyph = pl.IsLiked ? "" : "",
                     PlaylistId = pl.Id
@@ -251,7 +251,7 @@ public sealed partial class CloudPanel : UserControl
         }
         catch (Exception ex)
         {
-            ShowBusy("加载歌单失败：" + ex.Message);
+            ShowBusy(L.T("加载歌单失败：") + ex.Message);
         }
         finally
         {
@@ -271,7 +271,7 @@ public sealed partial class CloudPanel : UserControl
     public Task SearchAsync(string keyword)
     {
         if (string.IsNullOrWhiteSpace(keyword)) return Task.CompletedTask;
-        return ShowTracksAsync($"搜索：{keyword.Trim()}", () => Svc.SearchAsync(keyword));
+        return ShowTracksAsync(L.F("搜索：{0}", keyword.Trim()), () => Svc.SearchAsync(keyword));
     }
 
     private async Task ShowTracksAsync(string title, Func<Task<List<TrackItem>>> loader)
@@ -281,18 +281,18 @@ public sealed partial class CloudPanel : UserControl
         TracksHeaderText.Text = title;
         _tracks.Clear();
         UpdateView();
-        ShowBusy("正在加载…", spinning: true);
+        ShowBusy(L.T("正在加载…"), spinning: true);
         try
         {
             var list = await loader();
             if (seq != _requestSeq) return; // 已被更新的请求取代
             foreach (var t in list) _tracks.Add(t);
-            if (list.Count == 0) ShowBusy("没有内容（未登录或没有结果）");
+            if (list.Count == 0) ShowBusy(L.T("没有内容（未登录或没有结果）"));
             else HideBusy();
         }
         catch (Exception ex)
         {
-            if (seq == _requestSeq) ShowBusy("加载失败：" + ex.Message);
+            if (seq == _requestSeq) ShowBusy(L.T("加载失败：") + ex.Message);
         }
     }
 

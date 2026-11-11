@@ -29,7 +29,8 @@ public sealed partial class DesktopLyricWindow : Window
     public DesktopLyricWindow()
     {
         InitializeComponent();
-        Title = "桌面歌词";
+        Title = L.T("桌面歌词");
+        if (Content is FrameworkElement lyricRoot) L.Attach(lyricRoot, this);
 
         // 整窗亚克力材质 + 深色着色，圆角由系统绘制
         try { SystemBackdrop = new DesktopAcrylicBackdrop(); } catch { }

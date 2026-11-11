@@ -283,8 +283,8 @@ public sealed partial class VinylCoverCard : UserControl
 
         if (track == null)
         {
-            TitleText.Text = "暂无播放曲目";
-            ArtistText.Text = "点击左侧栏按钮导入本地音乐";
+            TitleText.Text = L.T("暂无播放曲目");
+            ArtistText.Text = L.T("点击左侧栏按钮导入本地音乐");
             AlbumText.Text = "";
             QualityBadgeBorder.Visibility = Visibility.Collapsed;
             CoverImage.Visibility = Visibility.Collapsed;
@@ -292,7 +292,7 @@ public sealed partial class VinylCoverCard : UserControl
             return;
         }
 
-        TitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? "未命名曲目" : track.Title;
+        TitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? L.T("未命名曲目") : track.Title;
         ArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知艺术家" : track.Artist;
         AlbumText.Text = string.IsNullOrWhiteSpace(track.Album) ? "" : track.Album;
 

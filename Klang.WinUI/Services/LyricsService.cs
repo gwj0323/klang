@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -53,7 +53,7 @@ public class LyricsService
     {
         if (string.IsNullOrWhiteSpace(audioFilePath) || !File.Exists(audioFilePath))
         {
-            return CreateEmptyPlaceholder("暂无歌词");
+            return CreateEmptyPlaceholder(L.T("暂无歌词"));
         }
 
         string dir = Path.GetDirectoryName(audioFilePath) ?? "";
@@ -98,7 +98,7 @@ public class LyricsService
             System.Diagnostics.Debug.WriteLine($"Error reading embedded lyrics: {ex.Message}");
         }
 
-        return CreateEmptyPlaceholder("暂无歌词");
+        return CreateEmptyPlaceholder(L.T("暂无歌词"));
     }
 
     public List<LyricLine> ParseLrc(string primaryLrc, string? transLrc = null, string? romaLrc = null)
@@ -106,7 +106,7 @@ public class LyricsService
         var primaryEntries = ParseRawEntries(primaryLrc);
         if (primaryEntries.Count == 0)
         {
-            return CreateEmptyPlaceholder("暂无歌词");
+            return CreateEmptyPlaceholder(L.T("暂无歌词"));
         }
 
         var transEntries = !string.IsNullOrWhiteSpace(transLrc) ? ParseRawEntries(transLrc) : new List<RawLrcEntry>();

@@ -10,6 +10,11 @@
     mc:Ignorable="d">
 
     <UserControl.Resources>
+        <!-- 顶部分类标签：五个标签要在 286px 的侧栏里放下（英文标签更长），内边距收紧一点 -->
+        <Style TargetType="SelectorBarItem">
+            <Setter Property="Padding" Value="7,6,7,6" />
+        </Style>
+
         <!-- 曲目行 -->
         <DataTemplate x:Key="TrackTemplate" x:DataType="models:TrackItem">
             <Grid

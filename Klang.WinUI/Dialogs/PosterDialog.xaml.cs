@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -22,6 +22,8 @@ public sealed partial class PosterDialog : ContentDialog
     public PosterDialog(TrackItem track, IList<LyricLine> lyrics, int activeIndex)
     {
         InitializeComponent();
+        L.Apply(this);
+        Loaded += (s, e) => L.Apply(this);
         // 去掉“暂无歌词”之类的占位行
         _lines = lyrics.Where(l => !string.IsNullOrWhiteSpace(l.Text) && l.EndTime < 9000).ToList();
 
@@ -72,7 +74,7 @@ public sealed partial class PosterDialog : ContentDialog
             .Select(it => LineList.Items.IndexOf(it)).OrderBy(i => i)
             .Select(i => _lines[i].Text);
         var text = string.Join("\n", picked);
-        PosterLyric.Text = text.Length > 0 ? text : "（请选择歌词）";
+        PosterLyric.Text = text.Length > 0 ? text : L.T("（请选择歌词）");
     }
 
     private async void Save_Click(ContentDialog sender, ContentDialogButtonClickEventArgs args)
@@ -100,11 +102,11 @@ public sealed partial class PosterDialog : ContentDialog
             await ms.ReadAsync(bytes.AsBuffer(), (uint)ms.Size, InputStreamOptions.None);
             await File.WriteAllBytesAsync(path, bytes);
 
-            StatusText.Text = "已保存：" + path;
+            StatusText.Text = L.T("已保存：") + path;
         }
         catch (Exception ex)
         {
-            StatusText.Text = "保存失败：" + ex.Message;
+            StatusText.Text = L.T("保存失败：") + ex.Message;
         }
         finally
         {

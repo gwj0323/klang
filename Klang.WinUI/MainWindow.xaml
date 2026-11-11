@@ -92,7 +92,7 @@
                                 <RadioMenuFlyoutItem x:Name="SubTransItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="trans" Text="翻译" />
                                 <RadioMenuFlyoutItem x:Name="SubRomaItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="roma" Text="罗马音" />
                                 <RadioMenuFlyoutItem x:Name="SubBothItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="both" Text="翻译 + 罗马音" />
-                                <RadioMenuFlyoutItem x:Name="SubOffItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="off" Text="关闭" />
+                                <RadioMenuFlyoutItem x:Name="SubOffItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="off" Text="关" />
                             </MenuFlyoutSubItem>
                             <ToggleMenuFlyoutItem
                                 x:Name="DesktopLyricItem"

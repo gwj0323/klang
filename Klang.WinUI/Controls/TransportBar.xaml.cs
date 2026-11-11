@@ -75,13 +75,13 @@ public sealed partial class TransportBar : UserControl
         {
             _isPlaying = value;
             PlayPauseIcon.Glyph = _isPlaying ? "\uE769" : "\uE768";
-            PlayPauseBtn.SetValue(ToolTipService.ToolTipProperty, _isPlaying ? "暂停 (Space)" : "播放 (Space)");
+            PlayPauseBtn.SetValue(ToolTipService.ToolTipProperty, _isPlaying ? L.T("暂停 (Space)") : L.T("播放 (Space)"));
         }
     }
 
     public void UpdateTrackState(string? title, string? artist, string? coverPath = null)
     {
-        StatusCaptionText.Text = string.IsNullOrWhiteSpace(title) ? "未加载曲目" : title;
+        StatusCaptionText.Text = string.IsNullOrWhiteSpace(title) ? L.T("未加载曲目") : title;
         LyricSnippetText.Text = string.IsNullOrWhiteSpace(artist) ? "Klang" : artist;
 
         if (!string.IsNullOrEmpty(coverPath) && File.Exists(coverPath))
@@ -112,7 +112,7 @@ public sealed partial class TransportBar : UserControl
 
     public void UpdateEqBadge(string presetName)
     {
-        EqBadgeText.Text = string.IsNullOrWhiteSpace(presetName) ? "音效" : presetName;
+        EqBadgeText.Text = string.IsNullOrWhiteSpace(presetName) ? L.T("音效") : presetName;
     }
 
     public void UpdateProgress(double currentSec, double totalSec)
@@ -153,8 +153,8 @@ public sealed partial class TransportBar : UserControl
     {
         bool roam = playMode == "roam";
         ShuffleIcon.Glyph = roam ? "" : "";   // 漫游用地球图标，其余用随机图标
-        string tip = roam ? "漫游：根据你的口味猜下一首（点击切换为顺序播放）"
-            : playMode == "random" ? "随机播放（点击切换为漫游）" : "随机播放 / 漫游";
+        string tip = roam ? L.T("漫游：根据你的口味猜下一首（点击切换为顺序播放）")
+            : playMode == "random" ? L.T("随机播放（点击切换为漫游）") : L.T("随机播放 / 漫游");
         ToolTipService.SetToolTip(ShuffleBtn, tip);
         AutomationProperties.SetName(ShuffleBtn, tip);
         SetShuffleState(playMode is "random" or "roam");
@@ -172,13 +172,13 @@ public sealed partial class TransportBar : UserControl
         if (mode == "loop_single")
         {
             RepeatIcon.Glyph = "\uE8ED";
-            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, "循环模式：单曲循环");
+            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, L.T("循环模式：单曲循环"));
             RepeatIcon.Foreground = ThemeService.AccentText(this);
         }
         else
         {
             RepeatIcon.Glyph = "\uE8EE";
-            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, "循环模式：列表循环");
+            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, L.T("循环模式：列表循环"));
             RepeatIcon.Foreground = ThemeService.Brush(this, "TextFillColorSecondaryBrush");
         }
     }

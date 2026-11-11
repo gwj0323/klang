@@ -37,6 +37,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        L.Attach((FrameworkElement)Content, this);   // 界面里写死的文字按当前语言翻译，并跟随语言切换
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -199,9 +200,9 @@ public sealed partial class MainWindow : Window
             BottomTransportBar.SetRepeatMode(_playMode);
             BottomTransportBar.UpdateLyricSnippet(_playMode switch
             {
-                "random" => "已开启随机播放",
-                "roam" => "已开启漫游：会根据你的听歌习惯猜下一首",
-                _ => "已开启列表循环"
+                "random" => L.T("已开启随机播放"),
+                "roam" => L.T("已开启漫游：会根据你的听歌习惯猜下一首"),
+                _ => L.T("已开启列表循环")
             });
             SavePlayMode();
         };
@@ -211,7 +212,7 @@ public sealed partial class MainWindow : Window
             _playMode = (_playMode == "loop_single") ? "loop_list" : "loop_single";
             BottomTransportBar.SetShuffleState(_playMode);
             BottomTransportBar.SetRepeatMode(_playMode);
-            BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? "已开启单曲循环" : "已开启列表循环");
+            BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? L.T("已开启单曲循环") : L.T("已开启列表循环"));
             SavePlayMode();
         };
 
@@ -229,12 +230,12 @@ public sealed partial class MainWindow : Window
             State.PlaybackRate = _playbackRate;
             StateService.Instance.RequestSave();
             BottomTransportBar.SetPlaybackRate(_playbackRate);
-            BottomTransportBar.UpdateLyricSnippet($"播放倍速：{_playbackRate:0.0#}x");
+            BottomTransportBar.UpdateLyricSnippet(L.F("播放倍速：{0:0.0#}x", _playbackRate));
         };
 
         AudioEngineService.Instance.SleepTimerElapsed += () =>
         {
-            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet("睡眠定时已到，已暂停播放"));
+            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("睡眠定时已到，已暂停播放")));
         };
 
         BottomTransportBar.FavoriteClicked += (s, e) =>
@@ -404,7 +405,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdateNarrowHeader(TrackItem? track)
     {
-        NarrowTitle.Text = track == null ? "暂无播放曲目" : (string.IsNullOrWhiteSpace(track.Title) ? "未命名曲目" : track.Title);
+        NarrowTitle.Text = track == null ? L.T("暂无播放曲目") : (string.IsNullOrWhiteSpace(track.Title) ? L.T("未命名曲目") : track.Title);
         NarrowArtist.Text = track == null ? "" : track.Artist;
         NarrowCover.Source = track?.CoverThumb;
     }
@@ -418,7 +419,7 @@ public sealed partial class MainWindow : Window
         // 文件已经丢了：不开始播放，提示一下（启动时恢复上次曲目只显示，不拦）
         if (autoPlay && track.IsMissing && !track.IsOnline)
         {
-            BottomTransportBar.UpdateLyricSnippet("文件丢失，无法播放：" + System.IO.Path.GetFileName(track.FilePath));
+            BottomTransportBar.UpdateLyricSnippet(L.T("文件丢失，无法播放：") + System.IO.Path.GetFileName(track.FilePath));
             return;
         }
         if (autoPlay)
@@ -542,7 +543,7 @@ public sealed partial class MainWindow : Window
 
         // 歌词与音源并行获取（淡出旧曲的同时就开始请求）
         var lyricTask = netease.GetLyricsAsync(track.NeteaseId, ct);
-        BottomTransportBar.UpdateLyricSnippet(autoPlay ? "正在获取云端音源…" : "云端曲目");
+        BottomTransportBar.UpdateLyricSnippet(autoPlay ? L.T("正在获取云端音源…") : L.T("云端曲目"));
 
         await AudioEngineService.Instance.FadeOutAndStopAsync();
         if (ct.IsCancellationRequested || seq != _playSeq) return;
@@ -555,8 +556,8 @@ public sealed partial class MainWindow : Window
             if (!ok)
             {
                 _onlineStatus = IsNeteaseLoggedIn()
-                    ? "无法获取音源（可能是会员专享或无版权）"
-                    : "无法获取音源（可能需要登录网易云账号）";
+                    ? L.T("无法获取音源（可能是会员专享或无版权）")
+                    : L.T("无法获取音源（可能需要登录网易云账号）");
                 BottomTransportBar.UpdateLyricSnippet(_onlineStatus);
             }
             else
@@ -580,7 +581,7 @@ public sealed partial class MainWindow : Window
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            if (_currentTrack == track) BottomTransportBar.UpdateLyricSnippet("云端播放失败：" + ex.Message);
+            if (_currentTrack == track) BottomTransportBar.UpdateLyricSnippet(L.T("云端播放失败：") + ex.Message);
         }
     }
 
@@ -633,7 +634,7 @@ public sealed partial class MainWindow : Window
                     {
                         _nextByRoam = true;
                         PlayTrack(pick.Value.Track);
-                        BottomTransportBar.UpdateLyricSnippet("漫游 · " + pick.Value.Reason);
+                        BottomTransportBar.UpdateLyricSnippet(L.T("漫游 · ") + pick.Value.Reason);
                         return;
                     }
                     nextIdx = (currentIdx + 1) % tracks.Count;
@@ -675,7 +676,7 @@ public sealed partial class MainWindow : Window
     {
         if (track.IsOnline)
         {
-            BottomTransportBar.UpdateLyricSnippet("云端曲目暂不支持“喜欢”");
+            BottomTransportBar.UpdateLyricSnippet(L.T("云端曲目暂不支持“喜欢”"));
             BottomTransportBar.SetFavorite(false);
             return;
         }
@@ -1016,7 +1017,7 @@ public sealed partial class MainWindow : Window
     #region 歌词副行 / 海报 / 沉浸模式
 
     private static readonly string[] SubModes = { "trans", "roma", "both", "off" };
-    private static readonly string[] SubModeLabels = { "翻译", "罗马音", "双行", "关闭" };
+    private static readonly string[] SubModeLabels = { "翻译", "罗马音", "双行", "关" };
 
     private void SubModeItem_Click(object sender, RoutedEventArgs e)
     {
@@ -1041,14 +1042,14 @@ public sealed partial class MainWindow : Window
         SubOffItem.IsChecked = mode == "off";
         StageLyricsControl.SubMode = mode;
         ImmersiveLayer.SubMode = mode;
-        if (announce) BottomTransportBar.UpdateLyricSnippet($"歌词副行：{SubModeLabels[i]}");
+        if (announce) BottomTransportBar.UpdateLyricSnippet(L.F("歌词副行：{0}", L.T(SubModeLabels[i])));
     }
 
     private async void PosterBtn_Click(object sender, RoutedEventArgs e)
     {
         if (_currentTrack == null)
         {
-            BottomTransportBar.UpdateLyricSnippet("先播放一首歌再生成海报");
+            BottomTransportBar.UpdateLyricSnippet(L.T("先播放一首歌再生成海报"));
             return;
         }
         var lyrics = StageLyricsControl.Lyrics;

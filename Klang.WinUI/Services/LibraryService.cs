@@ -512,7 +512,7 @@ public class LibraryService
     {
         if (!track.IsCueTrack && !track.IsOnline)
         {
-            if (track.IsMissing || !File.Exists(track.FilePath)) return "文件不存在，无法写入标签。";
+            if (track.IsMissing || !File.Exists(track.FilePath)) return L.T("文件不存在，无法写入标签。");
             try
             {
                 using var f = TagLib.File.Create(track.FilePath);
@@ -523,7 +523,7 @@ public class LibraryService
             }
             catch (Exception ex)
             {
-                return "写入标签失败：" + ex.Message + "\n（正在播放的文件可能被占用，先切到别的歌再试）";
+                return L.T("写入标签失败：") + ex.Message + L.T("\n（正在播放的文件可能被占用，先切到别的歌再试）");
             }
             track.FileMtimeTicks = SafeMtime(track.FilePath);
         }
@@ -541,9 +541,9 @@ public class LibraryService
     /// <summary>内置的智能歌单：不用建，也不能删。</summary>
     public static readonly IReadOnlyList<SmartPlaylistDef> BuiltInSmartPlaylists = new[]
     {
-        new SmartPlaylistDef { Name = "最近添加", AddedWithinDays = 30, SortBy = "added", Limit = 100 },
-        new SmartPlaylistDef { Name = "最近播放", MinPlayCount = 1, SortBy = "played", Limit = 100 },
-        new SmartPlaylistDef { Name = "常听", MinPlayCount = 2, SortBy = "plays", Limit = 50 },
+        new SmartPlaylistDef { Name = L.T("最近添加"), AddedWithinDays = 30, SortBy = "added", Limit = 100 },
+        new SmartPlaylistDef { Name = L.T("最近播放"), MinPlayCount = 1, SortBy = "played", Limit = 100 },
+        new SmartPlaylistDef { Name = L.T("常听"), MinPlayCount = 2, SortBy = "plays", Limit = 50 },
     };
 
     public IEnumerable<SmartPlaylistDef> AllSmartPlaylists => BuiltInSmartPlaylists.Concat(State.SmartPlaylists);
