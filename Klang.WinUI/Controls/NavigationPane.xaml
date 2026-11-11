@@ -18,14 +18,19 @@
                 Background="Transparent"
                 ColumnSpacing="12"
                 ContextRequested="TrackItem_ContextRequested"
-                ToolTipService.ToolTip="{x:Bind FormatBadge}">
+                Opacity="{x:Bind RowOpacity, Mode=OneWay}"
+                PointerEntered="TrackRow_PointerEntered"
+                PointerExited="TrackRow_PointerExited"
+                ToolTipService.ToolTip="{x:Bind RowToolTip, Mode=OneWay}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="40" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <!-- 封面缩略图（没有封面时显示音符占位） -->
+                <!-- 当前播放行的竖条由 ListViewItem 自带的选中指示条负责，这里不再重复画 -->
+
+                <!-- 封面缩略图（没有封面时显示音符占位）；鼠标悬停时盖一层播放图标 -->
                 <Border
                     Width="40"
                     Height="40"
@@ -38,6 +43,16 @@
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                             Glyph="&#xE8D6;" />
                         <Image Source="{x:Bind CoverThumb, Mode=OneWay}" Stretch="UniformToFill" />
+                        <Grid
+                            x:Name="HoverPlay"
+                            Background="#8C000000"
+                            IsHitTestVisible="False"
+                            Opacity="0">
+                            <FontIcon
+                                FontSize="16"
+                                Foreground="White"
+                                Glyph="&#xE768;" />
+                        </Grid>
                     </Grid>
                 </Border>
 
@@ -117,6 +132,7 @@
                 SelectionChanged="TabSelector_SelectionChanged">
                 <SelectorBarItem x:Name="TabAllItem" IsSelected="True" Tag="all" Text="全部" />
                 <SelectorBarItem Tag="fav" Text="喜欢" />
+                <SelectorBarItem Tag="albums" Text="专辑" />
                 <SelectorBarItem Tag="playlists" Text="歌单" />
                 <SelectorBarItem Tag="netease" Text="云端" />
             </SelectorBar>
@@ -191,12 +207,36 @@
                                 <RadioMenuFlyoutItem Click="SortItem_Click" GroupName="LibSort" Tag="artist" Text="歌手" />
                                 <RadioMenuFlyoutItem Click="SortItem_Click" GroupName="LibSort" Tag="album" Text="专辑" />
                                 <RadioMenuFlyoutItem Click="SortItem_Click" GroupName="LibSort" Tag="duration" Text="时长" />
+                                <RadioMenuFlyoutItem Click="SortItem_Click" GroupName="LibSort" Tag="added" Text="最近添加" />
+                                <RadioMenuFlyoutItem Click="SortItem_Click" GroupName="LibSort" Tag="played" Text="最近播放" />
+                                <RadioMenuFlyoutItem Click="SortItem_Click" GroupName="LibSort" Tag="plays" Text="播放最多" />
+                            </MenuFlyoutSubItem>
+                            <MenuFlyoutSubItem x:Name="FilterSubItem" Text="筛选">
+                                <RadioMenuFlyoutItem Click="QualityFilter_Click" GroupName="LibQuality" Tag="0" Text="全部音质" IsChecked="True" />
+                                <RadioMenuFlyoutItem Click="QualityFilter_Click" GroupName="LibQuality" Tag="1" Text="无损及以上" />
+                                <RadioMenuFlyoutItem Click="QualityFilter_Click" GroupName="LibQuality" Tag="2" Text="仅 Hi-Res" />
+                                <RadioMenuFlyoutItem Click="QualityFilter_Click" GroupName="LibQuality" Tag="-1" Text="仅有损" />
+                                <MenuFlyoutSeparator />
+                                <ToggleMenuFlyoutItem x:Name="FilterNoCover" Click="MissingFilter_Click" Text="缺封面" />
+                                <ToggleMenuFlyoutItem x:Name="FilterNoAlbum" Click="MissingFilter_Click" Text="缺专辑 / 歌手信息" />
+                                <ToggleMenuFlyoutItem x:Name="FilterNoLyrics" Click="MissingFilter_Click" Text="缺歌词（无同名 .lrc）" />
+                                <ToggleMenuFlyoutItem x:Name="FilterMissingFile" Click="MissingFilter_Click" Text="文件丢失" />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Click="ClearFilters_Click" Text="清除筛选" />
                             </MenuFlyoutSubItem>
                             <MenuFlyoutSubItem Text="分组">
                                 <RadioMenuFlyoutItem Click="GroupItem_Click" GroupName="LibGroup" Tag="none" Text="不分组" />
                                 <RadioMenuFlyoutItem Click="GroupItem_Click" GroupName="LibGroup" Tag="artist" Text="按歌手" />
                                 <RadioMenuFlyoutItem Click="GroupItem_Click" GroupName="LibGroup" Tag="album" Text="按专辑" />
                                 <RadioMenuFlyoutItem Click="GroupItem_Click" GroupName="LibGroup" Tag="folder" Text="按目录" />
+                            </MenuFlyoutSubItem>
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutSubItem Text="曲库工具">
+                                <MenuFlyoutItem Click="FindDuplicates_Click" Text="检查重复歌曲…" />
+                                <MenuFlyoutItem Click="FindMissing_Click" Text="检查丢失文件…" />
+                                <MenuFlyoutItem Click="RescanNow_Click" Text="立即重新扫描文件夹" />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Click="ResetRoam_Click" Text="重置漫游学习记录…" />
                             </MenuFlyoutSubItem>
                         </MenuFlyout>
                     </Button.Flyout>
@@ -242,6 +282,7 @@
                     <ListView
                         x:Name="TracksListView"
                         DoubleTapped="TracksListView_DoubleTapped"
+                        DragItemsCompleted="TracksListView_DragItemsCompleted"
                         IsItemClickEnabled="True"
                         ItemClick="TracksListView_ItemClick"
                         ItemTemplateSelector="{StaticResource TrackListSelector}"
@@ -256,16 +297,28 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <Button
-                            Height="32"
-                            HorizontalAlignment="Stretch"
-                            Click="NewPlaylistBtn_Click"
-                            CornerRadius="4">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon FontSize="12" Glyph="&#xE710;" />
-                                <TextBlock FontSize="12" Text="新建歌单" />
-                            </StackPanel>
-                        </Button>
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                Height="32"
+                                HorizontalAlignment="Stretch"
+                                CornerRadius="4">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon FontSize="12" Glyph="&#xE710;" />
+                                    <TextBlock FontSize="12" Text="新建" />
+                                </StackPanel>
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Click="NewPlaylistBtn_Click" Text="新建歌单…" />
+                                        <MenuFlyoutItem Click="NewSmartPlaylistBtn_Click" Text="新建智能歌单…" />
+                                        <MenuFlyoutItem Click="ImportM3uBtn_Click" Text="导入 M3U 歌单…" />
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
+                        </Grid>
                         <ListView
                             x:Name="PlaylistsListView"
                             Grid.Row="1"
@@ -288,7 +341,7 @@
                                         <FontIcon
                                             FontSize="16"
                                             Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                            Glyph="&#xE8FD;" />
+                                            Glyph="{x:Bind Glyph}" />
                                         <TextBlock
                                             Grid.Column="1"
                                             VerticalAlignment="Center"
@@ -307,6 +360,50 @@
                             </ListView.ItemTemplate>
                         </ListView>
                     </Grid>
+
+                    <!-- 专辑墙 -->
+                    <GridView
+                        x:Name="AlbumsGridView"
+                        IsItemClickEnabled="True"
+                        ItemClick="AlbumsGridView_ItemClick"
+                        SelectionMode="None"
+                        Visibility="Collapsed">
+                        <GridView.ItemTemplate>
+                            <DataTemplate x:DataType="local:AlbumEntry">
+                                <StackPanel
+                                    Width="116"
+                                    Margin="2,2,2,10"
+                                    Background="Transparent"
+                                    ContextRequested="AlbumItem_ContextRequested"
+                                    Spacing="4"
+                                    ToolTipService.ToolTip="{x:Bind Name}">
+                                    <Border
+                                        Width="116"
+                                        Height="116"
+                                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                        CornerRadius="8">
+                                        <Grid>
+                                            <FontIcon
+                                                FontSize="32"
+                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                Glyph="&#xE93C;" />
+                                            <Image Source="{x:Bind Cover}" Stretch="UniformToFill" />
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock
+                                        FontSize="13"
+                                        FontWeight="SemiBold"
+                                        Text="{x:Bind Name}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{x:Bind Subtitle}"
+                                        TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridView.ItemTemplate>
+                    </GridView>
 
                     <!-- 云端（网易云） -->
                     <local:CloudPanel x:Name="CloudView" Visibility="Collapsed" />

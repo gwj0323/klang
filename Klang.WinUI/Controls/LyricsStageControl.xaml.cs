@@ -1,34 +1,39 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using Microsoft.UI;
+using System.Numerics;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
-using Windows.UI;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
 
 namespace Klang_WinUI.Controls;
 
+/// <summary>
+/// 歌词舞台。滚动与每行的缩放 / 透明度都用合成器动画实现（跑在合成线程，按显示器刷新率输出），
+/// 界面线程只在“换句”“换歌”“用户滚轮”时做一次布局与目标计算，所以界面线程再忙也不会让滚动掉帧。
+/// </summary>
 public sealed partial class LyricsStageControl : UserControl
 {
     public ObservableCollection<LyricLine> Lyrics { get; } = new();
 
-    private int _lastActiveIndex = -2;
-    private double _currentScrollY = 0;
-    private double _targetScrollY = 0;
-    private double _scrollVel = 0;
-
-    private bool _isPhysicsActive = false;
-    private bool _isUserScrolling = false;
-    private bool _isInternalScrollUpdate = false;
-
-    private readonly DispatcherTimer _physicsTimer = new();
-    private readonly DispatcherTimer _resumeAutoCenterTimer = new();
-    private DateTime _lastTickTime = DateTime.UtcNow;
-
     public event EventHandler<double>? SeekRequested;
+
+    private readonly Visual _contentVisual;
+    private readonly Compositor _compositor;
+    private readonly Dictionary<FrameworkElement, LineState> _lineVisuals = new();
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _settleTimer;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _resumeTimer;
+
+    private int _lastActiveIndex = -2;
+    private double _targetT;          // 内容当前的平移目标（Y）
+    private bool _isUserScrolling;
+    private bool _needsInit;          // 载入新歌词后，等布局完成再初始化各行状态并居中
 
     private double _lyricFontSize = 22;
     public const int MinLyricFontSize = 14;
@@ -42,20 +47,11 @@ public sealed partial class LyricsStageControl : UserControl
         {
             _lyricFontSize = Math.Clamp(value, MinLyricFontSize, MaxLyricFontSize);
             foreach (var l in Lyrics) l.MainFontSize = _lyricFontSize;
-            if (_lastActiveIndex >= 0) CalculateTargetScroll(_lastActiveIndex);
+            RequestReinit();
         }
     }
 
     private string _subMode = "trans";
-
-    /// <summary>是否显示上下羽化遮罩（沉浸模式的彩色背景上要关掉）。</summary>
-    public bool ShowFades
-    {
-        set
-        {
-            // 固定颜色的遮罩与半透明材质背景不协调，已弃用；歌词行本身按距离渐隐
-        }
-    }
 
     /// <summary>副行显示：trans 翻译 | roma 罗马音 | both 两者 | off 关闭。</summary>
     public string SubMode
@@ -65,132 +61,78 @@ public sealed partial class LyricsStageControl : UserControl
         {
             _subMode = value;
             foreach (var l in Lyrics) l.SubMode = value;
-            if (_lastActiveIndex >= 0) CalculateTargetScroll(_lastActiveIndex);
+            RequestReinit();
         }
+    }
+
+    /// <summary>保留的兼容属性：固定颜色的上下遮罩已弃用，歌词行本身按距离渐隐。</summary>
+    public bool ShowFades
+    {
+        set { }
     }
 
     public LyricsStageControl()
     {
         InitializeComponent();
         LyricsItemsControl.ItemsSource = Lyrics;
+
+        _contentVisual = ElementCompositionPreview.GetElementVisual(ContentPanel);
+        _compositor = _contentVisual.Compositor;
+        ElementCompositionPreview.SetIsTranslationEnabled(ContentPanel, true);
+
         UpdateEmptyState();
-        UpdateFadeBrushes();
         UiAnimations.AttachFade(ResumeCenterBtn, 6f);
         UiAnimations.AttachFade(EmptyLyricsPanel, 6f);
 
-        this.ActualThemeChanged += (s, e) => UpdateFadeBrushes();
-        this.SizeChanged += (s, e) =>
-        {
-            UpdateFadeBrushes();
-            if (_lastActiveIndex >= 0)
-            {
-                CalculateTargetScroll(_lastActiveIndex);
-            }
-        };
+        // 用户滚动后 2.8 秒自动回到当前句
+        _resumeTimer = DispatcherQueue.CreateTimer();
+        _resumeTimer.Interval = TimeSpan.FromMilliseconds(2800);
+        _resumeTimer.IsRepeating = false;
+        _resumeTimer.Tick += (s, e) => ResumeAutoCenter();
 
-        // 60fps 弹簧阻尼谐振与逐行视觉连续插值核心
-        _physicsTimer.Interval = TimeSpan.FromMilliseconds(16);
-        _physicsTimer.Tick += PhysicsTimer_Tick;
-
-        // 用户滚动后 2.8 秒自动恢复居中吸附
-        _resumeAutoCenterTimer.Interval = TimeSpan.FromMilliseconds(2800);
-        _resumeAutoCenterTimer.Tick += (s, e) =>
-        {
-            _resumeAutoCenterTimer.Stop();
-            _isUserScrolling = false;
-            ResumeCenterBtn.Visibility = Visibility.Collapsed;
-
-            if (_lastActiveIndex >= 0)
-            {
-                CalculateTargetScroll(_lastActiveIndex);
-            }
-        };
-
-        LyricsScrollViewer.ViewChanged += LyricsScrollViewer_ViewChanged;
+        _settleTimer = DispatcherQueue.CreateTimer();
+        _settleTimer.Interval = TimeSpan.FromMilliseconds(820);
+        _settleTimer.IsRepeating = false;
+        _settleTimer.Tick += (s, e) => SettleRaster();
     }
 
-    private void UpdateFadeBrushes()
-    {
-        bool isDark = (this.ActualTheme == ElementTheme.Dark);
-        Color baseCol = isDark ? Color.FromArgb(255, 28, 31, 35) : Color.FromArgb(255, 246, 245, 241);
-
-        var topGrad = new LinearGradientBrush
-        {
-            StartPoint = new Point(0, 0),
-            EndPoint = new Point(0, 1)
-        };
-        topGrad.GradientStops.Add(new GradientStop { Color = baseCol, Offset = 0.0 });
-        topGrad.GradientStops.Add(new GradientStop { Color = Color.FromArgb(180, baseCol.R, baseCol.G, baseCol.B), Offset = 0.5 });
-        topGrad.GradientStops.Add(new GradientStop { Color = Color.FromArgb(0, baseCol.R, baseCol.G, baseCol.B), Offset = 1.0 });
-        TopFadeBorder.Background = topGrad;
-
-        var bottomGrad = new LinearGradientBrush
-        {
-            StartPoint = new Point(0, 1),
-            EndPoint = new Point(0, 0)
-        };
-        bottomGrad.GradientStops.Add(new GradientStop { Color = baseCol, Offset = 0.0 });
-        bottomGrad.GradientStops.Add(new GradientStop { Color = Color.FromArgb(180, baseCol.R, baseCol.G, baseCol.B), Offset = 0.5 });
-        bottomGrad.GradientStops.Add(new GradientStop { Color = Color.FromArgb(0, baseCol.R, baseCol.G, baseCol.B), Offset = 1.0 });
-        BottomFadeBorder.Background = bottomGrad;
-    }
-
-    private void LyricsScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
-    {
-        if (_isInternalScrollUpdate) return;
-
-        // 用户正在手动使用滚轮或触控板滚动
-        if (e.IsIntermediate || Math.Abs(LyricsScrollViewer.VerticalOffset - _currentScrollY) > 2.0)
-        {
-            _isUserScrolling = true;
-            _currentScrollY = LyricsScrollViewer.VerticalOffset;
-            _scrollVel = 0;
-
-            ResumeCenterBtn.Visibility = Visibility.Visible;
-            ResumeCenterBtn.Opacity = 1.0;
-
-            _resumeAutoCenterTimer.Stop();
-            _resumeAutoCenterTimer.Start();
-        }
-    }
+    #region 载入歌词
 
     private void UpdateEmptyState()
     {
-        bool hasLyrics = Lyrics.Count > 0;
-        EmptyLyricsPanel.Visibility = hasLyrics ? Visibility.Collapsed : Visibility.Visible;
-        LyricsScrollViewer.Visibility = hasLyrics ? Visibility.Visible : Visibility.Collapsed;
+        // 歌词服务在没有歌词时会给一行“暂无歌词”的占位（结束时间 9999）：不当歌词渲染，改显示小号的空状态
+        bool empty = Lyrics.Count == 0 || (Lyrics.Count == 1 && Lyrics[0].EndTime >= 9999.0);
+        EmptyLyricsPanel.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        ContentPanel.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void ResetState()
+    {
+        _lastActiveIndex = -2;
+        _isUserScrolling = false;
+        _resumeTimer.Stop();
+        ResumeCenterBtn.Visibility = Visibility.Collapsed;
+        _lineVisuals.Clear();
     }
 
     public void LoadLyrics(string? audioFilePath)
     {
-        _lastActiveIndex = -2;
-        _scrollVel = 0;
-        _isUserScrolling = false;
-        ResumeCenterBtn.Visibility = Visibility.Collapsed;
-
+        ResetState();
         Lyrics.Clear();
-        var loaded = LyricsService.Instance.LoadLyrics(audioFilePath);
-        foreach (var l in loaded)
+        foreach (var l in LyricsService.Instance.LoadLyrics(audioFilePath))
         {
             l.MainFontSize = _lyricFontSize;
             l.SubMode = _subMode;
             Lyrics.Add(l);
         }
-
         UpdateEmptyState();
-        _currentScrollY = 0;
-        _targetScrollY = 0;
-        LyricsScrollViewer.ChangeView(null, 0, null, true);
+        RequestReinit();
     }
 
     /// <summary>直接载入已解析好的歌词（云端歌词）。</summary>
     public void LoadLyricLines(IList<LyricLine> lines)
     {
-        _lastActiveIndex = -2;
-        _scrollVel = 0;
-        _isUserScrolling = false;
-        ResumeCenterBtn.Visibility = Visibility.Collapsed;
-
+        ResetState();
         Lyrics.Clear();
         foreach (var l in lines)
         {
@@ -199,10 +141,31 @@ public sealed partial class LyricsStageControl : UserControl
             Lyrics.Add(l);
         }
         UpdateEmptyState();
-        _currentScrollY = 0;
-        _targetScrollY = 0;
-        LyricsScrollViewer.ChangeView(null, 0, null, true);
+        RequestReinit();
     }
+
+    /// <summary>布局完成后：给每行建合成层、按当前句设置缩放 / 透明度（不做动画），并立即居中。</summary>
+    private void RequestReinit()
+    {
+        if (_needsInit) return;
+        _needsInit = true;
+
+        void Handler(object? s, object e)
+        {
+            if (Lyrics.Count > 0 && LyricsItemsControl.ContainerFromIndex(Lyrics.Count - 1) is not FrameworkElement) return;
+            LyricsItemsControl.LayoutUpdated -= Handler;
+            _needsInit = false;
+            if (Lyrics.Count == 0) return;
+            ApplyLineStates(_lastActiveIndex, animate: false);
+            CenterOnActive(animate: false);
+        }
+        LyricsItemsControl.LayoutUpdated += Handler;
+        LyricsItemsControl.InvalidateMeasure();
+    }
+
+    #endregion
+
+    #region 播放进度驱动
 
     public void UpdatePlaybackTime(double currentTimeSeconds)
     {
@@ -210,7 +173,7 @@ public sealed partial class LyricsStageControl : UserControl
 
         int activeIndex = LyricsService.Instance.FindActiveIndex(Lyrics, currentTimeSeconds);
 
-        // 逐字高亮：当前行随时间推进（每次 tick 更新）
+        // 逐字高亮：当前行随时间推进
         if (activeIndex >= 0 && Lyrics[activeIndex].Words is { } words)
         {
             int played = 0;
@@ -219,189 +182,313 @@ public sealed partial class LyricsStageControl : UserControl
         }
 
         if (activeIndex == _lastActiveIndex) return;
-
         _lastActiveIndex = activeIndex;
 
-        // 换行时：已过的行全部点亮，未到的行清零
+        // 换句：其它行的逐字进度清零
         for (int i = 0; i < Lyrics.Count; i++)
         {
-            if (i == activeIndex || Lyrics[i].Words is not { } w) continue;
-            Lyrics[i].PlayedWords = 0;
+            if (i != activeIndex && Lyrics[i].Words != null) Lyrics[i].PlayedWords = 0;
+            Lyrics[i].IsActive = i == activeIndex;
         }
 
-        // 重新分配各行目标状态（距离当前行的指数衰减权重）
+        if (_needsInit) return; // 布局还没好，初始化时会按最新的 _lastActiveIndex 处理
+        ApplyLineStates(activeIndex, animate: true);
+        if (!_isUserScrolling) CenterOnActive(animate: true);
+    }
+
+    #endregion
+
+    #region 每行的缩放 / 透明度（合成层隐式动画 + 栅格化倍数）
+
+    private static (float Scale, float Opacity) StateFor(int dist) => dist switch
+    {
+        0 => (1.14f, 1.00f),
+        1 => (1.00f, 0.50f),
+        2 => (0.96f, 0.28f),
+        3 => (0.93f, 0.15f),
+        _ => (0.90f, 0.08f)
+    };
+
+    private const float MaxScale = 1.14f;
+
+    /// <summary>
+    /// 一行的合成层状态。
+    /// 合成层的 Scale 缩放的是已渲染好的文字纹理，所以要让纹理分辨率跟上：
+    /// - 动画期间，纹理按“最大放大倍数”栅格化（UIElement.RasterizationScale），缩放始终是从大图往小缩，不会糊；
+    /// - 动画结束后，把栅格化倍数设成这一行自己的目标缩放，纹理和屏幕像素 1:1，静止时边缘最干净，没有非整数倍缩小带来的锯齿。
+    /// </summary>
+    private sealed class LineState
+    {
+        public required Visual Visual;
+        public required FrameworkElement Container;
+        public UIElement? Button;
+        public float Target = 1f;
+        public bool Settled = true;
+    }
+
+    private static void SetRaster(LineState st, double s)
+    {
+        st.Container.RasterizationScale = s;
+        if (st.Button != null) st.Button.RasterizationScale = s;
+    }
+
+    /// <summary>取（或创建）一行容器的状态，并挂上“改属性就自动补间”的隐式动画。</summary>
+    private LineState LineStateOf(FrameworkElement container)
+    {
+        if (_lineVisuals.TryGetValue(container, out var st)) return st;
+
+        var v = ElementCompositionPreview.GetElementVisual(container);
+        v.CenterPoint = new Vector3((float)(container.ActualWidth / 2), (float)(container.ActualHeight / 2), 0);
+        container.SizeChanged += (s, e) =>
+            v.CenterPoint = new Vector3((float)(e.NewSize.Width / 2), (float)(e.NewSize.Height / 2), 0);
+
+        // 每行自己的位移（错峰跟随用）；缩放 / 透明度在换句时显式带延迟地启动动画
+        ElementCompositionPreview.SetIsTranslationEnabled(container, true);
+        v.Properties.InsertVector3("Translation", Vector3.Zero);
+
+        st = new LineState
+        {
+            Visual = v,
+            Container = container,
+            Button = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(container, 0) as UIElement
+        };
+        _lineVisuals[container] = st;
+        return st;
+    }
+
+    private void ApplyLineStates(int activeIndex, bool animate)
+    {
+        int center = activeIndex >= 0 ? activeIndex : 0;
+        bool anyMoving = false;
         for (int i = 0; i < Lyrics.Count; i++)
         {
-            var line = Lyrics[i];
-            int dist = Math.Abs(i - activeIndex);
-            line.IsActive = (i == activeIndex);
+            if (LyricsItemsControl.ContainerFromIndex(i) is not FrameworkElement c) continue;
+            var st = LineStateOf(c);
+            var v = st.Visual;
+            var (scale, opacity) = StateFor(Math.Abs(i - center));
 
-            if (dist == 0)
+            if (!animate)
             {
-                line.TargetScale = 1.14;
-                line.TargetOpacity = 1.0;
+                // 初始化：直接到位，纹理按自己的缩放 1:1 栅格化
+                v.StopAnimation("Scale");
+                v.StopAnimation("Opacity");
+                SetRaster(st, scale);
+                v.Scale = new Vector3(scale, scale, 1f);
+                v.Opacity = opacity;
+                st.Target = scale;
+                st.Settled = true;
+                continue;
             }
-            else if (dist == 1)
+
+            if (Math.Abs(scale - st.Target) > 0.001f || !st.Settled)
             {
-                line.TargetScale = 1.0;
-                line.TargetOpacity = 0.50;
+                SetRaster(st, MaxScale);          // 动画期间只往小缩，不放大
+                st.Settled = false;
+                anyMoving = true;
             }
-            else if (dist == 2)
-            {
-                line.TargetScale = 0.96;
-                line.TargetOpacity = 0.28;
-            }
-            else if (dist == 3)
-            {
-                line.TargetScale = 0.93;
-                line.TargetOpacity = 0.15;
-            }
-            else
-            {
-                line.TargetScale = 0.90;
-                line.TargetOpacity = 0.08;
-            }
+            st.Target = scale;
+            StartLineAnimation(v, scale, opacity, Math.Abs(i - center));
         }
 
-        StartPhysics();
-
-        if (activeIndex >= 0 && !_isUserScrolling)
+        if (anyMoving)
         {
-            CalculateTargetScroll(activeIndex);
+            _settleTimer.Stop();
+            _settleTimer.Start();
         }
     }
 
-    private void CalculateTargetScroll(int index)
+    // ---- 换句动画：错峰 + 非线性 ----
+    private const double StaggerMs = 34;     // 每远一行，晚开始 34 毫秒
+    private const int MaxStaggerRows = 6;    // 最多错开 6 行
+
+    private CubicBezierEasingFunction MoveEase() =>
+        _compositor.CreateCubicBezierEasingFunction(new Vector2(0.20f, 0.90f), new Vector2(0.20f, 1.00f));
+
+    private TimeSpan StaggerFor(int dist) => TimeSpan.FromMilliseconds(StaggerMs * Math.Min(dist, MaxStaggerRows));
+
+    /// <summary>缩放和透明度：从当前值缓出到目标，离当前句越远的行越晚开始。</summary>
+    private void StartLineAnimation(Visual v, float scale, float opacity, int dist)
     {
-        if (index < 0 || index >= Lyrics.Count) return;
+        var ease = MoveEase();
+        var delay = StaggerFor(dist);
 
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (LyricsItemsControl.ContainerFromIndex(index) is FrameworkElement container)
-            {
-                try
-                {
-                    var transform = container.TransformToVisual(LyricsScrollViewer);
-                    var point = transform.TransformPoint(new Point(0, 0));
-                    double viewportH = LyricsScrollViewer.ActualHeight;
+        var sc = _compositor.CreateVector3KeyFrameAnimation();
+        sc.InsertExpressionKeyFrame(0f, "this.StartingValue");
+        sc.InsertKeyFrame(1f, new Vector3(scale, scale, 1f), ease);
+        sc.Duration = TimeSpan.FromMilliseconds(560);
+        sc.DelayTime = delay;
+        sc.DelayBehavior = AnimationDelayBehavior.SetInitialValueBeforeDelay;
+        v.StartAnimation("Scale", sc);
 
-                    if (viewportH > 0)
-                    {
-                        double lineCenterInContent = LyricsScrollViewer.VerticalOffset + point.Y + (container.ActualHeight / 2.0);
-                        _targetScrollY = Math.Max(0, lineCenterInContent - (viewportH / 2.0));
-                        StartPhysics();
-                    }
-                }
-                catch
-                {
-                    // 布局未完成安全保护
-                }
-            }
-        });
+        var op = _compositor.CreateScalarKeyFrameAnimation();
+        op.InsertExpressionKeyFrame(0f, "this.StartingValue");
+        op.InsertKeyFrame(1f, opacity, ease);
+        op.Duration = TimeSpan.FromMilliseconds(560);
+        op.DelayTime = delay;
+        op.DelayBehavior = AnimationDelayBehavior.SetInitialValueBeforeDelay;
+        v.StartAnimation("Opacity", op);
     }
 
-    private void StartPhysics()
+    /// <summary>每行位移清零（不带动画的定位 / 手动滚动时用）。</summary>
+    private void ResetLineOffsets()
     {
-        _lastTickTime = DateTime.UtcNow;
-        if (!_isPhysicsActive)
+        foreach (var st in _lineVisuals.Values)
         {
-            _isPhysicsActive = true;
-            _physicsTimer.Start();
+            st.Visual.StopAnimation("Translation.Y");
+            st.Visual.Properties.InsertVector3("Translation", Vector3.Zero);
         }
     }
 
-    private void PhysicsTimer_Tick(object? sender, object e)
+    /// <summary>
+    /// 自动居中的“错峰滑行”：内容整体先瞬间移到新位置，再让每一行从原来的视觉位置缓出滑向新位置，
+    /// 当前句最先动，离它越远越晚动，形成顺着阅读方向传过去的一道波。
+    /// </summary>
+    private void GlideTo(double newT, int activeIndex)
     {
-        var now = DateTime.UtcNow;
-        double dt = Math.Clamp((now - _lastTickTime).TotalSeconds, 0.002, 0.04);
-        _lastTickTime = now;
+        double scale = XamlRoot?.RasterizationScale ?? 1.0;
+        newT = Math.Round(newT * scale) / scale;
+        double delta = newT - _targetT;
+        _targetT = newT;
 
-        bool needsContinue = false;
+        _contentVisual.StopAnimation("Translation.Y");
+        _contentVisual.Properties.InsertVector3("Translation", new Vector3(0f, (float)newT, 0f));
+        if (Math.Abs(delta) < 0.5) return;
 
-        // 1. 视口阻尼谐振弹簧居中方程 (Apple Music / Qt6 级联弹簧阻尼)
-        if (!_isUserScrolling)
+        int center = activeIndex >= 0 ? activeIndex : 0;
+        var ease = MoveEase();
+        foreach (var kv in _lineVisuals)
         {
-            double disp = _currentScrollY - _targetScrollY;
-            if (Math.Abs(disp) > 0.35 || Math.Abs(_scrollVel) > 0.8)
-            {
-                const double omega = 9.8; // 弹簧自然频率 (~450ms 丝滑吸附)
-                double accel = -(omega * omega) * disp - 2.0 * omega * _scrollVel;
-                _scrollVel += accel * dt;
-                _currentScrollY += _scrollVel * dt;
+            int idx = LyricsItemsControl.IndexFromContainer(kv.Key);
+            if (idx < 0) continue;
 
-                _isInternalScrollUpdate = true;
-                LyricsScrollViewer.ChangeView(null, _currentScrollY, null, true);
-                _isInternalScrollUpdate = false;
-                needsContinue = true;
-            }
-            else
-            {
-                _currentScrollY = _targetScrollY;
-                _scrollVel = 0;
-                _isInternalScrollUpdate = true;
-                LyricsScrollViewer.ChangeView(null, _currentScrollY, null, true);
-                _isInternalScrollUpdate = false;
-            }
-        }
-
-        // 2. 逐行视觉平滑插值 (Scale 与 Opacity 自然平滑呼吸，杜绝突变跳帧)
-        double alpha = 1.0 - Math.Exp(-12.5 * dt);
-        int start = Math.Max(0, _lastActiveIndex - 6);
-        int end = Math.Min(Lyrics.Count - 1, _lastActiveIndex + 6);
-
-        for (int i = start; i <= end; i++)
-        {
-            var line = Lyrics[i];
-            double ds = line.TargetScale - line.ScaleX;
-            double @do = line.TargetOpacity - line.LineOpacity;
-
-            if (Math.Abs(ds) > 0.002)
-            {
-                line.ScaleX += ds * alpha;
-                line.ScaleY = line.ScaleX;
-                needsContinue = true;
-            }
-            else
-            {
-                line.ScaleX = line.TargetScale;
-                line.ScaleY = line.TargetScale;
-            }
-
-            if (Math.Abs(@do) > 0.005)
-            {
-                line.LineOpacity += @do * alpha;
-                needsContinue = true;
-            }
-            else
-            {
-                line.LineOpacity = line.TargetOpacity;
-            }
-        }
-
-        if (!needsContinue && (Math.Abs(_currentScrollY - _targetScrollY) <= 0.35))
-        {
-            _isPhysicsActive = false;
-            _physicsTimer.Stop();
+            var a = _compositor.CreateScalarKeyFrameAnimation();
+            a.SetScalarParameter("d", (float)-delta);
+            a.InsertExpressionKeyFrame(0f, "this.StartingValue + d");   // 内容跳了 delta，这行先抵消，视觉上没动
+            a.InsertKeyFrame(1f, 0f, ease);
+            a.Duration = TimeSpan.FromMilliseconds(680);
+            a.DelayTime = StaggerFor(Math.Abs(idx - center));
+            a.DelayBehavior = AnimationDelayBehavior.SetInitialValueBeforeDelay;
+            kv.Value.Visual.StartAnimation("Translation.Y", a);
         }
     }
+
+    /// <summary>动画都结束了：每行的栅格化倍数改成自己的目标缩放，静止时 1:1。</summary>
+    private void SettleRaster()
+    {
+        foreach (var st in _lineVisuals.Values)
+        {
+            if (st.Settled) continue;
+            SetRaster(st, st.Target);
+            st.Settled = true;
+        }
+    }
+
+    #endregion
+    #region 弹簧居中与用户滚动
+
+    private bool TryGetLineCenter(int index, out double center)
+    {
+        center = 0;
+        if (index < 0 || index >= Lyrics.Count) return false;
+        if (LyricsItemsControl.ContainerFromIndex(index) is not FrameworkElement c || c.ActualHeight <= 0) return false;
+        try
+        {
+            var p = c.TransformToVisual(ContentPanel).TransformPoint(new Point(0, 0));
+            center = p.Y + c.ActualHeight / 2.0;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>把当前句滚到视口正中。animate=true 用合成器弹簧（跟随刷新率），false 直接定位。</summary>
+    private void CenterOnActive(bool animate)
+    {
+        if (Lyrics.Count == 0 || Viewport.ActualHeight <= 0) return;
+        int idx = _lastActiveIndex >= 0 ? _lastActiveIndex : 0;
+        if (!TryGetLineCenter(idx, out double c)) return;
+        double target = Viewport.ActualHeight / 2.0 - c;
+        if (animate) GlideTo(target, idx);
+        else
+        {
+            ResetLineOffsets();
+            MoveTo(target, false, period: 0f, damping: 1f);
+        }
+    }
+
+    private void MoveTo(double t, bool animate, float period, float damping)
+    {
+        // 停下来的位置对齐到整数物理像素，否则文字落在半个像素上会发糊
+        double scale = XamlRoot?.RasterizationScale ?? 1.0;
+        t = Math.Round(t * scale) / scale;
+        _targetT = t;
+        if (!animate)
+        {
+            _contentVisual.StopAnimation("Translation.Y");
+            _contentVisual.Properties.InsertVector3("Translation", new Vector3(0f, (float)t, 0f));
+            return;
+        }
+
+        // 用“先快后慢”的缓出曲线，而不是弹簧：弹簧起步速度为零，前一百多毫秒几乎不动，会有迟滞感；
+        // 缓出曲线一开始就以最大速度走，换句的瞬间就能看到动，再柔和地停下。
+        // 从当前位置出发（StartingValue），中途被打断也不会跳。
+        var ease = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.22f, 1f), new Vector2(0.36f, 1f));
+        var slide = _compositor.CreateScalarKeyFrameAnimation();
+        slide.InsertExpressionKeyFrame(0f, "this.StartingValue");
+        slide.InsertKeyFrame(1f, (float)t, ease);
+        slide.Duration = TimeSpan.FromSeconds(period);
+        _contentVisual.StartAnimation("Translation.Y", slide);
+    }
+
+    private void Viewport_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        Viewport.Clip = new RectangleGeometry { Rect = new Rect(0, 0, e.NewSize.Width, e.NewSize.Height) };
+        if (!_needsInit) CenterOnActive(animate: false);
+    }
+
+    private void Viewport_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        if (Lyrics.Count == 0) return;
+        double delta = e.GetCurrentPoint(Viewport).Properties.MouseWheelDelta;
+
+        // 允许滚动的范围：第一句居中 ~ 最后一句居中
+        if (!TryGetLineCenter(0, out double first) || !TryGetLineCenter(Lyrics.Count - 1, out double last)) return;
+        double half = Viewport.ActualHeight / 2.0;
+        double tMax = half - first, tMin = half - last;
+
+        _isUserScrolling = true;
+        ResumeCenterBtn.Visibility = Visibility.Visible;
+        ResumeCenterBtn.Opacity = 1.0;
+        _resumeTimer.Stop();
+        _resumeTimer.Start();
+
+        ResetLineOffsets();
+        MoveTo(Math.Clamp(_targetT + delta * 0.9, tMin, tMax), animate: true, period: 0.22f, damping: 1.0f);
+        e.Handled = true;
+    }
+
+    private void ResumeAutoCenter()
+    {
+        _resumeTimer.Stop();
+        _isUserScrolling = false;
+        ResumeCenterBtn.Visibility = Visibility.Collapsed;
+        CenterOnActive(animate: true);
+    }
+
+    private void ResumeCenterBtn_Click(object sender, RoutedEventArgs e) => ResumeAutoCenter();
 
     private void LyricLine_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement elem && elem.DataContext is LyricLine line)
         {
             _isUserScrolling = false;
+            _resumeTimer.Stop();
             ResumeCenterBtn.Visibility = Visibility.Collapsed;
             SeekRequested?.Invoke(this, line.Time);
         }
     }
 
-    private void ResumeCenterBtn_Click(object sender, RoutedEventArgs e)
-    {
-        _isUserScrolling = false;
-        ResumeCenterBtn.Visibility = Visibility.Collapsed;
-        if (_lastActiveIndex >= 0)
-        {
-            CalculateTargetScroll(_lastActiveIndex);
-        }
-    }
+    #endregion
 }

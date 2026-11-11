@@ -83,7 +83,7 @@
                     ToolTipService.ToolTip="歌词相关功能">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE8F1;" />
-                        <TextBlock FontSize="12" Text="歌词" />
+                        <TextBlock FontSize="12" Text="歌词设置" />
                         <FontIcon FontSize="12" Glyph="&#xE70D;" />
                     </StackPanel>
                     <Button.Flyout>
@@ -181,6 +181,9 @@
                     <Button x:Name="RailFav" Width="40" Height="40" Padding="0" AutomationProperties.Name="喜欢" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="fav" ToolTipService.ToolTip="喜欢">
                         <FontIcon FontSize="16" Glyph="&#xEB51;" />
                     </Button>
+                    <Button x:Name="RailAlbums" Width="40" Height="40" Padding="0" AutomationProperties.Name="专辑" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="albums" ToolTipService.ToolTip="专辑">
+                        <FontIcon FontSize="16" Glyph="&#xE93C;" />
+                    </Button>
                     <Button x:Name="RailPlaylists" Width="40" Height="40" Padding="0" AutomationProperties.Name="歌单" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="playlists" ToolTipService.ToolTip="歌单">
                         <FontIcon FontSize="16" Glyph="&#xE8FD;" />
                     </Button>
@@ -196,11 +199,13 @@
 
             <!-- 右侧舞台：stage_container (VinylCoverCard + LyricsStageControl) -->
             <Grid
+                x:Name="StageGrid"
                 Grid.Column="1"
                 Padding="46,24,42,24"
-                ColumnSpacing="48">
+                ColumnSpacing="48"
+                SizeChanged="StageGrid_SizeChanged">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition x:Name="StageCoverColumn" Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
@@ -210,10 +215,55 @@
                     Grid.Column="0"
                     VerticalAlignment="Center" />
 
-                <!-- 实时丝滑居中歌词舞台 -->
-                <controls:LyricsStageControl
-                    x:Name="StageLyricsControl"
-                    Grid.Column="1" />
+                <Grid Grid.Column="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 窄窗口时：封面收成歌词上方的小头图（宽窗口下隐藏） -->
+                    <Grid
+                        x:Name="NarrowHeader"
+                        Margin="0,0,0,8"
+                        ColumnSpacing="12"
+                        Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border
+                            Width="56"
+                            Height="56"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                            CornerRadius="8">
+                            <Grid>
+                                <FontIcon
+                                    FontSize="22"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Glyph="&#xE8D6;" />
+                                <Image x:Name="NarrowCover" Stretch="UniformToFill" />
+                            </Grid>
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                            <TextBlock
+                                x:Name="NarrowTitle"
+                                FontSize="16"
+                                FontWeight="SemiBold"
+                                Text="暂无播放曲目"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                x:Name="NarrowArtist"
+                                FontSize="13"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 实时丝滑居中歌词舞台 -->
+                    <controls:LyricsStageControl
+                        x:Name="StageLyricsControl"
+                        Grid.Row="1" />
+                </Grid>
             </Grid>
         </Grid>
 

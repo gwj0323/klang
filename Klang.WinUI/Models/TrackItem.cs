@@ -20,8 +20,24 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
         if (d == null || d.HasThreadAccess) handler(this, new System.ComponentModel.PropertyChangedEventArgs(name));
         else d.TryEnqueue(() => handler(this, new System.ComponentModel.PropertyChangedEventArgs(name)));
     }
+    private bool _isCurrent;
+    /// <summary>是不是正在播放（列表里左侧画强调色竖条）。</summary>
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (_isCurrent == value) return;
+            _isCurrent = value;
+            Raise(nameof(IsCurrent));
+            Raise(nameof(CurrentBarVisibility));
+        }
+    }
+    public Microsoft.UI.Xaml.Visibility CurrentBarVisibility =>
+        _isCurrent ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     public int Index { get; set; }
-    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string Id{ get; set; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = "Unknown Title";
     public string Artist { get; set; } = "Unknown Artist";
     public string Album { get; set; } = "Unknown Album";
@@ -73,6 +89,47 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
     public bool IsCueTrack => CueTrackNum > 0;
 
     public long AddedTimestamp { get; set; }
+
+    /// <summary>播放统计：累计播放次数与最近一次播放时间（Unix 秒）。</summary>
+    public int PlayCount { get; set; }
+    public long LastPlayedTimestamp { get; set; }
+
+    /// <summary>从音频里算出的声学特征（音量 / 动态 / 明暗 / 频段 / 节奏），漫游模式用它找“听起来像”的歌；还没算出来为 null。</summary>
+    public float[]? AudioFeat { get; set; }
+
+    /// <summary>文件最后修改时间（UTC ticks），增量扫描靠它判断文件有没有变过。</summary>
+    public long FileMtimeTicks { get; set; }
+
+    private bool _isMissing;
+    /// <summary>文件已被移走或删除（列表里标灰并提示“文件丢失”）。</summary>
+    public bool IsMissing
+    {
+        get => _isMissing;
+        set
+        {
+            if (_isMissing == value) return;
+            _isMissing = value;
+            Raise(nameof(IsMissing));
+            Raise(nameof(RowOpacity));
+            Raise(nameof(RowToolTip));
+        }
+    }
+    public double RowOpacity => _isMissing ? 0.45 : 1.0;
+    public string RowToolTip => _isMissing ? "文件丢失：" + FilePath : FormatBadge;
+
+    /// <summary>音质档位：2 = Hi-Res，1 = 无损，0 = 有损。</summary>
+    public int QualityTier
+    {
+        get
+        {
+            var ext = Path.GetExtension(FilePath).ToLowerInvariant();
+            bool lossless = ext is ".flac" or ".wav" or ".ape"
+                || FormatBadge.Contains("无损") || FormatBadge.StartsWith("Hi-Res", StringComparison.OrdinalIgnoreCase)
+                || FormatBadge.Contains("FLAC", StringComparison.OrdinalIgnoreCase);
+            if (!lossless) return 0;
+            return SampleRate >= 88200 || BitDepth >= 24 ? 2 : 1;
+        }
+    }
 
     /// <summary>已尝试过在线补全封面/信息（避免每次启动重复请求）。</summary>
     public bool MetaChecked { get; set; }

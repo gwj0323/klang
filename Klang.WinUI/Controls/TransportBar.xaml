@@ -13,21 +13,68 @@
     </UserControl.Resources>
 
     <Border
-        Height="90"
-        Padding="24,0,24,0"
+        Padding="24,6,24,12"
         Background="{ThemeResource LayerFillColorDefaultBrush}"
         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
         BorderThickness="0,1,0,0">
 
-        <Grid VerticalAlignment="Center">
+        <Grid VerticalAlignment="Center" RowSpacing="4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="268" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="248" />
             </Grid.ColumnDefinitions>
 
+            <!-- 0. 顶部整行进度条：当前时间在最左，总时长在最右，滑轨贯通 -->
+            <Grid
+                Grid.Row="0"
+                Grid.ColumnSpan="3"
+                ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="44" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="44" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    x:Name="CurrentTimeText"
+                    Grid.Column="0"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    FontFamily="Consolas, Segoe UI"
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="00:00" />
+
+                <Slider
+                    x:Name="TimelineSlider"
+                    Grid.Column="1"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Center"
+                    ThumbToolTipValueConverter="{StaticResource TimeToolTipConverter}"
+                    Maximum="100"
+                    Minimum="0"
+                    ValueChanged="TimelineSlider_ValueChanged"
+                    Value="0" />
+
+                <TextBlock
+                    x:Name="TotalTimeText"
+                    Grid.Column="2"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    FontFamily="Consolas, Segoe UI"
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="00:00" />
+            </Grid>
+
             <!-- 1. 左侧：封面 + 标题 / 副标题 + 红心 -->
             <Grid
+                Grid.Row="1"
                 Grid.Column="0"
                 VerticalAlignment="Center"
                 ColumnSpacing="12">
@@ -97,19 +144,14 @@
 
             <!-- 2. 中间：核心播放控制按钮簇 + 全宽贯通式时间进度条 -->
             <Grid
+                Grid.Row="1"
                 Grid.Column="1"
                 Margin="20,0,20,0"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Center">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
 
                 <!-- 居中控制按钮组 -->
                 <StackPanel
-                    Grid.Row="0"
-                    Margin="0,0,0,6"
                     HorizontalAlignment="Center"
                     Orientation="Horizontal"
                     Spacing="12">
@@ -210,53 +252,11 @@
                             Text="1.0x" />
                     </Button>
                 </StackPanel>
-
-                <!-- 全宽贯通进度条：两端等宽时间 + 贯通中央细滑轨 -->
-                <Grid
-                    Grid.Row="1"
-                    HorizontalAlignment="Stretch">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="42" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="42" />
-                    </Grid.ColumnDefinitions>
-
-                    <TextBlock
-                        x:Name="CurrentTimeText"
-                        Grid.Column="0"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Center"
-                        FontFamily="Consolas, Segoe UI"
-                        FontSize="12"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="00:00" />
-
-                    <Slider
-                        x:Name="TimelineSlider"
-                        Grid.Column="1"
-                        Margin="10,0,10,0"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Center"
-                        ThumbToolTipValueConverter="{StaticResource TimeToolTipConverter}"
-                        Maximum="100"
-                        Minimum="0"
-                        ValueChanged="TimelineSlider_ValueChanged"
-                        Value="0" />
-
-                    <TextBlock
-                        x:Name="TotalTimeText"
-                        Grid.Column="2"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Center"
-                        FontFamily="Consolas, Segoe UI"
-                        FontSize="12"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="00:00" />
-                </Grid>
             </Grid>
 
             <!-- 3. 右侧：DSP 均衡器入口胶囊 + 静音与音量滑块 + 百分比 -->
             <StackPanel
+                Grid.Row="1"
                 Grid.Column="2"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Center"

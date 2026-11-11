@@ -289,11 +289,61 @@ public sealed class FluidBackground : UserControl
         return result.Count > 0 ? result : null;
     }
 
-    /// <summary>主色 → Voronoi 分区 → 高斯模糊，得到 TexN×TexN 的色块图（0..1）。</summary>
+    #region 取色后的美化
+
+    private static void RgbToHsl(float r, float g, float b, out float h, out float s, out float l)
+    {
+        float max = MathF.Max(r, MathF.Max(g, b)), min = MathF.Min(r, MathF.Min(g, b));
+        l = (max + min) / 2f;
+        float d = max - min;
+        if (d < 1e-5f) { h = 0; s = 0; return; }
+        s = l > 0.5f ? d / (2f - max - min) : d / (max + min);
+        if (max == r) h = (g - b) / d + (g < b ? 6f : 0f);
+        else if (max == g) h = (b - r) / d + 2f;
+        else h = (r - g) / d + 4f;
+        h /= 6f;
+    }
+
+    private static float HueToRgb(float p, float q, float t)
+    {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1f / 6f) return p + (q - p) * 6f * t;
+        if (t < 0.5f) return q;
+        if (t < 2f / 3f) return p + (q - p) * (2f / 3f - t) * 6f;
+        return p;
+    }
+
+    private static void HslToRgb(float h, float s, float l, out float r, out float g, out float b)
+    {
+        if (s < 1e-5f) { r = g = b = l; return; }
+        float q = l < 0.5f ? l * (1f + s) : l + s - l * s, p = 2f * l - q;
+        r = HueToRgb(p, q, h + 1f / 3f); g = HueToRgb(p, q, h); b = HueToRgb(p, q, h - 1f / 3f);
+    }
+
+    /// <summary>
+    /// 把取到的主色“洗”得更好看：有颜色的适度提饱和，并把明度收进 0.30~0.66；
+    /// 近乎灰色的保持低饱和。避免米色 / 灰色大面积混在一起变成脏灰（着色器里还会再整体提一次饱和）。
+    /// </summary>
+    private static void Beautify(List<float[]> colors)
+    {
+        foreach (var c in colors)
+        {
+            RgbToHsl(c[0] / 255f, c[1] / 255f, c[2] / 255f, out var h, out var s, out var l);
+            if (s >= 0.12f) s = Math.Clamp(s * 1.18f, 0.38f, 0.90f);
+            l = Math.Clamp(l, 0.30f, 0.66f);
+            HslToRgb(h, s, l, out var r, out var g, out var b);
+            c[0] = r * 255f; c[1] = g * 255f; c[2] = b * 255f;
+        }
+    }
+
+    #endregion
+
+    /// <summary>主色 → 美化 → Voronoi 分区 → 高斯模糊，得到 TexN×TexN 的色块图（0..1）。</summary>
     private static float[]? MakeColorField(byte[] rgba)
     {
         var colors = ExtractColors(rgba);
         if (colors == null) return null;
+        Beautify(colors);
 
         double seedSum = colors.Sum(c => c[0] + c[1] + c[2]) * 1000;
         var rng = new Random((int)(seedSum % int.MaxValue));

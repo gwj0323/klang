@@ -34,12 +34,6 @@
                     CornerRadius="120"
                     Opacity="0"
                     Visibility="Collapsed">
-                    <Border.RenderTransform>
-                        <TransformGroup>
-                            <RotateTransform x:Name="VinylRotateTransform" Angle="0" CenterX="120" CenterY="120" />
-                            <TranslateTransform x:Name="VinylSlideTransform" X="0" />
-                        </TransformGroup>
-                    </Border.RenderTransform>
 
                     <!-- 黑胶唱片同心微凹槽与中心转轴 -->
                     <Grid>
@@ -81,32 +75,15 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="14">
-                    <Border.RenderTransform>
-                        <ScaleTransform x:Name="CoverScaleTransform" CenterX="130" CenterY="130" ScaleX="1.0" ScaleY="1.0" />
-                    </Border.RenderTransform>
 
                     <Grid>
                         <!-- 默认未加载音乐占位 (Nordic 极简典雅封套风格) -->
                         <Grid x:Name="FallbackPanel" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
-                                <Border
-                                    Width="60"
-                                    Height="60"
-                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="30">
-                                    <FontIcon
-                                        FontSize="24"
-                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                        Glyph="&#xEC4F;" />
-                                </Border>
-                                <TextBlock
-                                    FontSize="12"
-                                    FontWeight="SemiBold"
+                                <FontIcon
+                                    FontSize="40"
                                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    HorizontalAlignment="Center"
-                                    Text="KLANG STUDIO" />
+                                    Glyph="&#xEC4F;" />
                             </StackPanel>
                         </Grid>
 
@@ -126,9 +103,6 @@
                 x:Name="MetaInfoPanel"
                 Margin="4,0,4,0"
                 Spacing="5">
-                <StackPanel.RenderTransform>
-                    <TranslateTransform x:Name="MetaTranslateTransform" Y="0" />
-                </StackPanel.RenderTransform>
 
                 <TextBlock
                     x:Name="TitleText"

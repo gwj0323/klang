@@ -32,6 +32,39 @@ public class SavedTrack
     public double? ReplayPeak { get; set; }
     public bool MetaChecked { get; set; }
     public string MetaNeteaseId { get; set; } = "";
+    public int PlayCount { get; set; }
+    public long LastPlayedTimestamp { get; set; }
+    public float[]? AudioFeat { get; set; }
+}
+
+/// <summary>漫游模型里每首歌的行为统计。</summary>
+public class RoamStat
+{
+    public int Plays { get; set; }
+    public int Completes { get; set; }
+    public int Skips { get; set; }
+    public float[] Hours { get; set; } = new float[24];   // 一天里各小时播放它的次数
+}
+
+/// <summary>漫游模式的本地学习结果（逻辑回归权重 + 歌曲间转移 + 每首歌的统计）。</summary>
+public class RoamModel
+{
+    public float[] Weights { get; set; } = Array.Empty<float>();
+    public int Samples { get; set; }
+    public Dictionary<string, RoamStat> Stats { get; set; } = new();
+    public Dictionary<string, Dictionary<string, float>> Transitions { get; set; } = new();
+}
+
+/// <summary>智能歌单的规则（按条件自动生成，不存曲目列表）。</summary>
+public class SmartPlaylistDef
+{
+    public string Name { get; set; } = "";
+    public int MinQualityTier { get; set; }        // 0 = 不限，1 = 无损及以上，2 = 仅 Hi-Res
+    public bool OnlyFavorite { get; set; }
+    public int AddedWithinDays { get; set; }       // 0 = 不限
+    public int MinPlayCount { get; set; }          // 0 = 不限
+    public string SortBy { get; set; } = "added";  // added | played | plays | title
+    public int Limit { get; set; }                 // 0 = 不限
 }
 
 public class AppState
@@ -81,6 +114,8 @@ public class AppState
     public string LastTrackId { get; set; } = "";
     public List<string> WatchedFolders { get; set; } = new();
     public Dictionary<string, List<string>> CustomPlaylists { get; set; } = new();
+    public List<SmartPlaylistDef> SmartPlaylists { get; set; } = new();
+    public RoamModel Roam { get; set; } = new();
     public List<SavedTrack> Tracks { get; set; } = new();
 }
 
@@ -130,6 +165,10 @@ public class StateService
                     state.Tracks ??= new();
                     state.WatchedFolders ??= new();
                     state.CustomPlaylists ??= new();
+                    state.SmartPlaylists ??= new();
+                    state.Roam ??= new();
+                    state.Roam.Stats ??= new();
+                    state.Roam.Transitions ??= new();
                     State = state;
                     return;
                 }

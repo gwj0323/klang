@@ -9,50 +9,43 @@
     UseLayoutRounding="True"
     mc:Ignorable="d">
 
-    <Grid>
-        <!-- 居中丝滑歌词滚动视口 (配备物理阻尼谐振弹簧系统) -->
-        <ScrollViewer
-            x:Name="LyricsScrollViewer"
-            Padding="24,0,24,0"
-            HorizontalScrollBarVisibility="Disabled"
-            IsScrollInertiaEnabled="True"
-            VerticalScrollBarVisibility="Hidden">
+    <!-- 视口：不再用 ScrollViewer。内容整体用合成器的弹簧动画平移（跑在合成线程，跟显示器刷新率走），
+         滚轮 / 触控板只是改变平移目标。 -->
+    <Grid
+        x:Name="Viewport"
+        Background="Transparent"
+        PointerWheelChanged="Viewport_PointerWheelChanged"
+        SizeChanged="Viewport_SizeChanged">
 
-            <StackPanel>
-                <Border x:Name="TopSpacer" Height="300" />
+        <StackPanel
+            x:Name="ContentPanel"
+            Padding="24,0,24,0"
+            VerticalAlignment="Top">
             <ItemsControl x:Name="LyricsItemsControl">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Button AutomationProperties.Name="{Binding Text}"
+                        <Button
                             Margin="0,6,0,6"
                             Padding="24,10,24,10"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Center"
+                            AutomationProperties.Name="{Binding Text}"
                             Click="LyricLine_Click"
                             CornerRadius="8"
-                            RenderTransformOrigin="0.5,0.5"
                             Style="{StaticResource SubtleButtonStyle}"
                             ToolTipService.ToolTip="点击跳转到此时刻播放">
-                            <Button.RenderTransform>
-                                <ScaleTransform
-                                    ScaleX="{Binding ScaleX}"
-                                    ScaleY="{Binding ScaleY}" />
-                            </Button.RenderTransform>
-
                             <StackPanel HorizontalAlignment="Center" Spacing="4">
-                                <!-- 主歌词 (定长 22px 配合物理平滑缩放，杜绝文字突变回流抖动) -->
+                                <!-- 主歌词：缩放 / 透明度由代码在合成层上做动画，不再逐帧改绑定属性 -->
                                 <local:KaraokeText
                                     FontSize="{Binding MainFontSize}"
                                     FontWeight="{Binding FontWeight}"
                                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                    Line="{Binding}"
-                                    Opacity="{Binding LineOpacity}" />
+                                    Line="{Binding}" />
 
-                                <!-- 翻译歌词 (北欧鼠尾草绿辅助色) -->
+                                <!-- 副行：翻译 / 罗马音 -->
                                 <TextBlock
                                     FontSize="{Binding SubFontSize}"
-                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                    Opacity="{Binding LineOpacity}"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Text="{Binding DisplaySub}"
                                     TextAlignment="Center"
                                     TextWrapping="Wrap"
@@ -62,34 +55,17 @@
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
-                <Border x:Name="BottomSpacer" Height="300" />
-            </StackPanel>
-        </ScrollViewer>
+        </StackPanel>
 
-        <!-- 顶部柔和渐隐羽化遮罩 (Ethereal Mist Fade Out) -->
-        <Border
-            x:Name="TopFadeBorder"
-            Height="90"
-            Visibility="Collapsed"
-            VerticalAlignment="Top"
-            IsHitTestVisible="False" />
-
-        <!-- 底部柔和渐隐羽化遮罩 -->
-        <Border
-            x:Name="BottomFadeBorder"
-            Height="90"
-            Visibility="Collapsed"
-            VerticalAlignment="Bottom"
-            IsHitTestVisible="False" />
-
-        <!-- 用户手动滚动时浮现的“回正”胶囊提示 (Apple Music / Qt6 交互规范) -->
-        <Button AutomationProperties.Name="返回当前播放位置"
+        <!-- 用户手动滚动时浮现的“回正”胶囊提示 -->
+        <Button
             x:Name="ResumeCenterBtn"
             Height="30"
-            Padding="12,0,12,0"
             Margin="0,0,28,24"
+            Padding="12,0,12,0"
             HorizontalAlignment="Right"
             VerticalAlignment="Bottom"
+            AutomationProperties.Name="返回当前播放位置"
             Click="ResumeCenterBtn_Click"
             CornerRadius="15"
             Opacity="0"
@@ -107,15 +83,16 @@
             x:Name="EmptyLyricsPanel"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
-            Spacing="8"
+            Spacing="6"
             Visibility="Visible">
             <FontIcon
-                FontSize="36"
+                FontSize="24"
                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                 Glyph="&#xEC4F;" />
             <TextBlock
-                FontSize="14"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                HorizontalAlignment="Center"
+                FontSize="13"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                 Text="暂无歌词" />
         </StackPanel>
     </Grid>

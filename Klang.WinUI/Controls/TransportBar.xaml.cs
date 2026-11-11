@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
@@ -145,6 +146,18 @@ public sealed partial class TransportBar : UserControl
     public void SetPlaybackRate(double rate)
     {
         RateText.Text = $"{rate:0.0#}x";
+    }
+
+    /// <summary>三种“下一首”方式：列表顺序 / 随机 / 漫游（本地学习猜下一首）。</summary>
+    public void SetShuffleState(string playMode)
+    {
+        bool roam = playMode == "roam";
+        ShuffleIcon.Glyph = roam ? "" : "";   // 漫游用地球图标，其余用随机图标
+        string tip = roam ? "漫游：根据你的口味猜下一首（点击切换为顺序播放）"
+            : playMode == "random" ? "随机播放（点击切换为漫游）" : "随机播放 / 漫游";
+        ToolTipService.SetToolTip(ShuffleBtn, tip);
+        AutomationProperties.SetName(ShuffleBtn, tip);
+        SetShuffleState(playMode is "random" or "roam");
     }
 
     public void SetShuffleState(bool isShuffle)

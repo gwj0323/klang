@@ -51,6 +51,7 @@ public sealed class KaraokeText : UserControl
     private void OnLinePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(LyricLine.PlayedWords)) ApplyProgress();
+        else if (e.PropertyName == nameof(LyricLine.IsActive)) { _applied = -1; ApplyProgress(); }
         else if (e.PropertyName == nameof(LyricLine.Text)) Rebuild();
     }
 
@@ -85,17 +86,17 @@ public sealed class KaraokeText : UserControl
         if (played == _applied) return;
         _applied = played;
 
-        // 深色背景：已唱的字纯白，未唱的字半透明白；浅色背景：已唱的字用强调色
+        // 不用彩色：已唱的字是正文色（深色 = 纯白，浅色 = 近黑），未唱的字是同一颜色的淡化版（Apple Music 的做法）
         bool dark = ActualTheme == ElementTheme.Dark;
-        Brush? sung = dark
-            ? new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255))
-            : Klang_WinUI.Services.ThemeService.AccentText(this);
-        Brush? unsung = dark ? new SolidColorBrush(Windows.UI.Color.FromArgb(150, 255, 255, 255)) : null;
+        byte c = dark ? (byte)255 : (byte)20;
+        Brush sung = new SolidColorBrush(Windows.UI.Color.FromArgb(255, c, c, c));
+        Brush unsung = new SolidColorBrush(Windows.UI.Color.FromArgb(dark ? (byte)110 : (byte)95, c, c, c));
+        // 只有正在唱的这一行才分“已唱 / 未唱”；其余行整行统一，由行自身的透明度去淡化
+        bool active = Line.IsActive;
         for (int i = 0; i < _runs.Length; i++)
         {
-            if (i < played && sung != null) _runs[i].Foreground = sung;
-            else if (unsung != null) _runs[i].Foreground = unsung;
-            else _runs[i].ClearValue(TextElement.ForegroundProperty);
+            if (!active) _runs[i].ClearValue(TextElement.ForegroundProperty);
+            else _runs[i].Foreground = i < played ? sung : unsung;
         }
     }
 }

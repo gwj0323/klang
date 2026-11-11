@@ -67,7 +67,7 @@ public sealed partial class MainWindow : Window
         ImmersiveLayer.PlayPauseRequested += (s, e) => TogglePlayPause();
         ImmersiveLayer.PrevRequested += (s, e) => PlayPrev();
         ImmersiveLayer.NextRequested += (s, e) => PlayNext();
-        _playMode = st.PlayMode is "loop_single" or "random" ? st.PlayMode : "loop_list";
+        _playMode = st.PlayMode is "loop_single" or "random" or "roam" ? st.PlayMode : "loop_list";
         if (st.SidebarCollapsed) SetSidebarOpen(false);
         LeftNavPane.ApplyViewState(st.NavSortMode, st.NavGroupMode);
 
@@ -139,6 +139,7 @@ public sealed partial class MainWindow : Window
         {
             DispatcherQueue.TryEnqueue(() =>
             {
+                _endedNaturally = true;   // 引擎此时已复位，听了多少得靠这个标记告诉漫游模型：整首都听完了
                 if (_playMode == "loop_single" && _currentTrack != null)
                 {
                     PlayTrack(_currentTrack);
@@ -168,7 +169,7 @@ public sealed partial class MainWindow : Window
 
         LeftNavPane.TrackRemoved += (s, track) =>
         {
-            if (_currentTrack == track) _currentTrack = null;
+            if (_currentTrack == track) { track.IsCurrent = false; _currentTrack = null; }
         };
 
         LeftNavPane.ViewStateChanged += (s, e) =>
@@ -192,17 +193,23 @@ public sealed partial class MainWindow : Window
 
         BottomTransportBar.ShuffleClicked += (s, e) =>
         {
-            _playMode = (_playMode == "random") ? "loop_list" : "random";
-            BottomTransportBar.SetShuffleState(_playMode == "random");
+            // 列表循环 → 随机 → 漫游 → 列表循环
+            _playMode = _playMode switch { "random" => "roam", "roam" => "loop_list", _ => "random" };
+            BottomTransportBar.SetShuffleState(_playMode);
             BottomTransportBar.SetRepeatMode(_playMode);
-            BottomTransportBar.UpdateLyricSnippet(_playMode == "random" ? "已开启随机播放" : "已开启列表循环");
+            BottomTransportBar.UpdateLyricSnippet(_playMode switch
+            {
+                "random" => "已开启随机播放",
+                "roam" => "已开启漫游：会根据你的听歌习惯猜下一首",
+                _ => "已开启列表循环"
+            });
             SavePlayMode();
         };
 
         BottomTransportBar.RepeatClicked += (s, e) =>
         {
             _playMode = (_playMode == "loop_single") ? "loop_list" : "loop_single";
-            BottomTransportBar.SetShuffleState(false);
+            BottomTransportBar.SetShuffleState(_playMode);
             BottomTransportBar.SetRepeatMode(_playMode);
             BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? "已开启单曲循环" : "已开启列表循环");
             SavePlayMode();
@@ -255,7 +262,7 @@ public sealed partial class MainWindow : Window
         };
 
         // 初始化界面初始文案与状态
-        BottomTransportBar.SetShuffleState(_playMode == "random");
+        BottomTransportBar.SetShuffleState(_playMode);
         BottomTransportBar.SetRepeatMode(_playMode);
         BottomTransportBar.SetVolume(AudioEngineService.Instance.Volume);
         _playbackRate = AudioEngineService.Instance.PlaybackRate;
@@ -305,10 +312,38 @@ public sealed partial class MainWindow : Window
                 LeftNavPane.ResetQueue();
                 PlayTrack(last, autoPlay: false);
             }
+
+            // 后台：核对文件还在不在 → 增量扫描已添加的文件夹（没变的文件直接跳过）→ 开始监视文件夹变化
+            _ = SyncLibraryInBackgroundAsync();
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Restore library error: {ex.Message}");
+        }
+    }
+
+    private async System.Threading.Tasks.Task SyncLibraryInBackgroundAsync()
+    {
+        try
+        {
+            var lib = LibraryService.Instance;
+            AudioFeatureService.Instance.Start(DispatcherQueue);
+            await lib.RefreshMissingAsync();
+            var added = await lib.RescanWatchedFoldersAsyncCollect();
+            if (added.Count > 0) MetadataService.Instance.Enqueue(added);
+            LeftNavPane.RefreshView();
+            AudioFeatureService.Instance.Enqueue(lib.Tracks);   // 后台慢慢给还没算过的歌提取声学特征
+
+            lib.LibraryChangedOnDisk += newTracks =>
+            {
+                if (newTracks.Count > 0) MetadataService.Instance.Enqueue(newTracks);
+                LeftNavPane.RefreshView();
+            };
+            lib.StartWatching(DispatcherQueue);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Library sync error: {ex.Message}");
         }
     }
 
@@ -346,13 +381,68 @@ public sealed partial class MainWindow : Window
 
     #endregion
 
+    private bool _endedNaturally;
+    private bool _nextByRoam;
+
+    #region 窄窗口布局
+
+    private const double NarrowStageWidth = 760;   // 舞台区宽度小于它（约窗口 < 1050px）就改成单栏
+    private bool _stageNarrow;
+
+    private void StageGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        bool narrow = e.NewSize.Width < NarrowStageWidth;
+        if (narrow == _stageNarrow) return;
+        _stageNarrow = narrow;
+        StageCoverCard.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        StageCoverColumn.Width = narrow ? new GridLength(0) : GridLength.Auto;
+        StageGrid.ColumnSpacing = narrow ? 0 : 48;
+        StageGrid.Padding = narrow ? new Thickness(28, 16, 24, 16) : new Thickness(46, 24, 42, 24);
+        NarrowHeader.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        UpdateNarrowHeader(_currentTrack);
+    }
+
+    private void UpdateNarrowHeader(TrackItem? track)
+    {
+        NarrowTitle.Text = track == null ? "暂无播放曲目" : (string.IsNullOrWhiteSpace(track.Title) ? "未命名曲目" : track.Title);
+        NarrowArtist.Text = track == null ? "" : track.Artist;
+        NarrowCover.Source = track?.CoverThumb;
+    }
+
+    #endregion
+
     #region 播放控制
 
     private void PlayTrack(TrackItem track, bool autoPlay = true)
     {
+        // 文件已经丢了：不开始播放，提示一下（启动时恢复上次曲目只显示，不拦）
+        if (autoPlay && track.IsMissing && !track.IsOnline)
+        {
+            BottomTransportBar.UpdateLyricSnippet("文件丢失，无法播放：" + System.IO.Path.GetFileName(track.FilePath));
+            return;
+        }
+        if (autoPlay)
+        {
+            LibraryService.Instance.RecordPlay(track);
+
+            // 喂给漫游模型：上一首听了多少（自然播完 = 1；否则按进度算），这一首是不是漫游选的
+            var engine = AudioEngineService.Instance;
+            double frac = 0;
+            if (_endedNaturally) frac = 1;
+            else if (_currentTrack != null && _currentTrack.Duration > 0 && engine.HasSource)
+                frac = Math.Clamp((engine.CurrentTime - _currentTrack.StartTime) / _currentTrack.Duration, 0, 1);
+            if (_currentTrack != null && !_currentTrack.IsOnline && !track.IsOnline)
+                RoamingService.Instance.OnTransition(_currentTrack, frac, track, _nextByRoam, LibraryService.Instance.Tracks);
+            _endedNaturally = false;
+            _nextByRoam = false;
+        }
+
+        if (_currentTrack != null) _currentTrack.IsCurrent = false;
         _currentTrack = track;
+        track.IsCurrent = true;
 
         StageCoverCard.UpdateTrack(track);
+        UpdateNarrowHeader(track);
         // CUE 分轨暂不加载整轨歌词（整轨 .lrc 与分轨时间轴不一致）
         StageLyricsControl.LoadLyrics(track.IsCueTrack || track.IsOnline ? null : track.FilePath);
         SyncImmersive();
@@ -536,7 +626,19 @@ public sealed partial class MainWindow : Window
             int currentIdx = tracks.IndexOf(_currentTrack);
             if (currentIdx >= 0)
             {
-                if (_playMode == "random" && tracks.Count > 1)
+                if (_playMode == "roam" && tracks.Count > 1)
+                {
+                    var pick = RoamingService.Instance.PickNext(_currentTrack, tracks, LibraryService.Instance.Tracks);
+                    if (pick != null)
+                    {
+                        _nextByRoam = true;
+                        PlayTrack(pick.Value.Track);
+                        BottomTransportBar.UpdateLyricSnippet("漫游 · " + pick.Value.Reason);
+                        return;
+                    }
+                    nextIdx = (currentIdx + 1) % tracks.Count;
+                }
+                else if (_playMode == "random" && tracks.Count > 1)
                 {
                     nextIdx = _rand.Next(0, tracks.Count);
                     if (nextIdx == currentIdx) nextIdx = (nextIdx + 1) % tracks.Count;
@@ -815,7 +917,7 @@ public sealed partial class MainWindow : Window
         var accent = ThemeService.AccentText(root);
         var normal = ThemeService.Brush(root, "TextFillColorPrimaryBrush");
         var selBg = ThemeService.Brush(root, "SubtleFillColorSecondaryBrush");
-        foreach (var (btn, tag) in new[] { (RailAll, "all"), (RailFav, "fav"), (RailPlaylists, "playlists"), (RailCloud, "netease") })
+        foreach (var (btn, tag) in new[] { (RailAll, "all"), (RailFav, "fav"), (RailAlbums, "albums"), (RailPlaylists, "playlists"), (RailCloud, "netease") })
         {
             bool sel = tag == tab;
             btn.Background = sel ? selBg : null;
@@ -983,7 +1085,7 @@ public sealed partial class MainWindow : Window
         SyncImmersive();
         if (AppWindow.Presenter.Kind != AppWindowPresenterKind.FullScreen)
         {
-            AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+            EnterFullscreen();
             _immersiveSetFullscreen = true;
         }
     }
@@ -993,9 +1095,25 @@ public sealed partial class MainWindow : Window
         ImmersiveLayer.Close();
         if (_immersiveSetFullscreen)
         {
-            AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+            ExitFullscreen();
             _immersiveSetFullscreen = false;
         }
+    }
+
+    // 自绘标题栏的窗口全屏时，系统仍会在最上面画 1 像素的窗口边框（浅色主题下是白线）。
+    // 全屏期间关掉“内容延伸进标题栏”，退出时再恢复。
+    private void EnterFullscreen()
+    {
+        ExtendsContentIntoTitleBar = false;
+        AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+    }
+
+    private void ExitFullscreen()
+    {
+        AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
     }
 
     /// <summary>沉浸层打开时，同步当前曲目与歌词。</summary>
@@ -1017,11 +1135,11 @@ public sealed partial class MainWindow : Window
     {
         if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
         {
-            AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+            ExitFullscreen();
         }
         else
         {
-            AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+            EnterFullscreen();
         }
     }
 
