@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -34,7 +34,7 @@ public sealed partial class EqualizerDialog : ContentDialog
         {
             HeadphoneCombo.Items.Add(new ComboBoxItem
             {
-                Content = $"{profile.Name} ({profile.Category})",
+                Content = id == "bypass" ? profile.Name : $"{profile.Name}（{profile.Category}）",
                 Tag = id
             });
         }
@@ -45,7 +45,7 @@ public sealed partial class EqualizerDialog : ContentDialog
         var eng = AudioEngineService.Instance;
 
         // 1. 预设
-        CurrentPresetLabel.Text = $"当前：{eng.CurrentPreset}";
+        CurrentPresetLabel.Text = $"当前预设：{eng.CurrentPreset}";
         UpdatePresetButtonStyles(eng.CurrentPreset);
 
         // 2. 5 段 EQ
@@ -56,11 +56,11 @@ public sealed partial class EqualizerDialog : ContentDialog
         Slider3600Hz.Value = eng.EqGains[3];
         Slider12000Hz.Value = eng.EqGains[4];
 
-        Val60Hz.Text = $"{eng.EqGains[0]:+0.0;-0.0;0.0}dB";
-        Val230Hz.Text = $"{eng.EqGains[1]:+0.0;-0.0;0.0}dB";
-        Val910Hz.Text = $"{eng.EqGains[2]:+0.0;-0.0;0.0}dB";
-        Val3600Hz.Text = $"{eng.EqGains[3]:+0.0;-0.0;0.0}dB";
-        Val12000Hz.Text = $"{eng.EqGains[4]:+0.0;-0.0;0.0}dB";
+        Val60Hz.Text = $"{eng.EqGains[0]:+0.0;-0.0;0.0} dB";
+        Val230Hz.Text = $"{eng.EqGains[1]:+0.0;-0.0;0.0} dB";
+        Val910Hz.Text = $"{eng.EqGains[2]:+0.0;-0.0;0.0} dB";
+        Val3600Hz.Text = $"{eng.EqGains[3]:+0.0;-0.0;0.0} dB";
+        Val12000Hz.Text = $"{eng.EqGains[4]:+0.0;-0.0;0.0} dB";
 
         // 3. 空间音频
         SpatialCombo.SelectedIndex = eng.SpatialAudioMode switch
@@ -131,13 +131,13 @@ public sealed partial class EqualizerDialog : ContentDialog
         float g3 = (float)Slider3600Hz.Value;
         float g4 = (float)Slider12000Hz.Value;
 
-        Val60Hz.Text = $"{g0:+0.0;-0.0;0.0}dB";
-        Val230Hz.Text = $"{g1:+0.0;-0.0;0.0}dB";
-        Val910Hz.Text = $"{g2:+0.0;-0.0;0.0}dB";
-        Val3600Hz.Text = $"{g3:+0.0;-0.0;0.0}dB";
-        Val12000Hz.Text = $"{g4:+0.0;-0.0;0.0}dB";
+        Val60Hz.Text = $"{g0:+0.0;-0.0;0.0} dB";
+        Val230Hz.Text = $"{g1:+0.0;-0.0;0.0} dB";
+        Val910Hz.Text = $"{g2:+0.0;-0.0;0.0} dB";
+        Val3600Hz.Text = $"{g3:+0.0;-0.0;0.0} dB";
+        Val12000Hz.Text = $"{g4:+0.0;-0.0;0.0} dB";
 
-        CurrentPresetLabel.Text = "当前：自定义";
+        CurrentPresetLabel.Text = "当前预设：自定义";
         UpdatePresetButtonStyles("自定义");
 
         AudioEngineService.Instance.SetEqGains(new[] { g0, g1, g2, g3, g4 });
@@ -170,15 +170,15 @@ public sealed partial class EqualizerDialog : ContentDialog
     {
         if (Math.Abs(val) < 0.05f)
         {
-            VocalBalanceLabel.Text = "均衡 0.0";
+            VocalBalanceLabel.Text = "居中";
         }
         else if (val < 0)
         {
-            VocalBalanceLabel.Text = $"伴奏优先 ({val:F2})";
+            VocalBalanceLabel.Text = $"压低人声 {-val:0.00}";
         }
         else
         {
-            VocalBalanceLabel.Text = $"人声聚焦 (+{val:F2})";
+            VocalBalanceLabel.Text = $"突出人声 {val:0.00}";
         }
     }
 

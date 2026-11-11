@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace Klang_WinUI.Services.Dsp;
@@ -29,12 +29,12 @@ public static class HeadphoneAutoEq
     {
         ["bypass"] = new HeadphoneProfile(
             "bypass",
-            "关闭 / 原声监听 (Bypass)",
+            "不使用",
             "通用",
             "直通",
             "Native",
             0.0,
-            "保持音频原始声底直通输出，未开启硬件声学校准。",
+            "声音直接输出，不做耳机补偿。",
             new List<EqFilterDef>()
         ),
         ["sony_wh1000xm5"] = new HeadphoneProfile(

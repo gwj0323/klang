@@ -1,3 +1,4 @@
+﻿using Klang_WinUI.Services;
 using System;
 using System.IO;
 using Microsoft.UI.Xaml;
@@ -133,16 +134,24 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
+    /// <summary>以 0–1 设置音量滑块（会触发 UserVolumeChanged）。</summary>
+    public void SetVolume(float volume01)
+    {
+        VolumeSlider.Value = Math.Round(Math.Clamp(volume01, 0f, 1f) * 100);
+    }
+
+    public double VolumePercent => VolumeSlider.Value;
+
     public void SetPlaybackRate(double rate)
     {
-        RateText.Text = $"{rate:0.0}x";
+        RateText.Text = $"{rate:0.0#}x";
     }
 
     public void SetShuffleState(bool isShuffle)
     {
         ShuffleIcon.Foreground = isShuffle
-            ? (Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush)
-            : (Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush);
+            ? (ThemeService.AccentText(this))
+            : (ThemeService.Brush(this, "TextFillColorSecondaryBrush"));
     }
 
     public void SetRepeatMode(string mode)
@@ -151,13 +160,13 @@ public sealed partial class TransportBar : UserControl
         {
             RepeatIcon.Glyph = "\uE8ED";
             RepeatBtn.SetValue(ToolTipService.ToolTipProperty, "循环模式：单曲循环");
-            RepeatIcon.Foreground = Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush;
+            RepeatIcon.Foreground = ThemeService.AccentText(this);
         }
         else
         {
             RepeatIcon.Glyph = "\uE8EE";
             RepeatBtn.SetValue(ToolTipService.ToolTipProperty, "循环模式：列表循环");
-            RepeatIcon.Foreground = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush;
+            RepeatIcon.Foreground = ThemeService.Brush(this, "TextFillColorSecondaryBrush");
         }
     }
 
@@ -166,8 +175,8 @@ public sealed partial class TransportBar : UserControl
         _isFavorite = isFav;
         FavoriteIcon.Glyph = isFav ? "\uEB52" : "\uEB51";
         FavoriteIcon.Foreground = isFav
-            ? (Application.Current.Resources["AccentTextFillColorPrimaryBrush"] as Brush)
-            : (Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush);
+            ? (ThemeService.AccentText(this))
+            : (ThemeService.Brush(this, "TextFillColorSecondaryBrush"));
     }
 
     private static string FormatTime(double seconds)
@@ -258,4 +267,17 @@ public sealed partial class TransportBar : UserControl
             CurrentTimeText.Text = FormatTime(e.NewValue);
         }
     }
+}
+
+/// <summary>进度滑块的悬浮提示：把秒数显示成 mm:ss。</summary>
+public sealed class TimeToolTipConverter : Microsoft.UI.Xaml.Data.IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, System.Convert.ToDouble(value)));
+        return ts.TotalHours >= 1 ? ts.ToString(@"h\:mm\:ss") : ts.ToString(@"mm\:ss");
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) =>
+        throw new NotSupportedException();
 }

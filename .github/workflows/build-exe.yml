@@ -52,3 +52,38 @@ jobs:
           name: Klang-windows-exe
           path: dist/Klang.exe
           if-no-files-found: error
+
+  build-winui:
+    name: Build WinUI 3 app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish (self-contained, win-x64)
+        shell: pwsh
+        run: >
+          dotnet publish Klang.WinUI/Klang.WinUI.csproj
+          -c Release -r win-x64 -p:Platform=x64
+          -o publish/Klang.WinUI
+
+      - name: Verify output
+        shell: pwsh
+        run: |
+          foreach ($f in "Klang.WinUI.exe", "Klang.WinUI.pri") {
+            if (-not (Test-Path "publish/Klang.WinUI/$f")) { throw "$f was not produced" }
+          }
+          Get-Item publish/Klang.WinUI/Klang.WinUI.exe | Select-Object Name, Length
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path publish/Klang.WinUI/* -DestinationPath Klang-WinUI-win-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Klang-WinUI-win-x64
+          path: Klang-WinUI-win-x64.zip
+          if-no-files-found: error

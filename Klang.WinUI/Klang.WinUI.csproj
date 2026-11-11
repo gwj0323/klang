@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
@@ -16,6 +16,8 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableWinAppRunSupport>false</EnableWinAppRunSupport>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- ComputeSharp 的源生成器要求（GPU 着色器） -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
@@ -40,13 +42,27 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="*" />
     <PackageReference Include="NAudio" Version="3.3.0" />
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+    <PackageReference Include="ComputeSharp.WinUI" Version="3.2.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
   </ItemGroup>
+
+  <!-- 未打包 + 自包含发布时，应用自己的资源索引 (Klang.WinUI.pri) 默认不会被复制到发布目录，
+       缺了它启动时会报 “Cannot locate resource from ms-appx:///MainWindow.xaml” -->
+  <Target Name="CopyAppPriToPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(OutDir)$(TargetName).pri"
+                             RelativePath="$(TargetName).pri"
+                             CopyToPublishDirectory="PreserveNewest"
+                             Condition="Exists('$(OutDir)$(TargetName).pri')" />
+    </ItemGroup>
+  </Target>
 
   <!-- Publish Properties -->
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+    <!-- WinUI 的 XAML 通过反射创建控件，裁剪会让 NavigationPane 等自定义控件无法实例化（启动即崩溃），因此不裁剪 -->
+    <PublishTrimmed>False</PublishTrimmed>
   </PropertyGroup>
 </Project>

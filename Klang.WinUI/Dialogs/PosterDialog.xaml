@@ -1,0 +1,93 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentDialog
+    x:Class="Klang_WinUI.Dialogs.PosterDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="歌词海报"
+    CloseButtonText="关闭"
+    Style="{StaticResource DefaultContentDialogStyle}"
+    DefaultButton="Primary"
+    PrimaryButtonClick="Save_Click"
+    PrimaryButtonText="保存图片">
+
+    <Grid ColumnSpacing="20">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="300" />
+        </Grid.ColumnDefinitions>
+
+        <!-- 海报本体（按此元素渲染成图片） -->
+        <Border
+            x:Name="PosterCard"
+            Width="320"
+            Padding="28,30,28,24"
+            CornerRadius="0">
+            <Border.Background>
+                <LinearGradientBrush x:Name="PosterBg" StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop x:Name="PStop0" Color="#3A4A44" Offset="0" />
+                    <GradientStop x:Name="PStop1" Color="#1A2226" Offset="1" />
+                </LinearGradientBrush>
+            </Border.Background>
+            <StackPanel Spacing="18" RequestedTheme="Dark">
+                <Border
+                    Width="120"
+                    Height="120"
+                    HorizontalAlignment="Left"
+                    CornerRadius="10"
+                    Background="#22FFFFFF">
+                    <Image x:Name="PosterCover" Stretch="UniformToFill" />
+                </Border>
+                <TextBlock
+                    x:Name="PosterLyric"
+                    FontSize="20"
+                    FontWeight="SemiBold"
+                    Foreground="White"
+                    LineHeight="32"
+                    TextWrapping="Wrap" />
+                <StackPanel Spacing="2">
+                    <TextBlock
+                        x:Name="PosterTitle"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="White"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBlock
+                        x:Name="PosterArtist"
+                        FontSize="12"
+                        Foreground="#B3FFFFFF"
+                        TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <TextBlock
+                    FontSize="12"
+                    Foreground="#66FFFFFF"
+                    Text="KLANG" />
+            </StackPanel>
+        </Border>
+
+        <!-- 选择要放进海报的歌词行 -->
+        <Grid Grid.Column="1" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="320" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock
+                FontSize="12"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="选择要放进海报的歌词（最多 8 行）"
+                TextWrapping="Wrap" />
+            <ListView
+                x:Name="LineList"
+                Grid.Row="1"
+                SelectionChanged="LineList_SelectionChanged"
+                SelectionMode="Multiple" />
+            <TextBlock
+                x:Name="StatusText"
+                Grid.Row="2"
+                FontSize="12"
+                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                IsTextSelectionEnabled="True"
+                TextWrapping="Wrap" />
+        </Grid>
+    </Grid>
+</ContentDialog>

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Window
     x:Class="Klang_WinUI.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -39,13 +39,13 @@
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="8">
-                <Button
+                <Button AutomationProperties.Name="折叠 / 展开曲库侧栏"
                     x:Name="SidebarToggleBtn"
                     Width="32"
                     Height="32"
                     Padding="0"
                     Click="SidebarToggleBtn_Click"
-                    CornerRadius="6"
+                    CornerRadius="4"
                     Style="{StaticResource SubtleButtonStyle}"
                     ToolTipService.ToolTip="折叠 / 展开曲库侧栏">
                     <FontIcon FontSize="14" Glyph="&#xE700;" />
@@ -60,7 +60,7 @@
                 <TextBlock
                     Margin="2,0,0,0"
                     VerticalAlignment="Center"
-                    FontSize="13"
+                    FontSize="14"
                     FontWeight="SemiBold"
                     Text="Klang" />
             </StackPanel>
@@ -68,66 +68,85 @@
             <!-- 中间拖拽空白区 -->
             <Border Grid.Column="1" Background="Transparent" />
 
-            <!-- 右侧精炼工具胶囊组 (Qt 原版特性) -->
+            <!-- 右侧：歌词菜单 / 视图菜单 / 设置 -->
             <StackPanel
                 Grid.Column="2"
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
-                Spacing="6">
-                <Button
-                    x:Name="DesktopLyricBtn"
-                    Height="28"
-                    Padding="10,0,10,0"
-                    Click="DesktopLyricBtn_Click"
-                    CornerRadius="6"
+                Spacing="4">
+                <Button AutomationProperties.Name="歌词相关功能"
+                    x:Name="LyricMenuBtn"
+                    Height="32"
+                    Padding="10,0,8,0"
+                    CornerRadius="4"
                     Style="{StaticResource SubtleButtonStyle}"
-                    ToolTipService.ToolTip="桌面歌词 (Ctrl+D)">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <FontIcon FontSize="12" Glyph="&#xE7F4;" />
-                        <TextBlock FontSize="12" Text="桌面词" />
+                    ToolTipService.ToolTip="歌词相关功能">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE8F1;" />
+                        <TextBlock FontSize="12" Text="歌词" />
+                        <FontIcon FontSize="12" Glyph="&#xE70D;" />
                     </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutSubItem Text="副行显示">
+                                <RadioMenuFlyoutItem x:Name="SubTransItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="trans" Text="翻译" />
+                                <RadioMenuFlyoutItem x:Name="SubRomaItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="roma" Text="罗马音" />
+                                <RadioMenuFlyoutItem x:Name="SubBothItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="both" Text="翻译 + 罗马音" />
+                                <RadioMenuFlyoutItem x:Name="SubOffItem" Click="SubModeItem_Click" GroupName="SubMode" Tag="off" Text="关闭" />
+                            </MenuFlyoutSubItem>
+                            <ToggleMenuFlyoutItem
+                                x:Name="DesktopLyricItem"
+                                Click="DesktopLyricBtn_Click"
+                                KeyboardAcceleratorTextOverride="Ctrl+D"
+                                Text="桌面歌词" />
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem
+                                Click="PosterBtn_Click"
+                                Text="生成歌词海报…" />
+                        </MenuFlyout>
+                    </Button.Flyout>
                 </Button>
 
-                <Button
-                    x:Name="MiniPlayerBtn"
-                    Height="28"
-                    Padding="10,0,10,0"
-                    Click="MiniPlayerBtn_Click"
-                    CornerRadius="6"
+                <Button AutomationProperties.Name="窗口与显示模式"
+                    x:Name="ViewMenuBtn"
+                    Height="32"
+                    Padding="10,0,8,0"
+                    CornerRadius="4"
                     Style="{StaticResource SubtleButtonStyle}"
-                    ToolTipService.ToolTip="迷你窗口 (Ctrl+M)">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <FontIcon FontSize="12" Glyph="&#xE8A7;" />
-                        <TextBlock FontSize="12" Text="迷你窗" />
+                    ToolTipService.ToolTip="窗口与显示模式">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE71D;" />
+                        <TextBlock FontSize="12" Text="视图" />
+                        <FontIcon FontSize="12" Glyph="&#xE70D;" />
                     </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem
+                                Click="ImmersiveBtn_Click"
+                                KeyboardAcceleratorTextOverride="Ctrl+I"
+                                Text="沉浸模式" />
+                            <MenuFlyoutItem
+                                Click="MiniPlayerBtn_Click"
+                                KeyboardAcceleratorTextOverride="Ctrl+M"
+                                Text="迷你窗口" />
+                            <MenuFlyoutItem
+                                Click="FullscreenBtn_Click"
+                                KeyboardAcceleratorTextOverride="F11"
+                                Text="全屏" />
+                        </MenuFlyout>
+                    </Button.Flyout>
                 </Button>
 
-                <Button
-                    x:Name="FullscreenBtn"
-                    Height="28"
-                    Padding="10,0,10,0"
-                    Click="FullscreenBtn_Click"
-                    CornerRadius="6"
-                    Style="{StaticResource SubtleButtonStyle}"
-                    ToolTipService.ToolTip="全屏模式 (F11)">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <FontIcon FontSize="12" Glyph="&#xE740;" />
-                        <TextBlock FontSize="12" Text="全屏" />
-                    </StackPanel>
-                </Button>
-
-                <Button
+                <Button AutomationProperties.Name="偏好设置"
                     x:Name="SettingsBtn"
-                    Height="28"
-                    Padding="10,0,10,0"
+                    Width="34"
+                    Height="32"
+                    Padding="0"
                     Click="SettingsBtn_Click"
-                    CornerRadius="6"
+                    CornerRadius="4"
                     Style="{StaticResource SubtleButtonStyle}"
                     ToolTipService.ToolTip="偏好设置">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <FontIcon FontSize="12" Glyph="&#xE713;" />
-                        <TextBlock FontSize="12" Text="设置" />
-                    </StackPanel>
+                    <FontIcon FontSize="14" Glyph="&#xE713;" />
                 </Button>
             </StackPanel>
         </Grid>
@@ -140,9 +159,40 @@
             </Grid.ColumnDefinitions>
 
             <!-- 左侧：NavigationPane (曲库分类、即时搜索、排序、歌曲列表) -->
-            <controls:NavigationPane
-                x:Name="LeftNavPane"
-                Grid.Column="0" />
+            <Grid
+                x:Name="SidebarHost"
+                Grid.Column="0"
+                SizeChanged="SidebarHost_SizeChanged">
+                <controls:NavigationPane
+                    x:Name="LeftNavPane"
+                    HorizontalAlignment="Left" />
+
+                <!-- 折叠后的竖排图标栏 -->
+                <StackPanel
+                    x:Name="SidebarRail"
+                    Width="56"
+                    Padding="8,12,8,12"
+                    HorizontalAlignment="Left"
+                    Spacing="4"
+                    Visibility="Collapsed">
+                    <Button x:Name="RailAll" Width="40" Height="40" Padding="0" AutomationProperties.Name="全部" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="all" ToolTipService.ToolTip="全部">
+                        <FontIcon FontSize="16" Glyph="&#xE8F1;" />
+                    </Button>
+                    <Button x:Name="RailFav" Width="40" Height="40" Padding="0" AutomationProperties.Name="喜欢" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="fav" ToolTipService.ToolTip="喜欢">
+                        <FontIcon FontSize="16" Glyph="&#xEB51;" />
+                    </Button>
+                    <Button x:Name="RailPlaylists" Width="40" Height="40" Padding="0" AutomationProperties.Name="歌单" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="playlists" ToolTipService.ToolTip="歌单">
+                        <FontIcon FontSize="16" Glyph="&#xE8FD;" />
+                    </Button>
+                    <Button x:Name="RailCloud" Width="40" Height="40" Padding="0" AutomationProperties.Name="云端" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="netease" ToolTipService.ToolTip="云端">
+                        <FontIcon FontSize="16" Glyph="&#xE753;" />
+                    </Button>
+                    <Rectangle Height="1" Margin="4,6,4,6" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                    <Button Width="40" Height="40" Padding="0" AutomationProperties.Name="搜索" Click="RailSearch_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="搜索 (Ctrl+F)">
+                        <FontIcon FontSize="16" Glyph="&#xE721;" />
+                    </Button>
+                </StackPanel>
+            </Grid>
 
             <!-- 右侧舞台：stage_container (VinylCoverCard + LyricsStageControl) -->
             <Grid
@@ -171,5 +221,11 @@
         <controls:TransportBar
             x:Name="BottomTransportBar"
             Grid.Row="2" />
+
+        <!-- 沉浸式全屏层（覆盖整个窗口） -->
+        <controls:ImmersiveView
+            x:Name="ImmersiveLayer"
+            Grid.RowSpan="3"
+            Visibility="Collapsed" />
     </Grid>
 </Window>

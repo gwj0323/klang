@@ -15,7 +15,39 @@ public class LyricsService
     private static readonly Regex LrcTagRegex = new(@"\[(\d{1,2}):(\d{1,2}(?:\.\d{1,3})?)\]", RegexOptions.Compiled);
     private static readonly Regex HeaderNoiseRegex = new(@"^\[(ti|ar|al|by|offset|kana|re|ve):.*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public record RawLrcEntry(double Time, string Text);
+    public record RawLrcEntry(double Time, string Text, List<LyricWord>? Words = null);
+
+    private static readonly Regex WordTagRegex = new(@"<(\d{1,2}):(\d{1,2}(?:\.\d{1,3})?)>", RegexOptions.Compiled);
+
+    /// <summary>解析增强 LRC 的逐字标记：&lt;mm:ss.xx&gt;字&lt;mm:ss.xx&gt;字…，返回纯文本与逐字列表。</summary>
+    private static (string Text, List<LyricWord>? Words) ExtractWords(string raw)
+    {
+        var tags = WordTagRegex.Matches(raw);
+        if (tags.Count == 0) return (raw, null);
+
+        double TimeOf(Match m) =>
+            double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 60.0 +
+            double.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
+
+        var words = new List<LyricWord>();
+        for (int i = 0; i < tags.Count; i++)
+        {
+            int start = tags[i].Index + tags[i].Length;
+            int end = i + 1 < tags.Count ? tags[i + 1].Index : raw.Length;
+            string seg = raw.Substring(start, end - start);
+            double t0 = TimeOf(tags[i]);
+            double t1 = i + 1 < tags.Count ? TimeOf(tags[i + 1]) : t0 + 0.5;
+            if (seg.Length == 0) continue; // 末尾的结束标记
+            if (string.IsNullOrWhiteSpace(seg) && words.Count > 0)
+            {
+                words[^1].Text += seg;
+                continue;
+            }
+            words.Add(new LyricWord(t0, Math.Max(t1, t0 + 0.05), seg));
+        }
+        string text = string.Concat(words.Select(w => w.Text)).Trim();
+        return (text, words.Count > 0 ? words : null);
+    }
 
     public List<LyricLine> LoadLyrics(string? audioFilePath)
     {
@@ -69,7 +101,7 @@ public class LyricsService
         return CreateEmptyPlaceholder("暂无歌词");
     }
 
-    public List<LyricLine> ParseLrc(string primaryLrc, string? transLrc = null)
+    public List<LyricLine> ParseLrc(string primaryLrc, string? transLrc = null, string? romaLrc = null)
     {
         var primaryEntries = ParseRawEntries(primaryLrc);
         if (primaryEntries.Count == 0)
@@ -79,7 +111,14 @@ public class LyricsService
 
         var transEntries = !string.IsNullOrWhiteSpace(transLrc) ? ParseRawEntries(transLrc) : new List<RawLrcEntry>();
 
-        var rawList = new List<(double Time, string Text, string Sub)>();
+        var romaEntries = !string.IsNullOrWhiteSpace(romaLrc) ? ParseRawEntries(romaLrc) : new List<RawLrcEntry>();
+        string FindNear(List<RawLrcEntry> list, double t) => list
+            .Where(te => Math.Abs(te.Time - t) <= 0.8)
+            .OrderBy(te => Math.Abs(te.Time - t))
+            .Select(te => te.Text)
+            .FirstOrDefault() ?? "";
+
+        var rawList = new List<(double Time, string Text, string Sub, string Roma, List<LyricWord>? Words)>();
         foreach (var entry in primaryEntries)
         {
             double t = entry.Time;
@@ -107,7 +146,8 @@ public class LyricsService
                 }
             }
 
-            rawList.Add((t, mainText, subText));
+            string romaText = romaEntries.Count > 0 ? FindNear(romaEntries, t) : "";
+            rawList.Add((t, mainText, subText, romaText, entry.Words));
         }
 
         var result = new List<LyricLine>();
@@ -123,7 +163,9 @@ public class LyricsService
                 Time = item.Time,
                 EndTime = endTime,
                 Text = item.Text,
-                Sub = item.Sub
+                Sub = item.Sub,
+                Roma = item.Roma,
+                Words = item.Words
             });
         }
 
@@ -145,7 +187,7 @@ public class LyricsService
             var matches = LrcTagRegex.Matches(line);
             if (matches.Count == 0) continue;
 
-            string lyricText = LrcTagRegex.Replace(line, "").Trim();
+            var (lyricText, words) = ExtractWords(LrcTagRegex.Replace(line, "").Trim());
 
             foreach (Match match in matches)
             {
@@ -153,7 +195,7 @@ public class LyricsService
                     double.TryParse(match.Groups[2].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double seconds))
                 {
                     double totalSec = minutes * 60.0 + seconds;
-                    entries.Add(new RawLrcEntry(totalSec, lyricText));
+                    entries.Add(new RawLrcEntry(totalSec, lyricText, words));
                 }
             }
         }

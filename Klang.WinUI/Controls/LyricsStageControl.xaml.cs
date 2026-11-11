@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.ObjectModel;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
@@ -30,12 +30,53 @@ public sealed partial class LyricsStageControl : UserControl
 
     public event EventHandler<double>? SeekRequested;
 
+    private double _lyricFontSize = 22;
+    public const int MinLyricFontSize = 14;
+    public const int MaxLyricFontSize = 40;
+
+    /// <summary>歌词字号（主歌词，14–40）。修改后立即应用到当前所有歌词行。</summary>
+    public int LyricFontSize
+    {
+        get => (int)_lyricFontSize;
+        set
+        {
+            _lyricFontSize = Math.Clamp(value, MinLyricFontSize, MaxLyricFontSize);
+            foreach (var l in Lyrics) l.MainFontSize = _lyricFontSize;
+            if (_lastActiveIndex >= 0) CalculateTargetScroll(_lastActiveIndex);
+        }
+    }
+
+    private string _subMode = "trans";
+
+    /// <summary>是否显示上下羽化遮罩（沉浸模式的彩色背景上要关掉）。</summary>
+    public bool ShowFades
+    {
+        set
+        {
+            // 固定颜色的遮罩与半透明材质背景不协调，已弃用；歌词行本身按距离渐隐
+        }
+    }
+
+    /// <summary>副行显示：trans 翻译 | roma 罗马音 | both 两者 | off 关闭。</summary>
+    public string SubMode
+    {
+        get => _subMode;
+        set
+        {
+            _subMode = value;
+            foreach (var l in Lyrics) l.SubMode = value;
+            if (_lastActiveIndex >= 0) CalculateTargetScroll(_lastActiveIndex);
+        }
+    }
+
     public LyricsStageControl()
     {
         InitializeComponent();
         LyricsItemsControl.ItemsSource = Lyrics;
         UpdateEmptyState();
         UpdateFadeBrushes();
+        UiAnimations.AttachFade(ResumeCenterBtn, 6f);
+        UiAnimations.AttachFade(EmptyLyricsPanel, 6f);
 
         this.ActualThemeChanged += (s, e) => UpdateFadeBrushes();
         this.SizeChanged += (s, e) =>
@@ -131,9 +172,32 @@ public sealed partial class LyricsStageControl : UserControl
         var loaded = LyricsService.Instance.LoadLyrics(audioFilePath);
         foreach (var l in loaded)
         {
+            l.MainFontSize = _lyricFontSize;
+            l.SubMode = _subMode;
             Lyrics.Add(l);
         }
 
+        UpdateEmptyState();
+        _currentScrollY = 0;
+        _targetScrollY = 0;
+        LyricsScrollViewer.ChangeView(null, 0, null, true);
+    }
+
+    /// <summary>直接载入已解析好的歌词（云端歌词）。</summary>
+    public void LoadLyricLines(IList<LyricLine> lines)
+    {
+        _lastActiveIndex = -2;
+        _scrollVel = 0;
+        _isUserScrolling = false;
+        ResumeCenterBtn.Visibility = Visibility.Collapsed;
+
+        Lyrics.Clear();
+        foreach (var l in lines)
+        {
+            l.MainFontSize = _lyricFontSize;
+            l.SubMode = _subMode;
+            Lyrics.Add(l);
+        }
         UpdateEmptyState();
         _currentScrollY = 0;
         _targetScrollY = 0;
@@ -145,9 +209,25 @@ public sealed partial class LyricsStageControl : UserControl
         if (Lyrics.Count == 0) return;
 
         int activeIndex = LyricsService.Instance.FindActiveIndex(Lyrics, currentTimeSeconds);
+
+        // 逐字高亮：当前行随时间推进（每次 tick 更新）
+        if (activeIndex >= 0 && Lyrics[activeIndex].Words is { } words)
+        {
+            int played = 0;
+            while (played < words.Count && words[played].Start <= currentTimeSeconds) played++;
+            Lyrics[activeIndex].PlayedWords = played;
+        }
+
         if (activeIndex == _lastActiveIndex) return;
 
         _lastActiveIndex = activeIndex;
+
+        // 换行时：已过的行全部点亮，未到的行清零
+        for (int i = 0; i < Lyrics.Count; i++)
+        {
+            if (i == activeIndex || Lyrics[i].Words is not { } w) continue;
+            Lyrics[i].PlayedWords = 0;
+        }
 
         // 重新分配各行目标状态（距离当前行的指数衰减权重）
         for (int i = 0; i < Lyrics.Count; i++)

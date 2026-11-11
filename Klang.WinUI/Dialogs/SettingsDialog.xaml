@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <ContentDialog
     x:Class="Klang_WinUI.Dialogs.SettingsDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -7,74 +7,327 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     Title="设置"
     CloseButtonText="完成"
+    Style="{StaticResource DefaultContentDialogStyle}"
     DefaultButton="Close"
     mc:Ignorable="d">
 
-    <StackPanel Width="400" Spacing="14">
-        <!-- 材质设置 -->
-        <Border
-            Padding="14"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+    <ScrollViewer MaxHeight="520" VerticalScrollBarVisibility="Auto">
+        <StackPanel Width="420" Margin="0,0,12,0" Spacing="10">
 
-                <StackPanel Spacing="2">
-                    <TextBlock FontWeight="Medium" Text="背景材质" />
-                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="云母 (Mica) / 亚克力 (Acrylic)" />
+            <!-- 外观：主题 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="主题" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="浅色 / 深色 / 跟随系统" />
+                    </StackPanel>
+                    <ComboBox
+                        x:Name="ThemeComboBox"
+                        Grid.Column="1"
+                        Width="140"
+                        SelectionChanged="ThemeComboBox_SelectionChanged">
+                        <ComboBoxItem Content="跟随系统" Tag="system" />
+                        <ComboBoxItem Content="浅色" Tag="light" />
+                        <ComboBoxItem Content="深色" Tag="dark" />
+                    </ComboBox>
+                </Grid>
+            </Border>
+
+            <!-- 外观：背景材质 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="背景材质" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="云母 (Mica) / 亚克力 (Acrylic)" />
+                    </StackPanel>
+                    <ComboBox
+                        x:Name="BackdropComboBox"
+                        Grid.Column="1"
+                        Width="140"
+                        SelectionChanged="BackdropComboBox_SelectionChanged">
+                        <ComboBoxItem Content="云母 (Mica)" Tag="mica" />
+                        <ComboBoxItem Content="亚克力 (Acrylic)" Tag="acrylic" />
+                        <ComboBoxItem Content="标准纯色" Tag="solid" />
+                    </ComboBox>
+                </Grid>
+            </Border>
+
+            <!-- 歌词字号 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="歌词字号" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="快捷键 Ctrl + / Ctrl - 也可调节" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                        <Slider
+                            x:Name="LyricSizeSlider"
+                            Width="110"
+                            VerticalAlignment="Center"
+                            Maximum="40"
+                            Minimum="14"
+                            ValueChanged="LyricSizeSlider_ValueChanged" />
+                        <TextBlock
+                            x:Name="LyricSizeText"
+                            Width="28"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            TextAlignment="Right" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- WASAPI 缓冲 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="越大越不易卡顿，下一首开始生效" />
+                    </StackPanel>
+                    <ComboBox
+                        x:Name="LatencyComboBox"
+                        Grid.Column="1"
+                        Width="140"
+                        SelectionChanged="LatencyComboBox_SelectionChanged">
+                        <ComboBoxItem Content="30 ms (最低延迟)" Tag="30" />
+                        <ComboBoxItem Content="50 ms (默认)" Tag="50" />
+                        <ComboBoxItem Content="100 ms" Tag="100" />
+                        <ComboBoxItem Content="200 ms (最稳)" Tag="200" />
+                    </ComboBox>
+                </Grid>
+            </Border>
+
+            <!-- 输出设备 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="输出设备" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="下一首开始生效" />
+                    </StackPanel>
+                    <ComboBox
+                        x:Name="DeviceComboBox"
+                        Grid.Column="1"
+                        Width="200"
+                        SelectionChanged="DeviceComboBox_SelectionChanged" />
+                </Grid>
+            </Border>
+
+            <!-- ReplayGain -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="回放增益 (ReplayGain)" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按标签统一不同歌曲的响度" />
+                    </StackPanel>
+                    <ToggleSwitch
+                        x:Name="ReplayGainSwitch"
+                        Grid.Column="1"
+                        OffContent="关"
+                        OnContent="开"
+                        Toggled="ReplayGainSwitch_Toggled" />
+                </Grid>
+            </Border>
+
+            <!-- 睡眠定时 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="睡眠定时" />
+                        <TextBlock
+                            x:Name="SleepStatusText"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="到点自动暂停播放" />
+                    </StackPanel>
+                    <ComboBox
+                        x:Name="SleepComboBox"
+                        Grid.Column="1"
+                        Width="140"
+                        SelectionChanged="SleepComboBox_SelectionChanged">
+                        <ComboBoxItem Content="关闭" Tag="0" />
+                        <ComboBoxItem Content="15 分钟" Tag="15" />
+                        <ComboBoxItem Content="30 分钟" Tag="30" />
+                        <ComboBoxItem Content="45 分钟" Tag="45" />
+                        <ComboBoxItem Content="60 分钟" Tag="60" />
+                        <ComboBoxItem Content="90 分钟" Tag="90" />
+                    </ComboBox>
+                </Grid>
+            </Border>
+
+            <!-- 曲库管理 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <TextBlock FontWeight="Medium" Text="曲库" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="已添加的音乐文件夹" />
+                    <StackPanel x:Name="FoldersPanel" Spacing="4" />
+                    <TextBlock
+                        x:Name="LibraryStatusText"
+                        FontSize="12"
+                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="RescanBtn" Click="RescanBtn_Click" Content="重新扫描" />
+                        <Button x:Name="ClearLibraryBtn" Click="ClearLibraryBtn_Click" Content="清空曲库" />
+                    </StackPanel>
                 </StackPanel>
+            </Border>
 
-                <ComboBox
-                    x:Name="BackdropComboBox"
-                    Grid.Column="1"
-                    Width="140"
-                    SelectedIndex="0"
-                    SelectionChanged="BackdropComboBox_SelectionChanged">
-                    <ComboBoxItem Content="云母 (Mica)" />
-                    <ComboBoxItem Content="亚克力 (Acrylic)" />
-                    <ComboBoxItem Content="标准纯色" />
-                </ComboBox>
-            </Grid>
-        </Border>
+            <!-- 封面与信息补全 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock FontWeight="Medium" Text="自动补全封面与歌词" />
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="本地歌曲缺少封面、专辑、歌词时，用歌名和歌手在网易云搜索补全。会联网发送歌名和歌手。"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ToggleSwitch
+                        x:Name="AutoMetaSwitch"
+                        Grid.Column="1"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="AutoMetaSwitch_Toggled" />
+                </Grid>
+            </Border>
 
-        <!-- WASAPI 缓冲 -->
-        <Border
-            Padding="14"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Spacing="2">
-                    <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲" />
-                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="低延迟共享缓冲模式 (50ms)" />
+            <!-- 网易云缓存 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <TextBlock FontWeight="Medium" Text="网易云缓存" />
+                    <TextBlock
+                        x:Name="CacheInfoText"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="缓存上限（超出后淘汰最久未听的）" />
+                        <ComboBox
+                            x:Name="CacheLimitBox"
+                            Grid.Column="1"
+                            Width="140"
+                            SelectionChanged="CacheLimitBox_SelectionChanged">
+                            <ComboBoxItem Content="512 MB" Tag="512" />
+                            <ComboBoxItem Content="1 GB" Tag="1024" />
+                            <ComboBoxItem Content="2 GB" Tag="2048" />
+                            <ComboBoxItem Content="5 GB" Tag="5120" />
+                            <ComboBoxItem Content="10 GB" Tag="10240" />
+                        </ComboBox>
+                    </Grid>
+                    <Button x:Name="ClearCacheBtn" Click="ClearCacheBtn_Click" Content="清理缓存" />
                 </StackPanel>
+            </Border>
 
-                <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="开启" OffContent="关闭" />
-            </Grid>
-        </Border>
-
-        <!-- 关于信息 -->
-        <Border
-            Padding="14"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="8">
-            <StackPanel Spacing="4">
-                <TextBlock FontWeight="SemiBold" Text="Klang" />
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="基于 Windows App SDK (.NET 10) 的现代音乐播放器" />
-            </StackPanel>
-        </Border>
-    </StackPanel>
+            <!-- 关于信息 -->
+            <Border
+                Padding="14"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="4">
+                    <TextBlock FontWeight="SemiBold" Text="Klang" />
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="基于 Windows App SDK (.NET 10) 的现代音乐播放器" />
+                    <TextBlock
+                        x:Name="StatePathText"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        IsTextSelectionEnabled="True"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
 </ContentDialog>

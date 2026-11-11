@@ -1,169 +1,158 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using NAudio.Wave;
 using Windows.Graphics;
-using WinRT.Interop;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
 
 namespace Klang_WinUI.Views;
 
+/// <summary>
+/// 桌面歌词：置顶透明悬浮窗，只显示一张半透明深色卡片。
+/// 当前句逐字高亮，下面一行是译文（没有译文时显示下一句）；鼠标移入才浮现工具栏。
+/// </summary>
 public sealed partial class DesktopLyricWindow : Window
 {
-    [DllImport("user32.dll")]
-    private static extern bool ReleaseCapture();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
-
-    private const int WM_NCLBUTTONDOWN = 0xA1;
-    private const int HTCAPTION = 0x2;
-
-    private readonly IntPtr _hwnd;
     private IList<LyricLine> _lyrics = Array.Empty<LyricLine>();
-    private int _lastActiveIndex = -1;
+    private TrackItem? _track;
+    private int _lastActiveIndex = -2;
 
     public event EventHandler? PrevRequested;
     public event EventHandler? NextRequested;
     public event EventHandler? ClosedByUser;
 
+    private static AppState State => StateService.Instance.State;
+
     public DesktopLyricWindow()
     {
         InitializeComponent();
+        Title = "桌面歌词";
 
-        _hwnd = WindowNative.GetWindowHandle(this);
+        // 整窗亚克力材质 + 深色着色，圆角由系统绘制
+        try { SystemBackdrop = new DesktopAcrylicBackdrop(); } catch { }
 
-        // 配置始终置顶无边框悬浮窗
-        var presenter = OverlappedPresenter.Create();
-        presenter.IsAlwaysOnTop = true;
-        presenter.IsResizable = false;
-        presenter.SetBorderAndTitleBar(hasBorder: false, hasTitleBar: false);
-        AppWindow.SetPresenter(presenter);
-
-        const int winWidth = 740;
-        const int winHeight = 114;
-        AppWindow.Resize(new SizeInt32(winWidth, winHeight));
-
-        // 默认定位在主屏幕底部正中央偏上
-        var displayArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary);
-        if (displayArea != null)
+        // 宽度随显示器：最宽 1000 DIP，至少 560
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+        int width = area == null ? 880 : Math.Clamp((int)(area.WorkArea.Width * 0.55), 560, 1000);
+        WindowHelpers.SetupOverlay(this, width, 124);
+        WindowHelpers.Place(AppWindow, State.DesktopLyricX, State.DesktopLyricY,
+            (work, size) => new PointInt32(work.X + (work.Width - size.Width) / 2, work.Y + work.Height - size.Height - 72));
+        WindowHelpers.TrackPosition(AppWindow, (x, y) =>
         {
-            int startX = displayArea.WorkArea.X + (displayArea.WorkArea.Width - winWidth) / 2;
-            int startY = displayArea.WorkArea.Y + displayArea.WorkArea.Height - winHeight - 64;
-            AppWindow.Move(new PointInt32(startX, startY));
-        }
+            State.DesktopLyricX = x;
+            State.DesktopLyricY = y;
+            StateService.Instance.RequestSave();
+        });
+        WindowHelpers.EnableDrag(this, WindowCard);
 
-        // 挂载鼠标全局拖拽移动窗口 (点按卡片任意空白区域即可拖动)
-        WindowCard.PointerPressed += WindowCard_PointerPressed;
+        MainLine.FontSize = Math.Clamp(State.DesktopLyricFontSize, 18, 56);
+        SetSingle("Klang");
 
-        // 同步播放状态图标
+        Toolbar.OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(180) };
         UpdatePlayState(AudioEngineService.Instance.IsPlaying);
-        AudioEngineService.Instance.StateChanged += (state) =>
-        {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                UpdatePlayState(state == PlaybackState.Playing);
-            });
-        };
+        AudioEngineService.Instance.StateChanged += state =>
+            DispatcherQueue.TryEnqueue(() => UpdatePlayState(state == PlaybackState.Playing));
     }
 
-    private void WindowCard_PointerPressed(object sender, PointerRoutedEventArgs e)
+    private void Root_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
-        // 若点击的是子控件按钮，则不触发窗口拖拽
-        if (e.OriginalSource is DependencyObject dep)
-        {
-            var cur = dep;
-            while (cur != null && cur != WindowCard)
-            {
-                if (cur is Microsoft.UI.Xaml.Controls.Button) return;
-                cur = VisualTreeHelper.GetParent(cur);
-            }
-        }
+        Toolbar.Opacity = 1;
+        Toolbar.IsHitTestVisible = true;
+    }
 
-        ReleaseCapture();
-        SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+    private void Root_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        Toolbar.Opacity = 0;
+        Toolbar.IsHitTestVisible = false;
+    }
+
+    #region 歌词显示
+
+    private void SetSingle(string text)
+    {
+        MainLine.Line = new LyricLine { Text = text };
+        SubLine.Text = "";
+        SubLine.Visibility = Visibility.Collapsed;
+    }
+
+    private bool HasRealLyrics => _lyrics.Count > 0 && !(_lyrics.Count == 1 && _lyrics[0].EndTime >= 9000);
+
+    /// <summary>没有歌词时显示“歌名 — 歌手”。</summary>
+    private void ShowTrackInfo()
+    {
+        if (_track == null) SetSingle("Klang");
+        else SetSingle($"{_track.Title} — {_track.Artist}");
+    }
+
+    public void UpdateTrack(TrackItem? track)
+    {
+        _track = track;
+        if (!HasRealLyrics) ShowTrackInfo();
     }
 
     public void UpdateLyrics(IList<LyricLine> lyrics)
     {
         _lyrics = lyrics;
-        _lastActiveIndex = -1;
-        if (_lyrics.Count == 0)
-        {
-            PrimaryLyricText.Text = "Klang 极简发烧音乐";
-            SubLyricText.Visibility = Visibility.Collapsed;
-        }
+        _lastActiveIndex = -2;
+        if (!HasRealLyrics) ShowTrackInfo();
     }
 
     public void UpdatePlaybackTime(double seconds)
     {
-        if (_lyrics.Count == 0) return;
+        if (!HasRealLyrics) return;
 
-        int activeIdx = LyricsService.Instance.FindActiveIndex(_lyrics, seconds);
-        if (activeIdx != _lastActiveIndex)
+        int idx = LyricsService.Instance.FindActiveIndex(_lyrics, seconds);
+        if (idx == _lastActiveIndex) return;
+        _lastActiveIndex = idx;
+
+        if (idx < 0)
         {
-            _lastActiveIndex = activeIdx;
-            if (activeIdx >= 0 && activeIdx < _lyrics.Count)
-            {
-                PrimaryLyricText.Text = _lyrics[activeIdx].Text;
-                if (_lyrics[activeIdx].HasSub)
-                {
-                    SubLyricText.Text = _lyrics[activeIdx].Sub;
-                    SubLyricText.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    SubLyricText.Visibility = Visibility.Collapsed;
-                }
-            }
+            // 还没唱到第一句：先显示歌名
+            ShowTrackInfo();
+            return;
         }
+
+        var line = _lyrics[idx];
+        MainLine.Line = line;
+
+        string sub = line.HasSub ? line.DisplaySub : "";
+        if (string.IsNullOrWhiteSpace(sub) && idx + 1 < _lyrics.Count) sub = _lyrics[idx + 1].Text;
+        SubLine.Text = sub.Replace('\n', ' ');
+        SubLine.Visibility = string.IsNullOrWhiteSpace(sub) ? Visibility.Collapsed : Visibility.Visible;
     }
+
+    #endregion
+
+    #region 按钮
 
     public void UpdatePlayState(bool isPlaying)
     {
-        PlayPauseIcon.Glyph = isPlaying ? "\uE769" : "\uE768";
-        PlayPauseBtn.SetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty, isPlaying ? "暂停" : "播放");
+        PlayPauseIcon.Glyph = isPlaying ? "" : "";
     }
 
-    private void PrevBtn_Click(object sender, RoutedEventArgs e)
+    private void PrevBtn_Click(object sender, RoutedEventArgs e) => PrevRequested?.Invoke(this, EventArgs.Empty);
+    private void NextBtn_Click(object sender, RoutedEventArgs e) => NextRequested?.Invoke(this, EventArgs.Empty);
+    private void PlayPauseBtn_Click(object sender, RoutedEventArgs e) => AudioEngineService.Instance.TogglePlayPause();
+
+    private void ChangeFont(int delta)
     {
-        PrevRequested?.Invoke(this, EventArgs.Empty);
+        int size = Math.Clamp((int)MainLine.FontSize + delta, 18, 56);
+        MainLine.FontSize = size;
+        State.DesktopLyricFontSize = size;
+        StateService.Instance.RequestSave();
     }
 
-    private void PlayPauseBtn_Click(object sender, RoutedEventArgs e)
-    {
-        AudioEngineService.Instance.TogglePlayPause();
-    }
-
-    private void NextBtn_Click(object sender, RoutedEventArgs e)
-    {
-        NextRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void FontDecBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (PrimaryLyricText.FontSize > 14)
-        {
-            PrimaryLyricText.FontSize -= 2;
-        }
-    }
-
-    private void FontIncBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (PrimaryLyricText.FontSize < 34)
-        {
-            PrimaryLyricText.FontSize += 2;
-        }
-    }
+    private void FontDecBtn_Click(object sender, RoutedEventArgs e) => ChangeFont(-2);
+    private void FontIncBtn_Click(object sender, RoutedEventArgs e) => ChangeFont(2);
 
     private void CloseBtn_Click(object sender, RoutedEventArgs e)
     {
         AppWindow.Hide();
         ClosedByUser?.Invoke(this, EventArgs.Empty);
     }
+
+    #endregion
 }

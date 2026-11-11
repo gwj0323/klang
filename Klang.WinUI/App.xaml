@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <Application
     x:Class="Klang_WinUI.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -13,27 +13,7 @@
             <!-- 统一全局字体：告别亚像素模糊渲染，确保 DirectWrite 清晰锐利 -->
             <FontFamily x:Key="ContentControlThemeFontFamily">Segoe UI Variable Text, Microsoft YaHei UI</FontFamily>
 
-            <!-- Nordic Sage 核心声学主题配色 (1:1 严格对标 Qt6 原版，告别 Windows 默认刺眼电光蓝) -->
-            <Color x:Key="SystemAccentColor">#6E8277</Color>
-            <Color x:Key="SystemAccentColorLight1">#7D9287</Color>
-            <Color x:Key="SystemAccentColorLight2">#8EA498</Color>
-            <Color x:Key="SystemAccentColorLight3">#ADC2B7</Color>
-            <Color x:Key="SystemAccentColorDark1">#5C6E64</Color>
-            <Color x:Key="SystemAccentColorDark2">#4B5A52</Color>
-            <Color x:Key="SystemAccentColorDark3">#3B4640</Color>
-
-            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#6E8277" />
-            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#7D9287" />
-            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#8EA498" />
-            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#5C6E64" />
-
-            <!-- 滑块高雅定制：细轨与浅色带边框旋钮 -->
-            <SolidColorBrush x:Key="SliderTrackValueFill" Color="#6E8277" />
-            <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#7D9287" />
-            <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#5C6E64" />
-            <SolidColorBrush x:Key="SliderThumbBackground" Color="#FAF9F6" />
-            <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="#EDEAE2" />
+            <!-- 强调色（按钮、滑块、选中态等）不再覆盖，直接跟随 Windows 系统设置的强调色 -->
         </ResourceDictionary>
     </Application.Resources>
 </Application>

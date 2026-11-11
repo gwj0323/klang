@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace Klang_WinUI.Services.Dsp;
@@ -42,9 +42,7 @@ public class NordicDspProcessor
     private int _combIdx1, _combIdx2, _allpassIdx;
 
     // 7. 实时 16 频段能量频谱 (供界面动画真实驱动)
-    private readonly float[] _spectrumBands = new float[16];
-    private readonly float[] _bandEnergies = new float[16];
-    private int _energySampleCount = 0;
+    private readonly SpectrumAnalyzer _analyzer = new();
 
     public NordicDspProcessor(double sampleRate = 44100.0)
     {
@@ -92,7 +90,7 @@ public class NordicDspProcessor
             f.Reset();
         }
 
-        Array.Clear(_spectrumBands, 0, _spectrumBands.Length);
+        _analyzer.Clear();
     }
 
     public void SetGains(float[] gains)
@@ -158,15 +156,7 @@ public class NordicDspProcessor
     /// <summary>
     /// 获取当前 16 频段能量频谱 (0.0 ~ 1.0)
     /// </summary>
-    public float[] GetCurrentSpectrum()
-    {
-        var copy = new float[16];
-        lock (_spectrumBands)
-        {
-            Array.Copy(_spectrumBands, copy, 16);
-        }
-        return copy;
-    }
+    public float[] GetCurrentSpectrum() => _analyzer.Compute(_sampleRate);
 
     /// <summary>
     /// 处理单对立体声样本 (In-Place)
@@ -274,35 +264,6 @@ public class NordicDspProcessor
 
     private void AccumulateSpectrum(float left, float right)
     {
-        float mono = Math.Abs(left + right) * 0.5f;
-
-        // 简化 16 频段能量分配 (模拟真实频段加权)
-        _bandEnergies[_energySampleCount % 16] += mono;
-        _energySampleCount++;
-
-        if (_energySampleCount >= 512)
-        {
-            _energySampleCount = 0;
-            lock (_spectrumBands)
-            {
-                for (int i = 0; i < 16; i++)
-                {
-                    float avg = (_bandEnergies[i] / 32.0f);
-                    float normalized = Math.Clamp(avg * 2.4f, 0.0f, 1.0f);
-
-                    // 惯性阻尼平滑衰减
-                    if (normalized > _spectrumBands[i])
-                    {
-                        _spectrumBands[i] = _spectrumBands[i] * 0.35f + normalized * 0.65f;
-                    }
-                    else
-                    {
-                        _spectrumBands[i] = _spectrumBands[i] * 0.85f;
-                    }
-
-                    _bandEnergies[i] = 0;
-                }
-            }
-        }
+        _analyzer.Push((left + right) * 0.5f);
     }
 }

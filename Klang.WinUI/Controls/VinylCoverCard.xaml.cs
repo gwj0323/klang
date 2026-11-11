@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -9,7 +9,7 @@ namespace Klang_WinUI.Controls;
 
 public sealed partial class VinylCoverCard : UserControl
 {
-    private const int NUM_BARS = 20;
+    private const int NUM_BARS = 24;
 
     private readonly DispatcherTimer _turntableTimer = new();
     private readonly DispatcherTimer _slideAnimTimer = new();
@@ -21,7 +21,8 @@ public sealed partial class VinylCoverCard : UserControl
     private double _animProg = 1.0;
     private bool _isPlaying = false;
 
-    private readonly Border[] _bars = new Border[NUM_BARS];
+    private readonly Microsoft.UI.Xaml.Shapes.Rectangle[] _bars = new Microsoft.UI.Xaml.Shapes.Rectangle[NUM_BARS];
+    private readonly Microsoft.UI.Xaml.Shapes.Ellipse[] _dots = new Microsoft.UI.Xaml.Shapes.Ellipse[NUM_BARS];
     private readonly float[] _targets = new float[NUM_BARS];
     private readonly float[] _values = new float[NUM_BARS];
     private readonly float[] _peaks = new float[NUM_BARS];
@@ -32,11 +33,14 @@ public sealed partial class VinylCoverCard : UserControl
     {
         InitializeComponent();
 
-        _bars[0] = Bar0; _bars[1] = Bar1; _bars[2] = Bar2; _bars[3] = Bar3;
-        _bars[4] = Bar4; _bars[5] = Bar5; _bars[6] = Bar6; _bars[7] = Bar7;
-        _bars[8] = Bar8; _bars[9] = Bar9; _bars[10] = Bar10; _bars[11] = Bar11;
-        _bars[12] = Bar12; _bars[13] = Bar13; _bars[14] = Bar14; _bars[15] = Bar15;
-        _bars[16] = Bar16; _bars[17] = Bar17; _bars[18] = Bar18; _bars[19] = Bar19;
+        var accent = Application.Current.Resources["AccentFillColorDefaultBrush"] as Microsoft.UI.Xaml.Media.Brush;
+        for (int i = 0; i < NUM_BARS; i++)
+        {
+            _bars[i] = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = BAR_W, Height = 3, RadiusX = 1.7, RadiusY = 1.7, Fill = accent, Opacity = 0.35 };
+            _dots[i] = new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 2.8, Height = 2.8, Fill = accent, Opacity = 0, IsHitTestVisible = false };
+            SpectrumCanvas.Children.Add(_bars[i]);
+            SpectrumCanvas.Children.Add(_dots[i]);
+        }
 
         // 初始化频谱初始底衬状态
         for (int i = 0; i < NUM_BARS; i++)
@@ -106,6 +110,44 @@ public sealed partial class VinylCoverCard : UserControl
         _spectrumPhysicsTimer.Tick += (s, e) => StepSpectrumPhysics();
     }
 
+    private const double BAR_W = 3.4;
+    private const double CANVAS_H = 32.0;
+
+    private void SpectrumCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        for (int i = 0; i < NUM_BARS; i++) LayoutBar(i, _values[i], _peaks[i]);
+    }
+
+    /// <summary>按 Qt 版的几何绘制一根柱与它的峰值点：柱宽 3.4，间距 2.8~6.2，透明度随能量变化。</summary>
+    private void LayoutBar(int i, float val, float peak)
+    {
+        double w = SpectrumCanvas.ActualWidth;
+        if (w <= 0) return;
+        // 柱子铺满与封面等宽的区域，左右边缘与封面、文字对齐
+        double barW = Math.Clamp(w / NUM_BARS * 0.42, BAR_W, 5.0);
+        double gap = (w - NUM_BARS * barW) / (NUM_BARS - 1);
+        double x = i * (barW + gap);
+        double maxH = CANVAS_H - 6.0, baseY = CANVAS_H - 2.0;
+
+        double bh = Math.Max(2.8, val * maxH);
+        Canvas.SetLeft(_bars[i], x);
+        Canvas.SetTop(_bars[i], baseY - bh);
+        _bars[i].Height = bh;
+        _bars[i].Width = barW;
+        _bars[i].Opacity = 0.28 + 0.64 * val;
+
+        if (peak > val + 0.04f)
+        {
+            Canvas.SetLeft(_dots[i], x + barW / 2.0 - 1.4);
+            Canvas.SetTop(_dots[i], Math.Max(1.5, baseY - peak * maxH - 3.2) - 1.4);
+            _dots[i].Opacity = 0.45;
+        }
+        else
+        {
+            _dots[i].Opacity = 0;
+        }
+    }
+
     private void StepSpectrumPhysics()
     {
         var now = DateTime.UtcNow;
@@ -143,11 +185,7 @@ public sealed partial class VinylCoverCard : UserControl
 
             if (cur > 0.06f) hasActiveEnergy = true;
 
-            // 映射到 3px ~ 26px 的优雅跳动柱高度与能量半透明度
-            const double maxH = 26.0;
-            double h = Math.Max(3.0, cur * maxH);
-            _bars[i].Height = h;
-            _bars[i].Opacity = 0.28 + 0.68 * cur;
+            LayoutBar(i, cur, _peaks[i]);
         }
 
         if (!hasActiveEnergy && !_isPlaying)

@@ -1,7 +1,5 @@
 using System;
 using System.IO;
-using System.Runtime.InteropServices;
-using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
@@ -9,25 +7,15 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using NAudio.Wave;
 using Windows.Graphics;
-using WinRT.Interop;
 using Klang_WinUI.Models;
 using Klang_WinUI.Services;
 
 namespace Klang_WinUI.Views;
 
+/// <summary>迷你播放器：亚克力材质的小窗，封面 + 歌名歌手 + 当前歌词 + 进度与控制；鼠标移入才显示右上角按钮。</summary>
 public sealed partial class MiniPlayerWindow : Window
 {
-    [DllImport("user32.dll")]
-    private static extern bool ReleaseCapture();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
-
-    private const int WM_NCLBUTTONDOWN = 0xA1;
-    private const int HTCAPTION = 0x2;
-
-    private readonly IntPtr _hwnd;
-    private bool _isUserDraggingSlider = false;
+    private bool _isUserDraggingSlider;
 
     public event EventHandler? RestoreRequested;
     public event EventHandler? PrevRequested;
@@ -35,84 +23,54 @@ public sealed partial class MiniPlayerWindow : Window
     public event EventHandler<double>? SeekRequested;
     public event EventHandler? ClosedByUser;
 
+    private static AppState State => StateService.Instance.State;
+
     public MiniPlayerWindow()
     {
         InitializeComponent();
+        Title = "迷你播放器";
 
-        _hwnd = WindowNative.GetWindowHandle(this);
+        try { SystemBackdrop = new DesktopAcrylicBackdrop(); } catch { }
 
-        // 配置始终置顶无边框紧凑窗口
-        var presenter = OverlappedPresenter.Create();
-        presenter.IsAlwaysOnTop = true;
-        presenter.IsResizable = false;
-        presenter.SetBorderAndTitleBar(hasBorder: false, hasTitleBar: false);
-        AppWindow.SetPresenter(presenter);
-
-        const int winWidth = 368;
-        const int winHeight = 120;
-        AppWindow.Resize(new SizeInt32(winWidth, winHeight));
-
-        // 默认定位在主屏幕右下角
-        var displayArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary);
-        if (displayArea != null)
+        WindowHelpers.SetupOverlay(this, 420, 148);
+        WindowHelpers.Place(AppWindow, State.MiniX, State.MiniY,
+            (work, size) => new PointInt32(work.X + work.Width - size.Width - 32, work.Y + work.Height - size.Height - 32));
+        WindowHelpers.TrackPosition(AppWindow, (x, y) =>
         {
-            int startX = displayArea.WorkArea.X + displayArea.WorkArea.Width - winWidth - 36;
-            int startY = displayArea.WorkArea.Y + displayArea.WorkArea.Height - winHeight - 64;
-            AppWindow.Move(new PointInt32(startX, startY));
+            State.MiniX = x;
+            State.MiniY = y;
+            StateService.Instance.RequestSave();
+        });
+        WindowHelpers.EnableDrag(this, Card);
+
+        TopButtons.OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(180) };
+
+        // 滑块拖动：松开时才跳转
+        MiniTimelineSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((s, e) => _isUserDraggingSlider = true), true);
+        void EndDrag(object s, PointerRoutedEventArgs e)
+        {
+            if (!_isUserDraggingSlider) return;
+            _isUserDraggingSlider = false;
+            SeekRequested?.Invoke(this, MiniTimelineSlider.Value);
         }
+        MiniTimelineSlider.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(EndDrag), true);
+        MiniTimelineSlider.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(EndDrag), true);
 
-        // 挂载鼠标全局拖拽移动窗口
-        WindowCard.PointerPressed += WindowCard_PointerPressed;
-
-        // 挂载滑块无缝拖拽
-        MiniTimelineSlider.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((s, e) =>
-        {
-            _isUserDraggingSlider = true;
-        }), true);
-
-        MiniTimelineSlider.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((s, e) =>
-        {
-            if (_isUserDraggingSlider)
-            {
-                _isUserDraggingSlider = false;
-                SeekRequested?.Invoke(this, MiniTimelineSlider.Value);
-            }
-        }), true);
-
-        MiniTimelineSlider.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler((s, e) =>
-        {
-            if (_isUserDraggingSlider)
-            {
-                _isUserDraggingSlider = false;
-                SeekRequested?.Invoke(this, MiniTimelineSlider.Value);
-            }
-        }), true);
-
-        // 监听播放状态
         UpdatePlayState(AudioEngineService.Instance.IsPlaying);
-        AudioEngineService.Instance.StateChanged += (state) =>
-        {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                UpdatePlayState(state == PlaybackState.Playing);
-            });
-        };
+        AudioEngineService.Instance.StateChanged += state =>
+            DispatcherQueue.TryEnqueue(() => UpdatePlayState(state == PlaybackState.Playing));
     }
 
-    private void WindowCard_PointerPressed(object sender, PointerRoutedEventArgs e)
+    private void Root_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
-        if (e.OriginalSource is DependencyObject dep)
-        {
-            var cur = dep;
-            while (cur != null && cur != WindowCard)
-            {
-                if (cur is Microsoft.UI.Xaml.Controls.Button || cur is Microsoft.UI.Xaml.Controls.Slider) return;
-                cur = VisualTreeHelper.GetParent(cur);
-            }
-        }
+        TopButtons.Opacity = 1;
+        TopButtons.IsHitTestVisible = true;
+    }
 
-        ReleaseCapture();
-        SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+    private void Root_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        TopButtons.Opacity = 0;
+        TopButtons.IsHitTestVisible = false;
     }
 
     public void UpdateTrack(TrackItem? track)
@@ -120,34 +78,37 @@ public sealed partial class MiniPlayerWindow : Window
         if (track == null)
         {
             MiniTitleText.Text = "暂无播放曲目";
-            MiniArtistText.Text = "Klang 发烧播放器";
-            MiniCoverImage.Visibility = Visibility.Collapsed;
-            MiniCoverFallback.Visibility = Visibility.Visible;
+            MiniArtistText.Text = "Klang";
+            MiniLyricText.Text = "";
+            ShowCover(null);
             return;
         }
 
         MiniTitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? "未命名曲目" : track.Title;
-        MiniArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知艺术家" : track.Artist;
+        MiniArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知歌手" : track.Artist;
+        MiniLyricText.Text = "";
+        ShowCover(track.CoverPath);
+    }
 
-        if (!string.IsNullOrEmpty(track.CoverPath) && File.Exists(track.CoverPath))
+    private void ShowCover(string? path)
+    {
+        bool has = !string.IsNullOrEmpty(path) && File.Exists(path);
+        try
         {
-            try
-            {
-                MiniCoverImage.Source = new BitmapImage(new Uri(track.CoverPath));
-                MiniCoverImage.Visibility = Visibility.Visible;
-                MiniCoverFallback.Visibility = Visibility.Collapsed;
-            }
-            catch
-            {
-                MiniCoverImage.Visibility = Visibility.Collapsed;
-                MiniCoverFallback.Visibility = Visibility.Visible;
-            }
+            MiniCoverImage.Source = has ? new BitmapImage(new Uri(path!)) { DecodePixelWidth = 208 } : null;
         }
-        else
+        catch
         {
-            MiniCoverImage.Visibility = Visibility.Collapsed;
-            MiniCoverFallback.Visibility = Visibility.Visible;
+            has = false;
         }
+        MiniCoverImage.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        MiniCoverFallback.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>当前这句歌词（空表示没有）。</summary>
+    public void UpdateLyric(string? text)
+    {
+        MiniLyricText.Text = text ?? "";
     }
 
     public void UpdateProgress(double currentSec, double totalSec)
@@ -155,7 +116,6 @@ public sealed partial class MiniPlayerWindow : Window
         if (_isUserDraggingSlider) return;
 
         MiniTimeText.Text = $"{FormatTime(currentSec)} / {FormatTime(totalSec)}";
-
         if (totalSec > 0)
         {
             MiniTimelineSlider.Maximum = totalSec;
@@ -170,16 +130,13 @@ public sealed partial class MiniPlayerWindow : Window
 
     public void UpdatePlayState(bool isPlaying)
     {
-        MiniPlayPauseIcon.Glyph = isPlaying ? "\uE769" : "\uE768";
-        MiniPlayPauseBtn.SetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty, isPlaying ? "暂停" : "播放");
+        MiniPlayPauseIcon.Glyph = isPlaying ? "" : "";
     }
 
     private void MiniTimelineSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if (_isUserDraggingSlider)
-        {
             MiniTimeText.Text = $"{FormatTime(e.NewValue)} / {FormatTime(MiniTimelineSlider.Maximum)}";
-        }
     }
 
     private void RestoreBtn_Click(object sender, RoutedEventArgs e)
@@ -194,25 +151,14 @@ public sealed partial class MiniPlayerWindow : Window
         ClosedByUser?.Invoke(this, EventArgs.Empty);
     }
 
-    private void MiniPrevBtn_Click(object sender, RoutedEventArgs e)
-    {
-        PrevRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void MiniPlayPauseBtn_Click(object sender, RoutedEventArgs e)
-    {
-        AudioEngineService.Instance.TogglePlayPause();
-    }
-
-    private void MiniNextBtn_Click(object sender, RoutedEventArgs e)
-    {
-        NextRequested?.Invoke(this, EventArgs.Empty);
-    }
+    private void MiniPrevBtn_Click(object sender, RoutedEventArgs e) => PrevRequested?.Invoke(this, EventArgs.Empty);
+    private void MiniNextBtn_Click(object sender, RoutedEventArgs e) => NextRequested?.Invoke(this, EventArgs.Empty);
+    private void MiniPlayPauseBtn_Click(object sender, RoutedEventArgs e) => AudioEngineService.Instance.TogglePlayPause();
 
     private static string FormatTime(double seconds)
     {
         if (double.IsNaN(seconds) || seconds < 0) seconds = 0;
         var ts = TimeSpan.FromSeconds(seconds);
-        return ts.TotalHours >= 1 ? ts.ToString(@"hh\:mm\:ss") : ts.ToString(@"mm\:ss");
+        return ts.TotalHours >= 1 ? ts.ToString(@"h\:mm\:ss") : ts.ToString(@"mm\:ss");
     }
 }
