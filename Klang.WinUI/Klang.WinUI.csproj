@@ -34,6 +34,8 @@
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\AppIcon.ico" />
     <Content Include="Assets\AppLogo.png" />
+    <!-- 发布（dotnet publish）时也要把图标等资源带上，否则发布包里没有窗口图标和关于页的 Logo -->
+    <Content Update="Assets\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- 界面语言包：键 = 中文原文，值 = 译文；往这个文件夹里加 xx.json 就多一门语言 -->
     <Content Include="Languages\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
