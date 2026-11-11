@@ -55,9 +55,83 @@ public sealed partial class SettingsDialog : ContentDialog
         StatePathText.Text = "配置文件：" + Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Klang", "player_state.json");
         RebuildFolderList();
+        AppVersionText.Text = $"版本 {UpdateService.CurrentVersionText}（WinUI 3）";
 
         _loading = false;
     }
+
+    #region 分类切换
+
+    private void SettingsNav_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItemContainer?.Tag is not string tag) return;
+        PageAppearance.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
+        PagePlayback.Visibility = tag == "playback" ? Visibility.Visible : Visibility.Collapsed;
+        PageLibrary.Visibility = tag == "library" ? Visibility.Visible : Visibility.Collapsed;
+        PageNetwork.Visibility = tag == "network" ? Visibility.Visible : Visibility.Collapsed;
+        PageAbout.Visibility = tag == "about" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    #endregion
+
+    #region 关于 / 检查更新
+
+    private UpdateInfo? _update;
+
+    private async void CheckUpdateBtn_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpdateBtn.IsEnabled = false;
+        UpdateRing.Visibility = Visibility.Visible;
+        UpdateRing.IsActive = true;
+        UpdateResultPanel.Visibility = Visibility.Collapsed;
+        UpdateStatusText.Text = "正在检查…";
+        try
+        {
+            _update = await UpdateService.CheckAsync();
+            if (_update.Latest == null)
+            {
+                UpdateStatusText.Text = "没有在 GitHub 上找到 WinUI 版本的发布。";
+            }
+            else if (_update.HasUpdate)
+            {
+                UpdateStatusText.Text = $"发现新版本 {_update.Latest.ToString(3)}（当前 {UpdateService.CurrentVersionText}）";
+                UpdateTitleText.Text = string.IsNullOrWhiteSpace(_update.Name) ? _update.Tag : _update.Name;
+                UpdateNotesText.Text = string.IsNullOrWhiteSpace(_update.Notes) ? "（发布说明为空）" : _update.Notes.Trim();
+                DownloadUpdateBtn.IsEnabled = UpdateService.IsTrustedUrl(_update.DownloadUrl);
+                UpdateResultPanel.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                UpdateStatusText.Text = $"已是最新版本（{UpdateService.CurrentVersionText}）";
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            UpdateStatusText.Text = "连接 GitHub 超时，请检查网络后重试。";
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusText.Text = "检查失败：" + ex.Message;
+        }
+        finally
+        {
+            UpdateRing.IsActive = false;
+            UpdateRing.Visibility = Visibility.Collapsed;
+            CheckUpdateBtn.IsEnabled = true;
+        }
+    }
+
+    private static async void OpenTrusted(string? url)
+    {
+        if (!UpdateService.IsTrustedUrl(url)) return;
+        try { await Windows.System.Launcher.LaunchUriAsync(new Uri(url!)); } catch { }
+    }
+
+    private void DownloadUpdateBtn_Click(object sender, RoutedEventArgs e) => OpenTrusted(_update?.DownloadUrl);
+
+    private void ReleasePageBtn_Click(object sender, RoutedEventArgs e) => OpenTrusted(_update?.PageUrl);
+
+    #endregion
 
     private static void SelectByTag(ComboBox box, string tag, string fallback)
     {
