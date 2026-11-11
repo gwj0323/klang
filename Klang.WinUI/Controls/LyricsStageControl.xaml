@@ -3,59 +3,27 @@
     x:Class="Klang_WinUI.Controls.LyricsStageControl"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    xmlns:local="using:Klang_WinUI.Controls"
-    UseLayoutRounding="True"
     mc:Ignorable="d">
 
-    <!-- 视口：不再用 ScrollViewer。内容整体用合成器的弹簧动画平移（跑在合成线程，跟显示器刷新率走），
-         滚轮 / 触控板只是改变平移目标。 -->
+    <!-- 歌词用 Win2D 逐帧绘制：每一帧都按“真实字号”重新排版和栅格化文字（而不是缩放一张文字纹理），
+         所以放大 / 缩小 / 滚动过程中文字始终锐利。动画（错峰缓动）在代码里按帧计算。 -->
     <Grid
         x:Name="Viewport"
         Background="Transparent"
+        PointerExited="Viewport_PointerExited"
+        PointerMoved="Viewport_PointerMoved"
+        PointerPressed="Viewport_PointerPressed"
+        PointerReleased="Viewport_PointerReleased"
         PointerWheelChanged="Viewport_PointerWheelChanged"
         SizeChanged="Viewport_SizeChanged">
 
-        <StackPanel
-            x:Name="ContentPanel"
-            Padding="24,0,24,0"
-            VerticalAlignment="Top">
-            <ItemsControl x:Name="LyricsItemsControl">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Button
-                            Margin="0,6,0,6"
-                            Padding="24,10,24,10"
-                            HorizontalAlignment="Stretch"
-                            HorizontalContentAlignment="Center"
-                            AutomationProperties.Name="{Binding Text}"
-                            Click="LyricLine_Click"
-                            CornerRadius="8"
-                            Style="{StaticResource SubtleButtonStyle}"
-                            ToolTipService.ToolTip="点击跳转到此时刻播放">
-                            <StackPanel HorizontalAlignment="Center" Spacing="4">
-                                <!-- 主歌词：缩放 / 透明度由代码在合成层上做动画，不再逐帧改绑定属性 -->
-                                <local:KaraokeText
-                                    FontSize="{Binding MainFontSize}"
-                                    FontWeight="{Binding FontWeight}"
-                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                    Line="{Binding}" />
-
-                                <!-- 副行：翻译 / 罗马音 -->
-                                <TextBlock
-                                    FontSize="{Binding SubFontSize}"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{Binding DisplaySub}"
-                                    TextAlignment="Center"
-                                    TextWrapping="Wrap"
-                                    Visibility="{Binding SubVisibility}" />
-                            </StackPanel>
-                        </Button>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </StackPanel>
+        <canvas:CanvasControl
+            x:Name="LyricsCanvas"
+            ClearColor="Transparent"
+            Draw="LyricsCanvas_Draw" />
 
         <!-- 用户手动滚动时浮现的“回正”胶囊提示 -->
         <Button

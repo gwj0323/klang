@@ -55,11 +55,11 @@ public sealed partial class VinylCoverCard : UserControl
         _jacketVisual.CenterPoint = new Vector3(130f, 130f, 0f);
 
         // 频谱：柱子固定高度，用合成层的 Scale.Y 表示高度，峰值点用 Translation.Y 定位
-        var accent = Application.Current.Resources["AccentFillColorDefaultBrush"] as Brush;
+        // 颜色在 Loaded / 主题变化时按元素的实际主题设置（Application.Current.Resources 只给浅色主题的值，深色下柱子会是深蓝色）
         for (int i = 0; i < NUM_BARS; i++)
         {
-            _bars[i] = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = BAR_W, Height = MAX_H, RadiusX = 1.7, RadiusY = 1.7, Fill = accent, Opacity = 0.35 };
-            _dots[i] = new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 2.8, Height = 2.8, Fill = accent, Opacity = 0, IsHitTestVisible = false };
+            _bars[i] = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = BAR_W, Height = MAX_H, RadiusX = 1.7, RadiusY = 1.7, Opacity = 0.35 };
+            _dots[i] = new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 2.8, Height = 2.8, Opacity = 0, IsHitTestVisible = false };
             SpectrumCanvas.Children.Add(_bars[i]);
             SpectrumCanvas.Children.Add(_dots[i]);
             Canvas.SetTop(_bars[i], BASE_Y - MAX_H);
@@ -72,6 +72,19 @@ public sealed partial class VinylCoverCard : UserControl
             _peaks[i] = 0.04f;
         }
         for (int i = 0; i < NUM_BARS; i++) ApplyBar(i, 0.04f, 0.04f);
+
+        Loaded += (s, e) => ApplySpectrumBrush();
+        ActualThemeChanged += (s, e) => ApplySpectrumBrush();
+    }
+
+    private void ApplySpectrumBrush()
+    {
+        var accent = Services.ThemeService.AccentFill(this);
+        for (int i = 0; i < NUM_BARS; i++)
+        {
+            _bars[i].Fill = accent;
+            _dots[i].Fill = accent;
+        }
     }
 
     #region 唱片自转 / 滑出（合成动画）

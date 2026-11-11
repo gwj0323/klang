@@ -265,6 +265,8 @@
     "界面语言，立即生效": "Interface language, applied immediately",
     "歌词副行：{0}": "Lyrics secondary line: {0}",
     "歌词字号": "Lyrics font size",
+    "放大强调当前句": "Zoom the current line",
+    "当前句放大、远处的句子缩小；关闭后所有句子等大。": "The current line is enlarged and distant lines shrink; when off, all lines are the same size.",
     "歌词海报": "Lyrics poster",
     "歌词相关功能": "Lyrics options",
     "歌词设置": "Lyrics settings",

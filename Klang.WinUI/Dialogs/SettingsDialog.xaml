@@ -132,6 +132,24 @@
 
                     <TextBlock Style="{StaticResource GroupTitle}" Text="歌词" />
                     <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="放大强调当前句" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前句放大、远处的句子缩小；关闭后所有句子等大。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="LyricZoomSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="LyricZoomSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />

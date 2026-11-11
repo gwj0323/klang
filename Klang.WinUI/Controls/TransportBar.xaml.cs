@@ -34,6 +34,8 @@ public sealed partial class TransportBar : UserControl
     public TransportBar()
     {
         InitializeComponent();
+        ActualThemeChanged += (s, e) => RefreshIconColors();
+        Loaded += (s, e) => RefreshIconColors();
 
         _bounceTimer.Interval = TimeSpan.FromMilliseconds(160);
         _bounceTimer.Tick += (s, e) =>
@@ -160,38 +162,42 @@ public sealed partial class TransportBar : UserControl
         SetShuffleState(playMode is "random" or "roam");
     }
 
+    private bool _shuffleOn;
+    private bool _repeatSingle;
+
     public void SetShuffleState(bool isShuffle)
     {
-        ShuffleIcon.Foreground = isShuffle
-            ? (ThemeService.AccentText(this))
-            : (ThemeService.Brush(this, "TextFillColorSecondaryBrush"));
+        _shuffleOn = isShuffle;
+        RefreshIconColors();
     }
 
     public void SetRepeatMode(string mode)
     {
-        if (mode == "loop_single")
-        {
-            RepeatIcon.Glyph = "\uE8ED";
-            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, L.T("循环模式：单曲循环"));
-            RepeatIcon.Foreground = ThemeService.AccentText(this);
-        }
-        else
-        {
-            RepeatIcon.Glyph = "\uE8EE";
-            RepeatBtn.SetValue(ToolTipService.ToolTipProperty, L.T("循环模式：列表循环"));
-            RepeatIcon.Foreground = ThemeService.Brush(this, "TextFillColorSecondaryBrush");
-        }
+        _repeatSingle = mode == "loop_single";
+        RepeatIcon.Glyph = _repeatSingle ? "" : "";
+        RepeatBtn.SetValue(ToolTipService.ToolTipProperty, _repeatSingle ? L.T("循环模式：单曲循环") : L.T("循环模式：列表循环"));
+        RefreshIconColors();
     }
 
     public void SetFavorite(bool isFav)
     {
         _isFavorite = isFav;
-        FavoriteIcon.Glyph = isFav ? "\uEB52" : "\uEB51";
-        FavoriteIcon.Foreground = isFav
-            ? (ThemeService.AccentText(this))
-            : (ThemeService.Brush(this, "TextFillColorSecondaryBrush"));
+        FavoriteIcon.Glyph = isFav ? "" : "";
+        RefreshIconColors();
     }
 
+    /// <summary>
+    /// 随机 / 循环 / 喜欢三个图标的颜色（开 = 强调色，关 = 次要文字色）。
+    /// 颜色要按控件“当前实际主题”取，所以主题变化后（比如启动时设置里强制了深色）必须重新套一遍。
+    /// </summary>
+    private void RefreshIconColors()
+    {
+        var off = ThemeService.Brush(this, "TextFillColorSecondaryBrush");
+        var on = ThemeService.AccentText(this);
+        ShuffleIcon.Foreground = _shuffleOn ? on : off;
+        RepeatIcon.Foreground = _repeatSingle ? on : off;
+        FavoriteIcon.Foreground = _isFavorite ? on : off;
+    }
     private static string FormatTime(double seconds)
     {
         if (double.IsNaN(seconds) || seconds < 0) return "00:00";

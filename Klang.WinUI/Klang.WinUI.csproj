@@ -5,7 +5,7 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Klang_WinUI</RootNamespace>
     <!-- 版本号：“关于”页显示它，检查更新时拿它和 GitHub 上最新的 WinUI 发布比较。发新版时在这里改 -->
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <IncludeSourceRevisionInVersion>false</IncludeSourceRevisionInVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon Condition="Exists('Assets\AppIcon.ico')">Assets\AppIcon.ico</ApplicationIcon>
@@ -51,6 +51,8 @@
     <PackageReference Include="NAudio" Version="3.3.0" />
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
+    <!-- 歌词用 Win2D 逐帧按真实字号绘制（不再缩放文字纹理），文字才能一直锐利 -->
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.3.2" />
     <PackageReference Include="ComputeSharp.WinUI" Version="3.2.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
   </ItemGroup>

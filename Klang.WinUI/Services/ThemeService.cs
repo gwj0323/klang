@@ -74,6 +74,18 @@ public static class ThemeService
         return new SolidColorBrush(c);
     }
 
+    /// <summary>
+    /// 强调色填充（频谱柱等色块）：深色主题用浅一档（Light2），浅色主题用深一档（Dark1），和系统控件的强调色一致。
+    /// 直接按 UISettings 取，不依赖资源字典里的画刷（那个在代码里取出来会是浅色主题的值）。
+    /// </summary>
+    public static Brush AccentFill(FrameworkElement scope)
+    {
+        var c = _ui.GetColorValue(scope.ActualTheme == ElementTheme.Dark
+            ? Windows.UI.ViewManagement.UIColorType.AccentLight2
+            : Windows.UI.ViewManagement.UIColorType.AccentDark1);
+        return new SolidColorBrush(c);
+    }
+
     #region 主题感知的资源查找
 
     /// <summary>
@@ -83,26 +95,40 @@ public static class ThemeService
     public static Brush? Brush(FrameworkElement scope, string key)
     {
         string themeKey = scope.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
+
+        // 优先取“颜色”本身：主题字典里的 XxxBrush 画刷，它的颜色是 {ThemeResource Xxx} 引用，
+        // 从字典里取出来时会按“应用主题”（系统浅色时是浅色）去解析——于是窗口强制深色时拿到黑色。
+        // 直接取字典里写死的颜色值再自己建画刷，就不受应用主题影响。
+        string colorKey = key.EndsWith("Brush", StringComparison.Ordinal) ? key[..^5] : key;
+        if (Find(Application.Current.Resources, colorKey, themeKey) is Windows.UI.Color c)
+            return new SolidColorBrush(c);
+
         return Find(Application.Current.Resources, key, themeKey) as Brush;
     }
 
     private static object? Find(ResourceDictionary dict, string key, string themeKey)
     {
-        if (dict.ThemeDictionaries.TryGetValue(themeKey, out var td) && td is ResourceDictionary themed)
+        // WinUI 的主题字典键是 Default（= 深色）/ Light / HighContrast，并没有叫 "Dark" 的字典
+        foreach (var k in themeKey == "Dark" ? new[] { "Dark", "Default" } : new[] { themeKey })
         {
-            if (themed.TryGetValue(key, out var v)) return v;
-            foreach (var m in themed.MergedDictionaries)
+            if (dict.ThemeDictionaries.TryGetValue(k, out var td) && td is ResourceDictionary themed)
             {
-                var r = Find(m, key, themeKey);
-                if (r != null) return r;
+                if (themed.TryGetValue(key, out var v)) return v;
+                foreach (var m in themed.MergedDictionaries)
+                {
+                    var r = Find(m, key, themeKey);
+                    if (r != null) return r;
+                }
             }
         }
-        if (dict.TryGetValue(key, out var direct)) return direct;
+        // 先把合并进来的字典（包括系统控件资源）里各自的“主题字典”都找一遍；
+        // 字典自己的 TryGetValue 会按“应用主题”取值（系统浅色时拿到浅色值），所以只能放在最后兜底。
         foreach (var m in dict.MergedDictionaries)
         {
             var r = Find(m, key, themeKey);
             if (r != null) return r;
         }
+        if (dict.TryGetValue(key, out var direct)) return direct;
         return null;
     }
 

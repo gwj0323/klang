@@ -39,6 +39,7 @@ public sealed partial class SettingsDialog : ContentDialog
             DeviceComboBox.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Id });
         SelectByTag(DeviceComboBox, State.SelectedDeviceId, "default");
         ReplayGainSwitch.IsOn = State.ReplayGainEnabled;
+        LyricZoomSwitch.IsOn = State.LyricZoomEmphasis;
         AutoMetaSwitch.IsOn = State.AutoFetchMetadata;
         SelectByTag(CacheLimitBox, State.NeteaseCacheLimitMb.ToString(), "2048");
         RefreshCacheInfo();
@@ -67,6 +68,14 @@ public sealed partial class SettingsDialog : ContentDialog
 
         L.Apply(this);
         Loaded += (s, e) => L.Apply(this);   // 模板展开后（导航栏等）再翻译一遍
+    }
+
+    private void LyricZoomSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.LyricZoomEmphasis = LyricZoomSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        Controls.LyricsStageControl.NotifyEmphasisChanged();
     }
 
     private void LanguageComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

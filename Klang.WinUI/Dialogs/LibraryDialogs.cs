@@ -25,6 +25,13 @@ public static class LibraryDialogs
         DefaultButton = ContentDialogButton.Primary
     };
 
+    /// <summary>次要文字颜色：按窗口内容的实际主题取（Application.Current.Resources 只给浅色值，深色下会是深灰字）。</summary>
+    private static Microsoft.UI.Xaml.Media.Brush Secondary(XamlRoot root)
+    {
+        if (root.Content is FrameworkElement fe && ThemeService.Brush(fe, "TextFillColorSecondaryBrush") is { } b) return b;
+        return (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+    }
+
     private static string Describe(TrackItem t)
     {
         string bitrate = t.Bitrate > 0 ? $" · {t.Bitrate}kbps" : "";
@@ -44,7 +51,7 @@ public static class LibraryDialogs
         {
             Text = L.F("发现 {0} 组重复。每组第一首是建议保留的（音质更高 / 文件在），其余默认勾选移除。\n只会从曲库里移除，不会删除磁盘上的文件。", groups.Count),
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Foreground = Secondary(root),
             FontSize = 12,
             Margin = new Thickness(0, 0, 0, 8)
         });
@@ -103,7 +110,7 @@ public static class LibraryDialogs
             Text = L.T("“重新定位”会在你选的文件夹里按文件名找回（收藏和歌单会保留）；“清理”会把它们从曲库移除。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+            Foreground = Secondary(root)
         });
 
         var dlg = NewDialog(root, L.T("丢失的文件"), new Grid { Children = { panel }, MinWidth = 440 }, L.T("重新定位…"), L.T("关闭"));
@@ -135,7 +142,7 @@ public static class LibraryDialogs
         {
             Text = track.IsCueTrack ? L.T("CUE 分轨只修改曲库里的显示，不写入音频文件。") : L.T("修改会写回音频文件的标签。"),
             FontSize = 12,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+            Foreground = Secondary(root)
         };
         var panel = new StackPanel { Spacing = 10, MinWidth = 380, Children = { title, artist, album, apply, note } };
 

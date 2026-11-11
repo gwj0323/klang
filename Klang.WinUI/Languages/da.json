@@ -265,6 +265,8 @@
     "界面语言，立即生效": "Grænsefladens sprog, træder i kraft med det samme",
     "歌词副行：{0}": "Sekundær tekstlinje: {0}",
     "歌词字号": "Skriftstørrelse for tekster",
+    "放大强调当前句": "Forstør den aktuelle linje",
+    "当前句放大、远处的句子缩小；关闭后所有句子等大。": "Den aktuelle linje forstørres, og fjerne linjer formindskes; når den er slået fra, har alle linjer samme størrelse.",
     "歌词海报": "Tekstplakat",
     "歌词相关功能": "Tekstindstillinger",
     "歌词设置": "Tekstindstillinger",
