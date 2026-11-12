@@ -90,7 +90,7 @@ Klang 仅在以下情况联网，均可在设置中控制或不使用相应功�
 | 网易云账号与云端播放 | 网易云音乐 | 登录凭据与请求的曲目 |
 | 检查更新 | GitHub | 无个人信息 |
 
-曲库、播放统计和设置只保存在本机 `%LocalAppData%\Klang`。
+曲库、播放统计和设置只保存在本机 `%LocalAppData%\Klang`。 完整说明见 [PRIVACY.md](PRIVACY.md)（简体中文 / English / Dansk）。
 
 ## 快捷键
 
