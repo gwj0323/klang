@@ -113,7 +113,8 @@ public static class UpdateService
                 .Where(a => a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
                          || a.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
                          || a.Name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(a => a.Name.Contains("x64", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(a => a.Name.Contains("Setup", StringComparison.OrdinalIgnoreCase))      // 优先安装程序
+                .ThenByDescending(a => a.Name.Contains("x64", StringComparison.OrdinalIgnoreCase))
                 .Select(a => a.Url)
                 .FirstOrDefault();
         }

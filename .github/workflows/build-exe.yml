@@ -82,8 +82,26 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path publish/Klang.WinUI/* -DestinationPath Klang-WinUI-win-x64.zip
 
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $ver = ([xml](Get-Content Klang.WinUI/Klang.WinUI.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if (-not $ver) { throw "Version not found in csproj" }
+          choco install innosetup -y --no-progress
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found" }
+          & $iscc "/DAppVersion=$ver" "/DSourceDir=..\publish\Klang.WinUI" installer/Klang.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Get-ChildItem dist-installer | Select-Object Name, Length
+
       - uses: actions/upload-artifact@v4
         with:
           name: Klang-WinUI-win-x64
           path: Klang-WinUI-win-x64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Klang-WinUI-Setup
+          path: dist-installer/Klang-Setup-*-x64.exe
           if-no-files-found: error
