@@ -112,6 +112,16 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
     }
     /// <summary>频谱上高频被“一刀切”的频率（Hz），没有明显截止时为 0。</summary>
     public float AuthCutoffHz { get; set; }
+
+    // ---- 节奏与调性（后台分析，用于节拍对齐的自动混音）----
+    public bool RhythmDone { get; set; }
+    private double _bpm;
+    public double Bpm { get => _bpm; set { _bpm = value; Raise(nameof(RowToolTip)); } }   // 0 = 没有稳定节拍
+    public double FirstBeat { get; set; }
+    public double LastBeat { get; set; }
+    public double MixEnd { get; set; }
+    public string MusicKey { get; set; } = "";
+    public string Camelot { get; set; } = "";
     /// <summary>有效位深（16 / 24），0 = 未检测。</summary>
     public int AuthBits { get; set; }
 
@@ -122,8 +132,8 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
     public string AuthText => _authVerdict switch
     {
         "lossy" => L.F("疑似有损转码：频谱在 {0:0.#} kHz 处截止", AuthCutoffHz / 1000f),
-        "upsampled" => L.F("疑似假 Hi-Res：实际内容只到 {0:0.#} kHz", AuthCutoffHz / 1000f),
-        "padded" => L.T("疑似位深填充：实际只有 16 bit"),
+        "upsampled" => L.F("疑似伪 Hi-Res：有效频谱仅到 {0:0.#} kHz", AuthCutoffHz / 1000f),
+        "padded" => L.T("疑似位深填充：实际仅 16 bit"),
         "ok" => L.T("频谱与位深检测正常"),
         _ => ""
     };
@@ -149,8 +159,16 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
         }
     }
     public double RowOpacity => _isMissing ? 0.45 : 1.0;
-    public string RowToolTip => _isMissing ? L.T("文件丢失：") + FilePath
-        : (IsSuspectFake ? FormatBadge + "\n⚠ " + AuthText : FormatBadge);
+    public string RowToolTip
+    {
+        get
+        {
+            if (_isMissing) return L.T("文件丢失：") + FilePath;
+            string s = IsSuspectFake ? FormatBadge + "\n⚠ " + AuthText : FormatBadge;
+            if (_bpm > 0) s += "\n♩ " + L.F("{0:0} BPM", _bpm) + (string.IsNullOrEmpty(Camelot) ? "" : $" · {MusicKey} ({Camelot})");
+            return s;
+        }
+    }
 
     /// <summary>音质档位：2 = Hi-Res，1 = 无损，0 = 有损。</summary>
     public int QualityTier

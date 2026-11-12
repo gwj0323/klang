@@ -195,7 +195,7 @@ public sealed class NeteaseService
         if (raw.Length == 0) return (false, L.T("请输入 Cookie 或 MUSIC_U"));
         if (!raw.Contains('=')) raw = "MUSIC_U=" + raw;
         var dict = NeteaseClient.ParseCookieString(raw);
-        if (!dict.ContainsKey("MUSIC_U")) return (false, L.T("没有找到 MUSIC_U"));
+        if (!dict.ContainsKey("MUSIC_U")) return (false, L.T("未找到 MUSIC_U"));
 
         _client.ResetCookies();
         _client.SetCookies(dict);

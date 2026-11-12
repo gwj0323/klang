@@ -49,7 +49,7 @@ public static class LibraryDialogs
 
         panel.Children.Add(new TextBlock
         {
-            Text = L.F("发现 {0} 组重复。每组第一首建议保留（音质更高或文件还在），其余已勾选。\n只是从曲库移除，不会删除磁盘上的文件。", groups.Count),
+            Text = L.F("共 {0} 组重复。每组第一首默认保留，其余已勾选。\n仅从曲库中移除，不会删除磁盘上的文件。", groups.Count),
             TextWrapping = TextWrapping.Wrap,
             Foreground = Secondary(root),
             FontSize = 12,
@@ -96,7 +96,7 @@ public static class LibraryDialogs
         var panel = new StackPanel { Spacing = 6 };
         panel.Children.Add(new TextBlock
         {
-            Text = L.F("有 {0} 首歌找不到文件了（可能被移动、改名，或外接硬盘没插上）。", missing.Count),
+            Text = L.F("有 {0} 首歌曲的文件未找到。", missing.Count),
             TextWrapping = TextWrapping.Wrap
         });
         var list = new StackPanel { Spacing = 2 };
@@ -107,7 +107,7 @@ public static class LibraryDialogs
         panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 220 });
         panel.Children.Add(new TextBlock
         {
-            Text = L.T("重新定位：在你选的文件夹里按文件名找回，收藏和歌单会保留。\n从曲库清理：把这些歌移出曲库。"),
+            Text = L.T("重新定位：在所选文件夹中按文件名查找。\n从曲库清理：将这些歌曲移出曲库。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Foreground = Secondary(root)
@@ -135,12 +135,12 @@ public static class LibraryDialogs
         var album = new TextBox { Header = L.T("专辑名"), Text = track.Album };
         var apply = new CheckBox
         {
-            Content = L.F("同专辑的另外 {0} 首也一起改", sameAlbumOthers),
+            Content = L.F("同时修改同专辑的另外 {0} 首", sameAlbumOthers),
             Visibility = sameAlbumOthers > 0 ? Visibility.Visible : Visibility.Collapsed
         };
         var note = new TextBlock
         {
-            Text = track.IsCueTrack ? L.T("CUE 分轨只改曲库里的显示，不写入音频文件。") : L.T("修改会写入音频文件的标签。"),
+            Text = track.IsCueTrack ? L.T("CUE 分轨仅修改曲库中的显示信息，不写入音频文件。") : L.T("修改将写入音频文件的标签。"),
             FontSize = 12,
             Foreground = Secondary(root)
         };
@@ -155,14 +155,14 @@ public static class LibraryDialogs
     public static async Task<(string Album, string Artist)?> ShowAlbumEditAsync(XamlRoot root, string album, string artist, int count)
     {
         var albumBox = new TextBox { Header = L.T("专辑名"), Text = album };
-        var artistBox = new TextBox { Header = L.T("歌手（留空则不改）"), Text = artist };
+        var artistBox = new TextBox { Header = L.T("歌手（留空则不修改）"), Text = artist };
         var panel = new StackPanel
         {
             Spacing = 10,
             MinWidth = 380,
             Children =
             {
-                new TextBlock { Text = L.F("这张专辑的 {0} 首歌都会被修改，并写入各自的音频文件。", count), TextWrapping = TextWrapping.Wrap, FontSize = 12 },
+                new TextBlock { Text = L.F("修改将应用于该专辑的 {0} 首歌曲。", count), TextWrapping = TextWrapping.Wrap, FontSize = 12 },
                 albumBox,
                 artistBox
             }
@@ -177,13 +177,13 @@ public static class LibraryDialogs
 
     public static async Task<SmartPlaylistDef?> ShowSmartPlaylistAsync(XamlRoot root)
     {
-        var name = new TextBox { Header = L.T("名称"), PlaceholderText = L.T("例如：无损 · 我喜欢"), MaxLength = 40 };
+        var name = new TextBox { Header = L.T("名称"), PlaceholderText = L.T("例如：无损 · 喜欢"), MaxLength = 40 };
 
         var quality = new ComboBox { Header = L.T("音质"), HorizontalAlignment = HorizontalAlignment.Stretch };
         foreach (var s in new[] { L.T("不限"), L.T("无损及以上"), L.T("仅 Hi-Res") }) quality.Items.Add(s);
         quality.SelectedIndex = 0;
 
-        var fav = new CheckBox { Content = L.T("只要我喜欢的") };
+        var fav = new CheckBox { Content = L.T("仅喜欢的歌曲") };
 
         var added = new ComboBox { Header = L.T("添加时间"), HorizontalAlignment = HorizontalAlignment.Stretch };
         foreach (var s in new[] { L.T("不限"), L.T("最近 7 天"), L.T("最近 30 天"), L.T("最近 90 天") }) added.Items.Add(s);
@@ -193,7 +193,7 @@ public static class LibraryDialogs
         foreach (var s in new[] { L.T("不限"), L.T("至少 1 次"), L.T("至少 3 次"), L.T("至少 10 次") }) plays.Items.Add(s);
         plays.SelectedIndex = 0;
 
-        var mood = new ComboBox { Header = L.T("心情（按声学特征）"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var mood = new ComboBox { Header = L.T("情绪（按声学特征）"), HorizontalAlignment = HorizontalAlignment.Stretch };
         foreach (var s in new[] { L.T("不限"), L.T("安静"), L.T("专注"), L.T("动感"), L.T("明亮"), L.T("沉稳") }) mood.Items.Add(s);
         mood.SelectedIndex = 0;
 

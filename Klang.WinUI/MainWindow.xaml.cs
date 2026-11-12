@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window
         AudioEngineService.Instance.PositionChanged += (current, total) =>
         {
             BottomTransportBar.UpdateProgress(current, total);
+            TryPlanMix(current, total);
             if (ImmersiveLayer.IsOpen) ImmersiveLayer.UpdateProgress(current, total);
             StageLyricsControl.UpdatePlaybackTime(current + _lyricOffset); ImmersiveLayer.UpdateTime(current + _lyricOffset);
             _media.UpdateTimeline(current, total);
@@ -143,6 +144,8 @@ public sealed partial class MainWindow : Window
             StageCoverCard.SetPlaying(isPlaying);
             _media.SetPlaybackState(isPlaying, _currentTrack != null);
         };
+
+        AudioEngineService.Instance.MixAdopted += path => DispatcherQueue.TryEnqueue(() => OnMixAdopted(path));
 
         // 曲目自然播放结束，自动切下一首
         AudioEngineService.Instance.TrackEnded += () =>
@@ -212,9 +215,9 @@ public sealed partial class MainWindow : Window
             BottomTransportBar.SetRepeatMode(_playMode);
             BottomTransportBar.UpdateLyricSnippet(_playMode switch
             {
-                "random" => L.T("已开启随机播放"),
-                "roam" => L.T("漫游已开启：按你的听歌习惯挑下一首"),
-                _ => L.T("已开启列表循环")
+                "random" => L.T("已切换为随机播放"),
+                "roam" => L.T("已切换为漫游：根据收听历史选择下一首"),
+                _ => L.T("已切换为列表循环")
             });
             SavePlayMode();
         };
@@ -224,7 +227,7 @@ public sealed partial class MainWindow : Window
             _playMode = (_playMode == "loop_single") ? "loop_list" : "loop_single";
             BottomTransportBar.SetShuffleState(_playMode);
             BottomTransportBar.SetRepeatMode(_playMode);
-            BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? L.T("已开启单曲循环") : L.T("已开启列表循环"));
+            BottomTransportBar.UpdateLyricSnippet(_playMode == "loop_single" ? L.T("已切换为单曲循环") : L.T("已切换为列表循环"));
             SavePlayMode();
         };
 
@@ -247,7 +250,7 @@ public sealed partial class MainWindow : Window
 
         AudioEngineService.Instance.SleepTimerElapsed += () =>
         {
-            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("定时结束，已暂停播放")));
+            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("睡眠定时已结束，已暂停播放")));
         };
 
         BottomTransportBar.FavoriteClicked += (s, e) =>
@@ -355,6 +358,8 @@ public sealed partial class MainWindow : Window
                 if (LeftNavPane.HasActiveFilter) LeftNavPane.RefreshView();
             };
             QualityAnalysisService.Instance.Enqueue(lib.Tracks);
+            RhythmAnalysisService.Instance.Start(DispatcherQueue);
+            RhythmAnalysisService.Instance.Enqueue(lib.Tracks);
 
             lib.LibraryChangedOnDisk += newTracks =>
             {
@@ -459,6 +464,7 @@ public sealed partial class MainWindow : Window
             _nextByRoam = false;
         }
 
+        if (!_adoptingMix) { _mixNext = null; _preChosenNext = null; }
         if (_currentTrack != null) _currentTrack.IsCurrent = false;
         _currentTrack = track;
         track.IsCurrent = true;
@@ -497,7 +503,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (autoPlay && !string.IsNullOrEmpty(track.FilePath))
+        if (autoPlay && !_adoptingMix && !string.IsNullOrEmpty(track.FilePath))
         {
             _ = PlayLocalAsync(track.FilePath, track.StartTime, track.EndTime, _playSeq);
         }
@@ -590,8 +596,8 @@ public sealed partial class MainWindow : Window
             if (!ok)
             {
                 _onlineStatus = IsNeteaseLoggedIn()
-                    ? L.T("获取不到音源（可能是会员专享或没有版权）")
-                    : L.T("获取不到音源（可能要先登录网易云）");
+                    ? L.T("无法获取音源（可能为会员专享或无版权）")
+                    : L.T("无法获取音源（可能需要先登录网易云）");
                 BottomTransportBar.UpdateLyricSnippet(_onlineStatus);
             }
             else
@@ -650,10 +656,16 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void PlayNext()
+    private TrackItem? _preChosenNext;
+    private string? _preChosenReason;
+    private bool _preChosenByRoam;
+
+    /// <summary>按当前播放模式挑下一首（不播放）。漫游模式的理由和“是漫游挑的”一并返回。</summary>
+    private TrackItem? PickNextTrack(out string? reason, out bool byRoam)
     {
+        reason = null; byRoam = false;
         var tracks = LeftNavPane.Queue;
-        if (tracks.Count == 0) return;
+        if (tracks.Count == 0) return null;
 
         int nextIdx = 0;
         if (_currentTrack != null)
@@ -666,10 +678,9 @@ public sealed partial class MainWindow : Window
                     var pick = RoamingService.Instance.PickNext(_currentTrack, tracks, LibraryService.Instance.Tracks);
                     if (pick != null)
                     {
-                        _nextByRoam = true;
-                        PlayTrack(pick.Value.Track);
-                        BottomTransportBar.UpdateLyricSnippet(L.T("漫游 · ") + pick.Value.Reason);
-                        return;
+                        byRoam = true;
+                        reason = pick.Value.Reason;
+                        return pick.Value.Track;
                     }
                     nextIdx = (currentIdx + 1) % tracks.Count;
                 }
@@ -684,8 +695,90 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
+        return tracks[nextIdx];
+    }
 
-        PlayTrack(tracks[nextIdx]);
+    private void PlayNext()
+    {
+        TrackItem? next; string? reason; bool byRoam;
+        if (_preChosenNext != null)
+        {
+            next = _preChosenNext; reason = _preChosenReason; byRoam = _preChosenByRoam;
+            _preChosenNext = null;
+        }
+        else next = PickNextTrack(out reason, out byRoam);
+        if (next == null) return;
+
+        _nextByRoam = byRoam;
+        PlayTrack(next);
+        if (reason != null) BottomTransportBar.UpdateLyricSnippet(L.T("漫游 · ") + reason);
+    }
+
+    // ---------------- 节拍对齐的自动混音 ----------------
+
+
+    private TrackItem? _mixNext;
+    private string? _plannedFromId;
+    private bool _adoptingMix;
+    private bool _planning;
+
+    /// <summary>快放完时：挑好下一首，算出该在哪个拍点开始混，交给引擎。任何一步不满足就什么都不做，照常切歌。</summary>
+    private async void TryPlanMix(double current, double total)
+    {
+        var mode = State.AutoMix;
+        if (mode == "off" || _planning || _currentTrack == null || _playMode == "loop_single") return;
+        if (mode == "roam" && _playMode != "roam") return;
+        var a = _currentTrack;
+        if (a.IsOnline || a.IsCueTrack || a.Bpm <= 0 || _plannedFromId == a.Id) return;
+        var engine = AudioEngineService.Instance;
+        if (!engine.IsPlaying || engine.MixBusy) return;
+        double remaining = total - current;
+        if (remaining > 45 || remaining < 3) return;
+
+        _planning = true;
+        _plannedFromId = a.Id;
+        try
+        {
+            TrackItem? next;
+            if (_preChosenNext != null) next = _preChosenNext;
+            else
+            {
+                next = PickNextTrack(out var reason, out var byRoam);
+                if (next != null) { _preChosenNext = next; _preChosenReason = reason; _preChosenByRoam = byRoam; }
+            }
+            if (next == null || next == a || next.IsOnline || next.IsCueTrack || next.IsMissing) return;
+
+            // 下一首还没分析过：现在补一下（解码一首歌一般不到 1 秒）
+            if (!next.RhythmDone)
+            {
+                var res = await System.Threading.Tasks.Task.Run(() => { try { return RhythmAnalysisService.Analyze(next.FilePath, next.Duration); } catch { return null; } });
+                RhythmAnalysisService.Apply(next, res);
+            }
+            if (_currentTrack != a || !engine.IsPlaying) return;
+
+            var plan = MixPlanner.Plan(a, next, engine.CurrentTime, engine.TotalDuration);
+            if (plan == null) return;
+            if (engine.TryScheduleMix(next.FilePath, plan.NextStart, plan.StartAt, plan.FadeSec, plan.RateRatio))
+                _mixNext = next;
+        }
+        catch { }
+        finally { _planning = false; }
+    }
+
+    /// <summary>引擎已经淡到一半：界面切到新歌，但不要再让引擎重新开始播放。</summary>
+    private void OnMixAdopted(string path)
+    {
+        var next = _mixNext; _mixNext = null;
+        if (next == null || next.FilePath != path) return;
+        _endedNaturally = true;                 // 对漫游模型来说，上一首是完整听完的
+        _nextByRoam = _preChosenByRoam;
+        string? reason = _preChosenReason;
+        _preChosenNext = null;
+        _adoptingMix = true;
+        try { PlayTrack(next); }
+        finally { _adoptingMix = false; }
+        string mixText = L.F("节拍混音 · {0:0} BPM", next.Bpm) + (string.IsNullOrEmpty(next.Camelot) ? "" : " · " + next.Camelot);
+        BottomTransportBar.UpdateLyricSnippet(reason != null ? L.T("漫游 · ") + reason + "  ·  " + mixText : mixText);
     }
 
     private void PlayPrev()
@@ -710,7 +803,7 @@ public sealed partial class MainWindow : Window
     {
         if (track.IsOnline)
         {
-            BottomTransportBar.UpdateLyricSnippet(L.T("云端曲目不能加“喜欢”"));
+            BottomTransportBar.UpdateLyricSnippet(L.T("云端曲目暂不支持“喜欢”"));
             BottomTransportBar.SetFavorite(false);
             return;
         }
@@ -1122,7 +1215,7 @@ public sealed partial class MainWindow : Window
     {
         if (_currentTrack == null) return;
         StageLyricsControl.CalibrationMode = true;
-        BottomTransportBar.UpdateLyricSnippet(L.T("请点此刻正在唱的那一句"));
+        BottomTransportBar.UpdateLyricSnippet(L.T("请点击当前正在演唱的歌词行"));
     }
 
     private void StageLyricsControl_CalibrationPicked(object? sender, double lineTime)
@@ -1135,16 +1228,16 @@ public sealed partial class MainWindow : Window
     {
         var track = _currentTrack;
         if (track == null || track.IsOnline || track.IsCueTrack) return;
-        BottomTransportBar.UpdateLyricSnippet(L.T("正在 LRCLIB 搜索歌词…"));
+        BottomTransportBar.UpdateLyricSnippet(L.T("正在从 LRCLIB 查找歌词…"));
         string? lrc = await LrclibService.FetchSyncedAsync(track, System.Threading.CancellationToken.None);
         if (_currentTrack != track) return;
         if (lrc == null)
         {
-            BottomTransportBar.UpdateLyricSnippet(L.T("LRCLIB 没有找到这首歌的歌词"));
+            BottomTransportBar.UpdateLyricSnippet(L.T("LRCLIB 中未找到该歌曲的歌词"));
             return;
         }
         ApplyOnlineLyrics(lrc);
-        BottomTransportBar.UpdateLyricSnippet(L.T("已从 LRCLIB 找到歌词"));
+        BottomTransportBar.UpdateLyricSnippet(L.T("已从 LRCLIB 获取歌词"));
     }
 
     private void ApplyOnlineLyrics(string lrc)
@@ -1158,7 +1251,7 @@ public sealed partial class MainWindow : Window
     {
         if (_currentTrack == null)
         {
-            BottomTransportBar.UpdateLyricSnippet(L.T("先放一首歌，再生成海报"));
+            BottomTransportBar.UpdateLyricSnippet(L.T("请先播放歌曲，再生成海报"));
             return;
         }
         var lyrics = StageLyricsControl.Lyrics;

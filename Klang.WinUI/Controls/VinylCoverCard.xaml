@@ -117,7 +117,7 @@
                     FontSize="14"
                     FontWeight="Normal"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="点左侧栏的按钮导入本地音乐"
+                    Text="点击左侧栏的按钮导入本地音乐"
                     TextTrimming="CharacterEllipsis"
                     TextWrapping="NoWrap" />
 

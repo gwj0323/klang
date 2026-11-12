@@ -92,6 +92,7 @@ public class AudioEngineService : IDisposable
                     return;
                 }
 
+                MixTick();
                 PositionChanged?.Invoke(CurrentTime, TotalDuration);
 
                 // 派发真实声学能量频谱
@@ -151,6 +152,133 @@ public class AudioEngineService : IDisposable
         if (!wasPlaying) Pause();
     }
 
+    // ---------------- 节拍对齐的自动混音 ----------------
+
+    private CrossfadeSampleProvider? _xfade;
+    private WaveStream? _pendingNextReader, _pendingOldReader;
+    private TimeStretchSampleProvider? _pendingNextStretch;
+    private string? _pendingNextPath;
+    private bool _mixAdopted;
+    private bool _rampOn;
+    private double _rampFrom;
+    private DateTime _rampStart;
+
+    /// <summary>下一首在引擎里“成为当前曲目”时触发（界面线程）：已经淡到一半，界面该切到新歌了。</summary>
+    public event Action<string>? MixAdopted;
+
+    /// <summary>有一次混音已经安排、正在进行，或刚结束还在收尾。</summary>
+    public bool MixBusy => _xfade != null && (_xfade.State != CrossfadeSampleProvider.MixState.None || _pendingOldReader != null || _pendingNextReader != null);
+
+    /// <summary>
+    /// 安排一次混音：当前曲目播到 startAtSec（它自己时间轴上的秒数）时，把 nextPath 从 nextStartSec 开始淡入，
+    /// 持续 fadeSec（当前曲目时间轴上的秒数）；下一首按 rateRatio 变速，让两首的速度对上。
+    /// 不满足条件（格式不支持、时间太近、CUE 分轨等）返回 false，调用方就按正常方式切歌。
+    /// </summary>
+    public bool TryScheduleMix(string nextPath, double nextStartSec, double startAtSec, double fadeSec, double rateRatio)
+    {
+        var x = _xfade; var reader = _audioFileReader; var st = _stretch;
+        if (x == null || reader == null || st == null || MixBusy || _segStart > 0 || _segEnd > 0) return false;
+        if (!File.Exists(nextPath)) return false;
+
+        int R = x.WaveFormat.SampleRate, C = x.WaveFormat.Channels;
+        double curRate = Math.Max(0.1, st.Rate);
+        double untilSec = startAtSec - reader.CurrentTime.TotalSeconds;
+        if (untilSec < 0.8) return false;
+
+        WaveStream? nextReader = null;
+        try
+        {
+            nextReader = new MediaFoundationReader(nextPath);
+            nextReader.CurrentTime = TimeSpan.FromSeconds(Math.Max(0, nextStartSec));
+            ISampleProvider sp = nextReader.ToSampleProvider();
+            if (sp.WaveFormat.Channels > 2) { nextReader.Dispose(); return false; }
+            if (sp.WaveFormat.Channels != C) sp = C == 2 ? new MonoToStereoSampleProvider(sp) : new StereoToMonoSampleProvider(sp);
+            if (sp.WaveFormat.SampleRate != R) sp = new WdlResamplingSampleProvider(sp, R);
+            var nst = new TimeStretchSampleProvider(sp) { Rate = curRate * rateRatio };
+
+            long until = (long)(untilSec / curRate * R);
+            long fade = (long)(fadeSec / curRate * R);
+            if (!x.Schedule(nst, until, fade)) { nextReader.Dispose(); return false; }
+
+            _pendingNextReader = nextReader; _pendingNextStretch = nst; _pendingNextPath = nextPath;
+            _mixAdopted = false;
+            return true;
+        }
+        catch
+        {
+            try { nextReader?.Dispose(); } catch { }
+            return false;
+        }
+    }
+
+    /// <summary>取消还没开始的混音（用户跳转、切歌时）。</summary>
+    public void CancelMix()
+    {
+        if (_xfade?.CancelScheduled() == true)
+        {
+            try { _pendingNextReader?.Dispose(); } catch { }
+            _pendingNextReader = null; _pendingNextStretch = null; _pendingNextPath = null;
+        }
+    }
+
+    private void ClearMix()
+    {
+        try { _pendingNextReader?.Dispose(); } catch { }
+        try { _pendingOldReader?.Dispose(); } catch { }
+        _pendingNextReader = null; _pendingOldReader = null; _pendingNextStretch = null; _pendingNextPath = null;
+        _mixAdopted = false; _rampOn = false;
+        _xfade = null;
+    }
+
+    private void MixTick()
+    {
+        var x = _xfade;
+        if (x == null) return;
+
+        if (_pendingNextReader != null && !_mixAdopted)
+        {
+            var s = x.State;
+            if ((s == CrossfadeSampleProvider.MixState.Fading && x.Progress >= 0.5) || s == CrossfadeSampleProvider.MixState.None && x.Progress == 0 && _pendingNextReader != null && IsMixFinished(x))
+                AdoptMix();
+        }
+        if (_mixAdopted && x.State == CrossfadeSampleProvider.MixState.None)
+        {
+            try { _pendingOldReader?.Dispose(); } catch { }
+            _pendingOldReader = null;
+            _mixAdopted = false;
+        }
+
+        if (_rampOn && _stretch != null)
+        {
+            double t = (DateTime.UtcNow - _rampStart).TotalSeconds / 10.0;
+            if (t >= 1) { _stretch.Rate = _playbackRate; _rampOn = false; }
+            else { double e = t * t * (3 - 2 * t); _stretch.Rate = _rampFrom + (_playbackRate - _rampFrom) * e; }
+        }
+    }
+
+    // 淡完了（State 回到 None）但还没来得及“认领”下一首：Schedule 之后 State 不会是 None，所以只要是 None 就说明已经淡完
+    private bool IsMixFinished(CrossfadeSampleProvider x) => x.State == CrossfadeSampleProvider.MixState.None;
+
+    private void AdoptMix()
+    {
+        if (_pendingNextReader == null || _pendingNextStretch == null || _pendingNextPath == null) return;
+        _pendingOldReader = _audioFileReader;
+        _audioFileReader = _pendingNextReader;
+        _stretch = _pendingNextStretch;
+        _filePath = _pendingNextPath;
+        _segStart = 0; _segEnd = 0;
+        string path = _pendingNextPath;
+        _pendingNextReader = null; _pendingNextStretch = null; _pendingNextPath = null;
+        _mixAdopted = true;
+
+        // 淡入淡出期间下一首被轻微变速过，之后在 10 秒里慢慢回到用户设定的速度
+        _rampFrom = _stretch.Rate;
+        _rampStart = DateTime.UtcNow;
+        _rampOn = Math.Abs(_rampFrom - _playbackRate) > 0.0005;
+
+        MixAdopted?.Invoke(path);
+    }
+
     /// <summary>读取 → (变速) → DSP → WASAPI 输出。</summary>
     private void StartPipeline(WaveStream reader)
     {
@@ -161,7 +289,8 @@ public class AudioEngineService : IDisposable
         {
             Rate = _playbackRate
         };
-        _dspProvider = new DspSampleProvider(_stretch)
+        _xfade = new CrossfadeSampleProvider(_stretch);
+        _dspProvider = new DspSampleProvider(_xfade)
         {
             Volume = _volume,
             TrackGain = ComputeTrackGain(),
@@ -233,7 +362,7 @@ public class AudioEngineService : IDisposable
 
         if (ExclusiveMode)
         {
-            if (device == null) fallback = L.T("找不到输出设备");
+            if (device == null) fallback = L.T("未找到输出设备");
             else
             {
                 try
@@ -341,10 +470,10 @@ public class AudioEngineService : IDisposable
 
         // ---- 比特完美的条件 ----
         var reasons = new List<string>();
-        if (plan.Mode != "Exclusive") reasons.Add(L.T("没用 WASAPI 独占，声音会经过 Windows 混音器"));
+        if (plan.Mode != "Exclusive") reasons.Add(L.T("未使用 WASAPI 独占，音频会经过 Windows 混音器"));
         if (!BypassDsp) reasons.Add(L.T("音效未绕过"));
         if (stretched) reasons.Add(L.T("正在变速"));
-        if (_volume < 0.999f) reasons.Add(L.F("软件音量 {0}%，需要 100%", (int)Math.Round(_volume * 100)));
+        if (_volume < 0.999f) reasons.Add(L.F("软件音量为 {0}%（需为 100%）", (int)Math.Round(_volume * 100)));
         if (rg) reasons.Add(L.T("回放增益已开启"));
         if (plan.Mode == "Exclusive")
         {
@@ -356,6 +485,7 @@ public class AudioEngineService : IDisposable
 
     private void DisposeCurrent()
     {
+        ClearMix();
         ReleaseOutputDevice();
         if (_wavePlayer != null)
         {
@@ -382,6 +512,7 @@ public class AudioEngineService : IDisposable
         set
         {
             _playbackRate = Math.Clamp(value, 0.5, 2.0);
+            _rampOn = false;
             if (_stretch != null) _stretch.Rate = _playbackRate;
         }
     }
@@ -499,6 +630,7 @@ public class AudioEngineService : IDisposable
     public void Stop()
     {
         _positionTimer?.Stop();
+        ClearMix();
         if (_wavePlayer != null)
         {
             _wavePlayer.PlaybackStopped -= OnPlaybackStopped;
@@ -521,6 +653,8 @@ public class AudioEngineService : IDisposable
 
     public void Seek(double seconds)
     {
+        if (_xfade?.State == CrossfadeSampleProvider.MixState.Fading) return;   // 正在混音：这一小段不响应跳转
+        CancelMix();
         if (_audioFileReader != null)
         {
             var clamped = Math.Clamp(seconds, 0, TotalDuration);

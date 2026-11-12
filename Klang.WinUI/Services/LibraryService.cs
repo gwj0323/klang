@@ -135,7 +135,14 @@ public class LibraryService
             AudioFeat = s.AudioFeat,
             AuthVerdict = s.AuthVerdict ?? "",
             AuthCutoffHz = s.AuthCutoffHz,
-            AuthBits = s.AuthBits
+            AuthBits = s.AuthBits,
+            RhythmDone = s.RhythmDone,
+            Bpm = s.Bpm,
+            FirstBeat = s.FirstBeat,
+            LastBeat = s.LastBeat,
+            MixEnd = s.MixEnd,
+            MusicKey = s.MusicKey ?? "",
+            Camelot = s.Camelot ?? ""
         };
     }
 
@@ -176,6 +183,13 @@ public class LibraryService
                 AuthVerdict = t.AuthVerdict,
                 AuthCutoffHz = t.AuthCutoffHz,
                 AuthBits = t.AuthBits,
+                RhythmDone = t.RhythmDone,
+                Bpm = t.Bpm,
+                FirstBeat = t.FirstBeat,
+                LastBeat = t.LastBeat,
+                MixEnd = t.MixEnd,
+                MusicKey = t.MusicKey,
+                Camelot = t.Camelot,
                 FileMtimeTicks = mtime
             });
         }
@@ -223,9 +237,10 @@ public class LibraryService
                 existing.Bitrate = t.Bitrate;
                 existing.FormatBadge = t.FormatBadge;
                 existing.FileMtimeTicks = t.FileMtimeTicks;
-                existing.AuthVerdict = "";          // 文件改过：声学特征和真伪检测都要重新算
+                existing.AuthVerdict = ""; existing.RhythmDone = false;          // 文件改过：声学特征和真伪检测都要重新算
                 existing.AudioFeat = null;
                 QualityAnalysisService.Instance.Enqueue(new[] { existing });
+                RhythmAnalysisService.Instance.Enqueue(new[] { existing });
                 AudioFeatureService.Instance.Enqueue(new[] { existing });
                 if (!string.IsNullOrEmpty(t.CoverPath)) existing.CoverPath = t.CoverPath;
                 existing.IsMissing = false;
@@ -249,6 +264,7 @@ public class LibraryService
         RestartWatching();
         AudioFeatureService.Instance.Enqueue(added);
         QualityAnalysisService.Instance.Enqueue(added);
+        RhythmAnalysisService.Instance.Enqueue(added);
         return added;
     }
 
@@ -523,7 +539,7 @@ public class LibraryService
     {
         if (!track.IsCueTrack && !track.IsOnline)
         {
-            if (track.IsMissing || !File.Exists(track.FilePath)) return L.T("文件不存在，没法写入标签。");
+            if (track.IsMissing || !File.Exists(track.FilePath)) return L.T("文件不存在，无法写入标签。");
             try
             {
                 using var f = TagLib.File.Create(track.FilePath);
@@ -534,7 +550,7 @@ public class LibraryService
             }
             catch (Exception ex)
             {
-                return L.T("写入标签失败：") + ex.Message + L.T("\n（这首歌可能正在播放，换一首再试）");
+                return L.T("写入标签失败：") + ex.Message + L.T("\n（该歌曲可能正在播放，请切换到其他歌曲后重试）");
             }
             track.FileMtimeTicks = SafeMtime(track.FilePath);
         }
@@ -556,11 +572,11 @@ public class LibraryService
         new SmartPlaylistDef { Name = L.T("最近播放"), MinPlayCount = 1, SortBy = "played", Limit = 100 },
         new SmartPlaylistDef { Name = L.T("常听"), MinPlayCount = 2, SortBy = "plays", Limit = 50 },
         // 心情歌单：根据歌曲的声学特征（响度 / 节奏密度 / 明暗）自动挑，歌曲库的声学分析完成后才有内容
-        new SmartPlaylistDef { Name = L.T("心情 · 安静"), Mood = "calm", SortBy = "mood" },
-        new SmartPlaylistDef { Name = L.T("心情 · 专注"), Mood = "focus", SortBy = "mood" },
-        new SmartPlaylistDef { Name = L.T("心情 · 动感"), Mood = "energetic", SortBy = "mood" },
-        new SmartPlaylistDef { Name = L.T("心情 · 明亮"), Mood = "bright", SortBy = "mood" },
-        new SmartPlaylistDef { Name = L.T("心情 · 沉稳"), Mood = "deep", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("情绪 · 安静"), Mood = "calm", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("情绪 · 专注"), Mood = "focus", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("情绪 · 动感"), Mood = "energetic", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("情绪 · 明亮"), Mood = "bright", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("情绪 · 沉稳"), Mood = "deep", SortBy = "mood" },
     };
 
     public IEnumerable<SmartPlaylistDef> AllSmartPlaylists => BuiltInSmartPlaylists.Concat(State.SmartPlaylists);

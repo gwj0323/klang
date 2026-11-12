@@ -155,7 +155,7 @@ public sealed partial class TransportBar : UserControl
     {
         bool roam = playMode == "roam";
         ShuffleIcon.Glyph = roam ? "" : "";   // 漫游用地球图标，其余用随机图标
-        string tip = roam ? L.T("漫游：按你的口味挑下一首（点击切换为顺序播放）")
+        string tip = roam ? L.T("漫游：根据收听历史选择下一首（点击切换为顺序播放）")
             : playMode == "random" ? L.T("随机播放（点击切换为漫游）") : L.T("随机播放 / 漫游");
         ToolTipService.SetToolTip(ShuffleBtn, tip);
         AutomationProperties.SetName(ShuffleBtn, tip);

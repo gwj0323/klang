@@ -129,7 +129,7 @@ public sealed partial class CloudPanel : UserControl
             {
                 _qrKey = "";
                 QrImage.Source = null;
-                QrStatusText.Text = L.T("获取二维码失败，检查网络后点“刷新二维码”");
+                QrStatusText.Text = L.T("获取二维码失败，请检查网络后点击“刷新二维码”");
                 return;
             }
             _qrKey = key;
@@ -168,7 +168,7 @@ public sealed partial class CloudPanel : UserControl
             switch (code)
             {
                 case 801: QrStatusText.Text = L.T("等待扫码…"); break;
-                case 802: QrStatusText.Text = L.T("已扫码，请在手机上确认"); break;
+                case 802: QrStatusText.Text = L.T("已扫码，请在手机上确认登录"); break;
                 case 800:
                     _qrTimer.Stop();
                     _qrKey = "";
@@ -287,7 +287,7 @@ public sealed partial class CloudPanel : UserControl
             var list = await loader();
             if (seq != _requestSeq) return; // 已被更新的请求取代
             foreach (var t in list) _tracks.Add(t);
-            if (list.Count == 0) ShowBusy(L.T("没有内容（可能没登录，或没有结果）"));
+            if (list.Count == 0) ShowBusy(L.T("无内容（可能未登录，或无搜索结果）"));
             else HideBusy();
         }
         catch (Exception ex)

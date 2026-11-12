@@ -77,7 +77,7 @@ public static class UpdateService
 
         using var resp = await Http.GetAsync($"https://api.github.com/repos/{Repo}/releases?per_page=30", ct);
         if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden || (int)resp.StatusCode == 429)
-            throw new InvalidOperationException(L.T("GitHub 暂时限制了请求，稍后再试。"));
+            throw new InvalidOperationException(L.T("GitHub 暂时限制了请求，请稍后重试。"));
         resp.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));

@@ -33,6 +33,7 @@ public sealed partial class SettingsDialog : ContentDialog
         SelectByTag(ThemeComboBox, State.Theme, "system");
         SelectByTag(BackdropComboBox, State.BackdropMaterial, "mica");
         SelectByTag(LatencyComboBox, State.WasapiLatencyMs.ToString(), "50");
+        SelectByTag(AutoMixComboBox, State.AutoMix, "roam");
         // 输出设备列表
         DeviceComboBox.Items.Add(new ComboBoxItem { Content = L.T("系统默认"), Tag = "default" });
         foreach (var d in AudioEngineService.GetOutputDevices())
@@ -137,7 +138,7 @@ public sealed partial class SettingsDialog : ContentDialog
             _update = await UpdateService.CheckAsync();
             if (_update.Latest == null)
             {
-                UpdateStatusText.Text = L.T("GitHub 上没有找到 WinUI 版的发布。");
+                UpdateStatusText.Text = L.T("GitHub 上未找到 WinUI 版本的发布。");
             }
             else if (_update.HasUpdate)
             {
@@ -154,7 +155,7 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         catch (TaskCanceledException)
         {
-            UpdateStatusText.Text = L.T("连接 GitHub 超时，检查网络后再试。");
+            UpdateStatusText.Text = L.T("连接 GitHub 超时，请检查网络后重试。");
         }
         catch (Exception ex)
         {
@@ -225,6 +226,14 @@ public sealed partial class SettingsDialog : ContentDialog
         AudioEngineService.Instance.ReopenOutput();
     }
 
+    private void AutoMixComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || TagOf(AutoMixComboBox) is not string mode) return;
+        State.AutoMix = mode;
+        StateService.Instance.RequestSave();
+        if (mode != "off") RhythmAnalysisService.Instance.Enqueue(LibraryService.Instance.Tracks);
+    }
+
     private void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loading || TagOf(DeviceComboBox) is not string id) return;
@@ -246,7 +255,7 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         if (_loading || TagOf(SleepComboBox) is not string tag || !int.TryParse(tag, out var minutes)) return;
         AudioEngineService.Instance.SetSleepTimer(minutes);
-        SleepStatusText.Text = minutes > 0 ? L.F("{0} 分钟后暂停播放", minutes) : L.T("到点自动暂停播放");
+        SleepStatusText.Text = minutes > 0 ? L.F("{0} 分钟后暂停播放", minutes) : L.T("到时自动暂停播放");
     }
 
     private void AutoMetaSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -294,7 +303,7 @@ public sealed partial class SettingsDialog : ContentDialog
         {
             FoldersPanel.Children.Add(new TextBlock
             {
-                Text = L.T("（还没有添加文件夹）"),
+                Text = L.T("（尚未添加文件夹）"),
                 FontSize = 12,
                 Opacity = 0.6
             });
@@ -322,7 +331,7 @@ public sealed partial class SettingsDialog : ContentDialog
                 Content = new FontIcon { Glyph = "", FontSize = 11 },
                 Padding = new Thickness(6, 3, 6, 3)
             };
-            ToolTipService.SetToolTip(remove, L.T("不再监视此文件夹（已导入的歌曲保留）"));
+            ToolTipService.SetToolTip(remove, L.T("停止监视此文件夹（已导入的歌曲将保留）"));
             var captured = folder;
             remove.Click += (s, e) =>
             {
@@ -343,7 +352,7 @@ public sealed partial class SettingsDialog : ContentDialog
         try
         {
             int added = await LibraryService.Instance.RescanWatchedFoldersAsync();
-            LibraryStatusText.Text = added > 0 ? L.F("扫描完成，新增 {0} 首", added) : L.T("扫描完成，没有新歌");
+            LibraryStatusText.Text = added > 0 ? L.F("扫描完成，新增 {0} 首", added) : L.T("扫描完成，未发现新歌曲");
             if (added > 0) LibraryChanged?.Invoke();
         }
         catch (Exception ex)
@@ -359,7 +368,7 @@ public sealed partial class SettingsDialog : ContentDialog
         if (!_clearArmed)
         {
             _clearArmed = true;
-            ClearLibraryBtn.Content = L.T("再次点击确认清空");
+            ClearLibraryBtn.Content = L.T("再次点击以确认清空");
             LibraryStatusText.Text = L.T("将清空曲库和文件夹列表，不会删除磁盘上的音乐文件");
             return;
         }

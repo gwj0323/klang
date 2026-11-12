@@ -76,7 +76,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="语言 / Language" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="界面语言，立即生效" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="立即生效" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="LanguageComboBox"
@@ -94,7 +94,6 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="主题" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="浅色 / 深色 / 跟随系统" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="ThemeComboBox"
@@ -116,7 +115,6 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="背景材质" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="云母 (Mica) / 亚克力 (Acrylic)" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="BackdropComboBox"
@@ -139,7 +137,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="放大强调当前句" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前句放大、远处的句子缩小；关闭后所有句子等大。" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前句放大，其余缩小" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
                                 x:Name="LyricZoomSwitch"
@@ -157,7 +155,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="歌词字号" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="快捷键 Ctrl + / Ctrl - 也可调节" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="也可以按 Ctrl + / Ctrl -" TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
                                 <Slider
@@ -193,7 +191,6 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="输出设备" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="更换后立即生效" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="DeviceComboBox"
@@ -211,7 +208,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="WASAPI 独占模式" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按文件原本的采样率和位深直接驱动声卡，不经过 Windows 混音器。开启后其他程序没有声音；声卡不支持时自动改用共享模式。" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按文件原始采样率输出，绕过 Windows 混音器。开启后其他应用将无法发声。" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
                                 x:Name="ExclusiveSwitch"
@@ -230,7 +227,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="绕过全部音效" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="关闭均衡器、空间音效、混响和软限幅。配合独占模式和 100% 音量即可比特完美。" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="关闭均衡器、空间音效等全部音频处理，原样输出。" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
                                 x:Name="BypassSwitch"
@@ -249,7 +246,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="越大越不易卡顿，修改后立即生效" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="值越大越稳定" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="LatencyComboBox"
@@ -264,6 +261,29 @@
                         </Grid>
                     </Border>
 
+                    <TextBlock Style="{StaticResource GroupTitle}" Text="切歌过渡" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="节拍对齐的自动混音" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="临近结束时，在节拍点与下一首交叉淡入淡出。两首速度相差超过 8% 时不混音。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox
+                                x:Name="AutoMixComboBox"
+                                Grid.Column="1"
+                                Width="150"
+                                SelectionChanged="AutoMixComboBox_SelectionChanged">
+                                <ComboBoxItem Content="关闭" Tag="off" />
+                                <ComboBoxItem Content="仅漫游模式" Tag="roam" />
+                                <ComboBoxItem Content="所有播放模式" Tag="all" />
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
                     <TextBlock Style="{StaticResource GroupTitle}" Text="音量与定时" />
                     <Border Style="{StaticResource SettingCard}">
                         <Grid>
@@ -273,7 +293,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="回放增益 (ReplayGain)" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按标签统一不同歌曲的响度" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="统一不同歌曲的响度" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
                                 x:Name="ReplayGainSwitch"
@@ -296,7 +316,7 @@
                                     x:Name="SleepStatusText"
                                     FontSize="12"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="到点自动暂停播放" />
+                                    Text="到时自动暂停播放" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="SleepComboBox"
@@ -323,7 +343,7 @@
                     <TextBlock Style="{StaticResource GroupTitle}" Text="音乐文件夹" />
                     <Border Style="{StaticResource SettingCard}">
                         <StackPanel Spacing="8">
-                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="这些文件夹里的新增、改动和删除会自动同步" TextWrapping="Wrap" />
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="文件夹中的变化将自动同步" TextWrapping="Wrap" />
                             <StackPanel x:Name="FoldersPanel" Spacing="4" />
                             <TextBlock
                                 x:Name="LibraryStatusText"
@@ -348,7 +368,7 @@
                                 <TextBlock
                                     FontSize="12"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="本地歌曲缺封面、专辑或歌词时，到网易云按歌名和歌手查找；歌词还会去 LRCLIB 找。会联网发送歌名、歌手、专辑和时长。"
+                                    Text="为缺少封面、专辑或歌词的歌曲联网查找（网易云、LRCLIB），将发送歌名、歌手、专辑和时长。"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
@@ -384,7 +404,7 @@
                                     VerticalAlignment="Center"
                                     FontSize="12"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="缓存上限（超出后清掉最久没听的）" />
+                                    Text="缓存上限" />
                                 <ComboBox
                                     x:Name="CacheLimitBox"
                                     Grid.Column="1"
@@ -448,7 +468,7 @@
                                         x:Name="UpdateStatusText"
                                         FontSize="12"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Text="到 GitHub 看有没有新版本"
+                                        Text="查看 GitHub 上的新版本"
                                         TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
@@ -487,7 +507,7 @@
                                 <TextBlock
                                     FontSize="11"
                                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Text="用系统浏览器下载，安装前请先退出 Klang。"
+                                    Text="安装前请先退出 Klang。"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                         </StackPanel>

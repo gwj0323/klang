@@ -80,7 +80,7 @@
                     <Expander
                         HorizontalAlignment="Stretch"
                         HorizontalContentAlignment="Stretch"
-                        Header="扫码登录失败时，改用 Cookie 登录">
+                        Header="扫码登录不可用时，可使用 Cookie 登录">
                         <StackPanel Spacing="8">
                             <TextBox
                                 x:Name="CookieBox"
@@ -104,7 +104,7 @@
                     <TextBlock
                         FontSize="12"
                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                        Text="不登录也能搜歌试听：在上方输入关键字，回车即可。"
+                        Text="无需登录即可搜索并试听：在上方输入关键字后按回车。"
                         TextWrapping="Wrap" />
                 </StackPanel>
             </ScrollViewer>

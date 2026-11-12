@@ -104,7 +104,7 @@
                                 <MenuFlyoutItem x:Name="LyricOffsetInfo" IsEnabled="False" Text="当前偏移：0.0 秒" />
                                 <MenuFlyoutItem Click="LyricEarlier_Click" Text="歌词提前 0.5 秒" />
                                 <MenuFlyoutItem Click="LyricLater_Click" Text="歌词延后 0.5 秒" />
-                                <MenuFlyoutItem Click="LyricCalibrate_Click" Text="校准：点击正在唱的那一句" />
+                                <MenuFlyoutItem Click="LyricCalibrate_Click" Text="校准：点击当前演唱的歌词行" />
                                 <MenuFlyoutItem Click="LyricOffsetReset_Click" Text="重置偏移" />
                             </MenuFlyoutSubItem>
                             <MenuFlyoutItem Click="LyricOnline_Click" Text="在线搜索歌词（LRCLIB）" />

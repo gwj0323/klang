@@ -38,6 +38,13 @@ public class SavedTrack
     public string AuthVerdict { get; set; } = "";
     public float AuthCutoffHz { get; set; }
     public int AuthBits { get; set; }
+    public bool RhythmDone { get; set; }
+    public double Bpm { get; set; }
+    public double FirstBeat { get; set; }
+    public double LastBeat { get; set; }
+    public double MixEnd { get; set; }
+    public string MusicKey { get; set; } = "";
+    public string Camelot { get; set; } = "";
 }
 
 /// <summary>漫游模型里每首歌的行为统计。</summary>
@@ -75,6 +82,7 @@ public class AppState
 {
     public double Volume { get; set; } = 0.85;
     public string PlayMode { get; set; } = "loop_list";
+    public string AutoMix { get; set; } = "roam";           // 节拍对齐的自动混音：off | roam（仅漫游模式）| all
     public string Language { get; set; } = "auto";          // auto（跟随系统）| zh-CN | en | Languages 文件夹里其他语言
     public string Theme { get; set; } = "system";          // system | light | dark
     public string BackdropMaterial { get; set; } = "mica"; // mica | acrylic | solid

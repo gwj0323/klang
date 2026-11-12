@@ -48,7 +48,7 @@ public static class QualityDialog
         {
             holder.Children.Add(new TextBlock
             {
-                Text = error != null ? L.T("分析失败：") + error : L.T("文件太短或无法解码，没法分析。"),
+                Text = error != null ? L.T("分析失败：") + error : L.T("文件过短或无法解码，无法分析。"),
                 TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -76,7 +76,7 @@ public static class QualityDialog
         string detail = L.F("文件标称：{0}", track.FormatBadge) + "\n"
             + L.F("采样率 {0} Hz，有效位深 {1} bit", r.SampleRate, r.EffectiveBits) + "\n"
             + (r.CutoffHz > 0 ? L.F("频谱在约 {0:0.0} kHz 处截止（奈奎斯特频率 {1:0.0} kHz）", r.CutoffHz / 1000f, r.NyquistHz / 1000f)
-                              : L.F("频谱一直延伸到接近奈奎斯特频率（{0:0.0} kHz），没有被截断", r.NyquistHz / 1000f));
+                              : L.F("频谱延伸至接近奈奎斯特频率（{0:0.0} kHz），未发现截断", r.NyquistHz / 1000f));
         panel.Children.Add(new TextBlock { Text = detail, FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = secondary });
 
         bool dark = fe?.ActualTheme == ElementTheme.Dark;
@@ -86,7 +86,7 @@ public static class QualityDialog
 
         panel.Children.Add(new TextBlock
         {
-            Text = L.T("平均频谱，越靠右频率越高。真无损的高频是慢慢衰减的；由 MP3 / AAC 转成的文件，往往在 16~20 kHz 附近陡然截断。结果仅供参考。"),
+            Text = L.T("横轴为频率。若高频在 16~20 kHz 附近陡然截断，通常是由 MP3 / AAC 转码而来。结果仅供参考。"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
             Foreground = secondary

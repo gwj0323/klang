@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -210,7 +210,7 @@ public sealed class QualityAnalysisService
         return new AuthResult(verdict, cutoff, bits, sr, plot, (float)nyq);
     }
 
-    private static void Fft(float[] re, float[] im)
+    internal static void Fft(float[] re, float[] im)
     {
         int n = re.Length;
         for (int i = 1, j = 0; i < n; i++)

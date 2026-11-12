@@ -224,11 +224,11 @@
                                 <RadioMenuFlyoutItem Click="QualityFilter_Click" GroupName="LibQuality" Tag="2" Text="仅 Hi-Res" />
                                 <RadioMenuFlyoutItem Click="QualityFilter_Click" GroupName="LibQuality" Tag="-1" Text="仅有损" />
                                 <MenuFlyoutSeparator />
-                                <ToggleMenuFlyoutItem x:Name="FilterNoCover" Click="MissingFilter_Click" Text="缺封面" />
-                                <ToggleMenuFlyoutItem x:Name="FilterNoAlbum" Click="MissingFilter_Click" Text="缺专辑 / 歌手信息" />
-                                <ToggleMenuFlyoutItem x:Name="FilterNoLyrics" Click="MissingFilter_Click" Text="缺歌词（无同名 .lrc）" />
+                                <ToggleMenuFlyoutItem x:Name="FilterNoCover" Click="MissingFilter_Click" Text="缺少封面" />
+                                <ToggleMenuFlyoutItem x:Name="FilterNoAlbum" Click="MissingFilter_Click" Text="缺少专辑 / 歌手信息" />
+                                <ToggleMenuFlyoutItem x:Name="FilterNoLyrics" Click="MissingFilter_Click" Text="缺少歌词（无同名 .lrc 文件）" />
                                 <ToggleMenuFlyoutItem x:Name="FilterMissingFile" Click="MissingFilter_Click" Text="文件丢失" />
-                                <ToggleMenuFlyoutItem x:Name="FilterFake" Click="MissingFilter_Click" Text="疑似假无损" />
+                                <ToggleMenuFlyoutItem x:Name="FilterFake" Click="MissingFilter_Click" Text="疑似伪无损" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Click="ClearFilters_Click" Text="清除筛选" />
                             </MenuFlyoutSubItem>
@@ -245,7 +245,7 @@
                                 <MenuFlyoutItem Click="AcousticMap_Click" Text="声学地图…" />
                                 <MenuFlyoutItem Click="RescanNow_Click" Text="立即重新扫描文件夹" />
                                 <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Click="ResetRoam_Click" Text="重置漫游学习记录…" />
+                                <MenuFlyoutItem Click="ResetRoam_Click" Text="重置漫游学习数据…" />
                             </MenuFlyoutSubItem>
                         </MenuFlyout>
                     </Button.Flyout>

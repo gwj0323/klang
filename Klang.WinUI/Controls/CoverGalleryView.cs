@@ -95,7 +95,7 @@ public sealed class CoverGalleryView : UserControl
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 8,
-                Children = { new FontIcon { Glyph = "", FontSize = 13 }, new TextBlock { Text = L.T("随便放一张"), FontSize = 12 } }
+                Children = { new FontIcon { Glyph = "", FontSize = 13 }, new TextBlock { Text = L.T("随机播放一张"), FontSize = 12 } }
             },
             CornerRadius = new CornerRadius(16),
             Padding = new Thickness(12, 5, 12, 5)

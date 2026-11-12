@@ -43,8 +43,8 @@ public static class AcousticMapDialog
             panel.Children.Add(new TextBlock
             {
                 Text = analyzed == 0
-                    ? L.T("还没有分析完的歌，Klang 正在后台分析，过会儿再来看。")
-                    : L.T("至少分析完两首歌才能画出地图。"),
+                    ? L.T("分析进行中，请稍后再试。")
+                    : L.T("至少需要两首已完成分析的歌曲才能生成地图。"),
                 TextWrapping = TextWrapping.Wrap
             });
         }
@@ -53,7 +53,7 @@ public static class AcousticMapDialog
             var points = svc.GetMap(library);
             panel.Children.Add(new TextBlock
             {
-                Text = L.F("显示 {0} 首（已分析 {1} 首）。离得越近的歌听起来越像，点一首就从它开始播。", points.Count, analyzed),
+                Text = L.F("共 {0} 首，已分析 {1} 首。距离越近，声学特征越相似；点击即可播放。", points.Count, analyzed),
                 FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = secondary
             });
 
@@ -178,7 +178,7 @@ public static class AcousticMapDialog
             };
 
             panel.Children.Add(canvas);
-            panel.Children.Add(new TextBlock { Text = L.T("滚轮缩放，拖动平移。同色的歌听起来相近。"), FontSize = 11, Foreground = secondary });
+            panel.Children.Add(new TextBlock { Text = L.T("滚轮缩放，拖动平移。颜色相同的歌曲声学特征相近。"), FontSize = 11, Foreground = secondary });
 
             var dlg = new ContentDialog
             {

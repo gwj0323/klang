@@ -33,7 +33,7 @@ public sealed partial class MiniPlayerWindow : Window
 
         try { SystemBackdrop = new DesktopAcrylicBackdrop(); } catch { }
 
-        WindowHelpers.SetupOverlay(this, 420, 148);
+        WindowHelpers.SetupOverlay(this, 420, 168);
         WindowHelpers.Place(AppWindow, State.MiniX, State.MiniY,
             (work, size) => new PointInt32(work.X + work.Width - size.Width - 32, work.Y + work.Height - size.Height - 32));
         WindowHelpers.TrackPosition(AppWindow, (x, y) =>

@@ -20,7 +20,7 @@ public static class SignalPathPanel
 
         if (!info.Playing)
         {
-            panel.Children.Add(new TextBlock { Text = L.T("还没在播放。放一首歌，这里会显示它从文件到声卡的每一步。"), TextWrapping = TextWrapping.Wrap, Foreground = secondary });
+            panel.Children.Add(new TextBlock { Text = L.T("当前未在播放。"), TextWrapping = TextWrapping.Wrap, Foreground = secondary });
             return panel;
         }
 
@@ -59,7 +59,7 @@ public static class SignalPathPanel
         var inner = new StackPanel { Spacing = 4 };
         inner.Children.Add(new TextBlock
         {
-            Text = info.IsBitPerfect ? "✓ " + L.T("比特完美：音频数据原样送到声卡") : "⚠ " + L.T("当前不是比特完美"),
+            Text = info.IsBitPerfect ? "✓ " + L.T("比特完美：音频数据未经修改，直接输出至声卡") : "⚠ " + L.T("当前不是比特完美"),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             Foreground = new SolidColorBrush(info.IsBitPerfect ? good : warn),
             TextWrapping = TextWrapping.Wrap
@@ -69,7 +69,7 @@ public static class SignalPathPanel
         if (info.IsBitPerfect)
             inner.Children.Add(new TextBlock { Text = L.T("（每首歌开头约 25 毫秒的防爆音淡入除外）"), FontSize = 11, Foreground = tertiary });
         else
-            inner.Children.Add(new TextBlock { Text = L.T("想要比特完美：到设置的“播放与音频”里打开独占模式和绕过全部音效，并把音量调到 100%。"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Foreground = tertiary, Margin = new Thickness(0, 4, 0, 0) });
+            inner.Children.Add(new TextBlock { Text = L.T("比特完美的条件：独占模式、绕过全部音效、音量 100%（设置 → 播放与音频）。"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Foreground = tertiary, Margin = new Thickness(0, 4, 0, 0) });
         box.Child = inner;
         panel.Children.Add(box);
         return panel;

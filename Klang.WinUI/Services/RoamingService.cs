@@ -23,8 +23,8 @@ public sealed class RoamingService
     private const int F = 12;                 // 特征数（不含偏置）
     private static readonly string[] FeatureNames =
     {
-        L.T("你常在上一首之后听它"), L.T("同一位歌手"), L.T("同一张专辑"), L.T("同一目录"), L.T("音色和节奏相近"), L.T("音质相当"),
-        L.T("时长相近"), L.T("你常听完它"), L.T("你喜欢的歌"), L.T("（近期放过）"), L.T("你常播放它"), L.T("这个时段你常听它")
+        L.T("常在上一首之后播放"), L.T("同一位歌手"), L.T("同一张专辑"), L.T("同一目录"), L.T("音色和节奏相近"), L.T("音质相当"),
+        L.T("时长相近"), L.T("常完整播放"), L.T("已喜欢的歌曲"), L.T("（近期播放过）"), L.T("播放频率较高"), L.T("该时段常播放")
     };
     private static readonly float[] Prior = { 2.0f, 0.6f, 0.4f, 0.1f, 1.4f, 0.2f, 0.3f, 1.5f, 0.5f, -2.5f, 0.3f, 0.5f, 0f };
 
@@ -238,16 +238,18 @@ public sealed class RoamingService
 
         // 偶尔纯随机探索，防止模型只在已知口味里打转
         if (pool.Count > 3 && _rand.NextDouble() < 0.07)
-            return new Pick(pool[_rand.Next(pool.Count)], L.T("随便走走，换个口味"));
+            return new Pick(pool[_rand.Next(pool.Count)], L.T("随机探索"));
 
         EnsureNorm(library);
         var w = Model.Weights;
+        bool mixOn = StateService.Instance.State.AutoMix != "off";
         var scored = new List<(TrackItem T, double Logit, float[] Feat)>(pool.Count);
         foreach (var t in pool)
         {
             var f = Features(current, t, library);
             double z = w[F];
             for (int i = 0; i < F; i++) z += w[i] * f[i];
+            if (mixOn) z += MixPlanner.Affinity(current, t);       // 节拍混音开着时，速度接近、调性相容的歌更容易被选中
             scored.Add((t, z, f));
         }
 
@@ -273,6 +275,6 @@ public sealed class RoamingService
             double c = w[i] * f[i];
             if (c > bestV) { bestV = c; best = i; }
         }
-        return best < 0 ? L.T("按你的口味挑的") : FeatureNames[best];
+        return best < 0 ? L.T("符合收听偏好") : FeatureNames[best];
     }
 }
