@@ -1,109 +1,186 @@
 <div align="center">
-  <img src="qt6_player/assets/klang_icon.png" width="96" height="96" alt="Klang Icon" />
+  <img src="Klang.WinUI/Assets/AppLogo.png" width="96" height="96" alt="Klang" />
   <h1>Klang</h1>
-  <p>轻量、现代的 Windows 本地与网易云无损音乐播放器</p>
+  <p>面向 Windows 的本地无损音乐播放器，集成网易云音乐</p>
+
+  [![Release](https://img.shields.io/github/v/release/gwj0323/klang?label=release&color=blue)](https://github.com/gwj0323/klang/releases)
+  [![License](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
+  ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
 </div>
 
 ---
 
-Klang 是一款基于 PyQt6 的 Windows 桌面音乐播放器。支持本地无损音频播放与网易云音乐账号同步，原生适配 Windows 11 Mica / Acrylic 材质，提供类似 Apple Music 的全屏动态流动歌词背景。
+Klang 是一款 Windows 桌面音乐播放器，支持本地音频文件和网易云音乐。
 
-已编译的单文件安装包可在 [GitHub Releases](https://github.com/gwj0323/klang/releases) 下载。
+当前版本基于 WinUI 3 / .NET 10（`Klang.WinUI`）。早期的 PyQt6 版本保留在 `qt6_player`，见[文末](#pyqt6-旧版)。
 
----
+## 名称与设计理念
 
-## 功能特性
+Klang 取自丹麦语 klang，意为声音、音色、余音。
 
-### 本地播放与曲库
-- **格式支持**：FLAC、WAV、APE、MP3、M4A、AAC、OGG、WMA 等常见音频格式，支持 CUE 分轨解析，可读取内嵌封面与元数据。
-- **WASAPI 缓冲优化**：针对 Windows 桌面切换与后台运行优化环形缓冲区，减少切窗、锁屏或高负载时的卡顿，支持毫秒级拖拽即播。
-- **曲库管理**：支持扫描本地文件夹、自定义歌单、按歌手 / 专辑 / 目录树分类浏览与实时过滤。
+设计上遵循以下几点：
 
-### 网易云音乐集成
-- **扫码登录**：支持客户端扫码登录，Cookie 本地加密保存（Windows 使用 DPAPI，仅当前 Windows 用户可解密），启动时自动恢复会话。
-- **歌单同步**：同步「我喜欢的音乐」、个人创建与收藏的歌单以及每日推荐。
-- **在线搜索**：切到网易云页面后搜索框自动支持云端曲库搜索，即点即播。
-- **多音质与离线缓存**：支持在标准、极高、无损 FLAC、Hi-Res 与超清母带间切换；支持设定本地缓存上限（500MB ~ 5GB 或不限），按 LRU 自动清理过期缓存。注意：音质等级（含 Hi-Res / 超清母带）指下载的音源规格。播放管线按文件的原始采样率与位深解码（16 位源以 16 位整数存放，更高位深以 32 位浮点存放），音效处理用 64 位浮点运算，输出时在声卡支持的格式里依次选择 32 位浮点 / 32 位整数 / 16 位整数；声卡不支持原始采样率，或整首解码后会占用过多内存（上限约 768 MB，整轨 CUE 按 1 小时估算）时，才会降到声卡支持的较低采样率。Windows 共享模式下系统混音器仍会按“声音设置”里的设备默认格式再次重采样，本程序不使用独占模式，因此不是严格的位完美输出。切换到采样率不同的下一首时，会等上一首的尾巴在声卡里放完再切换（此时无法做到完全无缝）。
+- 声音保持原样。默认不改动音频数据：按文件的原始采样率和位深解码，音效可以整体旁路，独占输出时不经过系统混音器。
+- 处理过程可查看。信号路径面板列出每一级处理，比特完美有明确的判定条件；音质分析给出频谱，由使用者自己判断。
+- 界面从简。使用系统材质与主题，功能按曲库、播放、歌词分层，需要时才出现。
+- 数据留在本地。曲库、播放统计和设置只保存在本机，联网功能可以关闭。
+- 自动行为给出依据。漫游选歌会显示理由；自动混音只在速度和节拍条件满足时进行，不满足就照常切歌。
+## 下载与安装
 
-### 界面与沉浸模式
-- **系统材质**：支持 Windows 11 Mica（云母）、Acrylic（亚克力）及经典纯色背景，支持深色 / 浅色主题切换。
-- **动态流动背景**：沉浸模式下基于封面 k-means 聚类提取主色，通过 OpenGL 着色器实时计算多层流动网格渐变，并随低频能量呼吸律动。
-- **歌词排版**：支持双语歌词、逐字卡拉OK动效与日文假名/罗马音注音；可一键生成歌词海报卡片。
-- **多种视图形态**：常规窗口、全屏沉浸（支持大封面与极简黑胶唱盘模式）、迷你悬浮窗与置顶桌面歌词。
-- **系统级集成**：支持 Windows SMTC 媒体按键联动、任务栏悬停缩略图快捷控件（上一首 / 播放暂停 / 下一首），适配高分屏 Per-Monitor DPI。
+前往 [GitHub Releases](https://github.com/gwj0323/klang/releases) 下载最新版本（标签以 `-winui` 结尾的为 WinUI 版）：
 
-### 声音调节与 DSP
-- **耳机校准 (AutoEq)**：集成开源 AutoEq 数据库，内置主流耳机型号（HD600/650/800S、WH-1000XM4/XM5、AirPods Pro/Max、Bose 等）的频响补偿预设。
-- **人声 / 伴奏无极调节**：基于 Mid/Side 声道频域分离算法，支持实时淡化人声做伴奏，或凸显人声细节。
-- **黑胶模拟声效**：可选黑胶唱盘切电起停惯性滑音、黑胶底噪与温暖度染色。
-- **均衡器与混响**：内置 5 段参量均衡器与立体声空间混响调节。
+| 文件 | 说明 |
+| :--- | :--- |
+| `Klang-Setup-<版本>-x64.exe` | 安装版。默认安装到当前用户目录，无需管理员权限，可选择创建桌面快捷方式，支持卸载与覆盖升级 |
+| `Klang-WinUI-win-x64.zip` | 绿色版。解压后运行 `Klang.WinUI.exe` |
 
----
+- 系统要求：Windows 10 1809（17763）及以上，x64。应用自带运行时，无需另装 .NET。
+- 安装包与程序目前未做代码签名，首次运行时 Windows SmartScreen 可能给出提示，选择“更多信息 → 仍要运行”即可。
+- 用户数据保存在 `%LocalAppData%\Klang`，卸载不会删除。
+
+## 功能
+
+### 音频与信号路径
+- 原始格式解码：基于 Media Foundation，按文件原始采样率与位深解码（实测可解码 24 bit / 192 kHz FLAC），支持 FLAC、WAV、ALAC、MP3、AAC、M4A、OGG、WMA 等常见格式以及 CUE 分轨。
+- WASAPI 独占模式：按文件原始采样率输出，绕过 Windows 混音器；声卡不支持时自动回退到共享模式，并在信号路径面板中说明原因。
+- 绕过全部音效：关闭均衡器、空间音效、混响和软限幅，音频原样输出。
+- 信号路径面板：逐级显示源文件 → 解码 → 变速 → 音效 → 音量 → 输出，并判定当前是否满足比特完美的条件（独占输出、音效旁路、音量 100%、无变速、无回放增益、输出格式不低于源）。
+- 变速不变调：0.5×–2.0×（WSOLA），回放增益（ReplayGain）。
+- DSP：5 段均衡器、空间音效、混响、人声 / 伴奏平衡、黑胶质感；内置 AutoEq 耳机补偿预设。
+
+### 音质与音乐分析
+- 伪无损检测：分析平均频谱，识别 MP3 / AAC 转码、由 CD 音质升采样的 Hi-Res 文件以及位深填充，结果显示在曲库中，可按此筛选，并可在“音质分析”中查看频谱图。检测为启发式方法，结果仅供参考。
+- 速度与调性：后台分析 BPM、拍点位置和调性（Camelot 编号）。
+- 声学地图：将曲库按 10 维声学特征（响度、动态、频谱重心等）降维后绘制成二维图，点击即可从该曲开始播放；提供“播放相似歌曲”和按情绪（安静 / 专注 / 动感 / 明亮 / 沉稳）自动生成的智能歌单。
+
+### 切歌与播放模式
+- 列表循环、单曲循环、随机播放，以及漫游模式：根据收听历史（完整播放、跳过、顺序、时段等）学习偏好并选择下一首，学习数据保存在本地，可随时重置。
+- 节拍对齐的自动混音：歌曲临近结束时，在节拍点与下一首等功率交叉淡入淡出；两首速度相差 8% 以内时会自动做速度匹配。可设为关闭 / 仅漫游模式 / 所有播放模式。速度差过大、没有稳定节拍、云端曲目和 CUE 分轨不会混音。
+
+### 曲库管理
+- 监视多个音乐文件夹，新增、修改、删除自动同步；元数据未变化的文件跳过解析，启动快。
+- 按歌手 / 专辑 / 目录分组，按多种方式排序，多条件筛选（音质、缺封面、缺歌词、疑似伪无损、文件丢失等）。
+- 标签编辑（单曲与整张专辑批量编辑，写回音频文件）、重复歌曲检查、丢失文件重新定位。
+- 歌单、智能歌单（按音质、收藏、添加时间、播放次数、情绪等条件）、M3U / M3U8 导入与导出。
+
+### 歌词
+- 基于 Win2D 的歌词渲染：当前句放大、平滑滚动，支持逐字高亮（增强 LRC）、翻译与罗马音副行。
+- 本地 `.lrc`、内嵌歌词、网易云、[LRCLIB](https://lrclib.net) 多个来源；联网获取的歌词缓存在本地。
+- 歌词时间校准：整体提前或延后，也可点击“正在演唱的那一句”自动对齐，按歌曲分别保存。
+- 桌面歌词、歌词海报生成。
+
+### 网易云音乐
+- 扫码或 Cookie 登录，Cookie 使用 Windows DPAPI 加密保存，仅当前 Windows 用户可解密。
+- 同步“我喜欢的音乐”、个人与收藏的歌单、每日推荐；支持在线搜索与试听。
+- 标准、极高、无损 FLAC、Hi-Res、超清母带等音质可选，不可用时自动降级；本地缓存有大小上限，超出后清除最久未播放的文件。
+
+### 界面与系统集成
+- Windows 11 Mica / Acrylic / 纯色背景，浅色 / 深色 / 跟随系统。
+- 沉浸模式（随封面主色变化的动态背景）、迷你窗口、全屏。
+- Windows 系统媒体控件（SMTC）与多媒体键。
+- 界面语言：简体中文、English、Dansk；可在设置中检查 GitHub 上的新版本。
+
+## 隐私与网络请求
+
+Klang 仅在以下情况联网，均可在设置中控制或不使用相应功能：
+
+| 功能 | 访问对象 | 发送的内容 |
+| :--- | :--- | :--- |
+| 自动补全封面与歌词（设置中可关闭） | 网易云音乐、LRCLIB | 歌名、歌手、专辑、时长 |
+| 网易云账号与云端播放 | 网易云音乐 | 登录凭据与请求的曲目 |
+| 检查更新 | GitHub | 无个人信息 |
+
+曲库、播放统计和设置只保存在本机 `%LocalAppData%\Klang`。
 
 ## 快捷键
 
 | 按键 | 功能 |
 | :--- | :--- |
 | `Space` | 播放 / 暂停 |
-| `←` / `→` | 快退 5 秒 / 快进 5 秒 |
-| `Ctrl + ←` / `Ctrl + →` | 上一首 / 下一首 |
+| `←` / `→` | 快退 / 快进 5 秒 |
 | `↑` / `↓` | 调节音量 |
-| `F11` | 切换全屏沉浸模式 |
-| `Ctrl + M` | 切换迷你悬浮窗 |
-| `Ctrl + D` | 开关桌面歌词 |
-| `Ctrl + F` 或 `/` | 聚焦搜索框（支持本地与网易云搜索） |
+| `Ctrl + ←` / `Ctrl + →` | 上一首 / 下一首 |
+| `Ctrl + F` | 聚焦搜索框 |
+| `Ctrl + I` | 沉浸模式（`Esc` 退出） |
+| `Ctrl + M` | 迷你窗口 |
+| `Ctrl + D` | 桌面歌词 |
+| `Ctrl + T` | 切换歌词副行（翻译 / 罗马音） |
 | `Ctrl + +` / `Ctrl + -` | 放大 / 缩小歌词字号 |
+| `F11` | 全屏 |
 
----
+## 从源码构建
 
-## 运行与构建
+环境：Windows 10 / 11 x64，[.NET 10 SDK](https://dotnet.microsoft.com/download)。
 
-### 环境要求
-- Windows 10 / 11 (64-bit)
-- Python 3.10+
-
-### 从源码运行
-
-推荐使用 `uv`（项目目前没有 `pyproject.toml`，用 requirements.txt 安装依赖）：
 ```bash
 git clone https://github.com/gwj0323/klang.git
 cd klang
-uv venv
-uv pip install -r requirements.txt
-uv run python run_qt6_player.py
+
+# 运行
+dotnet run --project Klang.WinUI -c Release
+
+# 发布（自包含，win-x64）
+dotnet publish Klang.WinUI/Klang.WinUI.csproj -c Release -r win-x64 -p:Platform=x64 -o publish/Klang.WinUI
 ```
 
-或使用普通 `pip`：
+生成安装包需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)：
+
 ```bash
-git clone https://github.com/gwj0323/klang.git
-cd klang
+ISCC.exe /DAppVersion=2.4.0 /DSourceDir=..\publish\Klang.WinUI installer\Klang.iss
+```
+
+输出位于 `dist-installer/`。仓库的 GitHub Actions 工作流（`.github/workflows/build-exe.yml`，手动触发）会同时产出绿色版压缩包与安装包。
+
+### 目录结构
+
+| 路径 | 内容 |
+| :--- | :--- |
+| `Klang.WinUI/` | WinUI 3 应用（当前主版本） |
+| `Klang.WinUI/Services/` | 音频引擎、DSP、曲库、歌词、分析、网易云等服务 |
+| `Klang.WinUI/Languages/` | 界面语言文件（`en.json`、`da.json`，以中文原文为键） |
+| `installer/` | Inno Setup 安装脚本 |
+| `qt6_player/`、`src/` | 早期的 PyQt6 版本 |
+
+## PyQt6 旧版
+
+早期版本基于 PyQt6，功能与 WinUI 版有差异（例如没有独占模式与信号路径面板）。源码保留在 `qt6_player`，不再积极开发，Release 中无 `-winui` 后缀的版本即为该版本。
+
+```bash
+# 需要 Python 3.10+
 pip install -r requirements.txt
 python run_qt6_player.py
-```
 
-### 本地打包
-使用 PyInstaller 打包单文件可执行文件（输出到 `dist/Klang.exe`）：
-```bash
-uv run pyinstaller Klang.spec --noconfirm
+# 打包为单文件（输出到 dist/Klang.exe）
+pyinstaller Klang.spec --noconfirm
 ```
-
----
 
 ## 开源引用与致谢
 
-| 项目名称 | 开源许可证 | 来源 | 使用场景 |
-| :--- | :--- | :--- | :--- |
-| **PyNCM** | GPL-3.0 | [greats3an/pyncm](https://github.com/greats3an/pyncm) | 网易云音乐 API 解析、会话管理与音频直链换取 |
-| **PyQt-Frameless-Window** | LGPL-3.0 | [zhiyiYo/PyQt-Frameless-Window](https://github.com/zhiyiYo/PyQt-Frameless-Window) | Windows 11 无边框窗口与 Mica / Acrylic 材质支持 |
-| **AutoEq** | MIT | [jaakkopasanen/AutoEq](https://github.com/jaakkopasanen/AutoEq) | 耳机频响校准数据与哈曼曲线补偿滤波参数 |
-| **mutagen** | GPL-2.0-or-later | [quodlibet/mutagen](https://github.com/quodlibet/mutagen) | 本地音频标签、专辑封面与元数据解析 |
-| **python-qrcode** | BSD-3-Clause | [lincolnloop/python-qrcode](https://github.com/lincolnloop/python-qrcode) | 网易云扫码登录二维码生成 |
-| **Pillow** | HPND | [python-pillow/Pillow](https://github.com/python-pillow/Pillow) | 封面图像缩放、模糊与色块图生成 |
-| **NumPy & SciPy** | BSD-3-Clause | [numpy/numpy](https://github.com/numpy/numpy), [scipy/scipy](https://github.com/scipy/scipy) | DSP 滤波、双二阶滤波器计算、Mid/Side 声道运算与颜色聚类 |
-| **PyQt6** | GPL-3.0 | [Riverbank Computing](https://www.riverbankcomputing.com/software/pyqt/) | GUI 框架与底层音频输出管道 |
+### WinUI 版
 
----
+| 项目 | 许可证 | 用途 |
+| :--- | :--- | :--- |
+| [Windows App SDK / WinUI 3](https://github.com/microsoft/WindowsAppSDK) | MIT | 界面框架 |
+| [Win2D](https://github.com/microsoft/Win2D) | MIT | 歌词、频谱图与声学地图的绘制 |
+| [NAudio](https://github.com/naudio/NAudio) | MIT | 音频解码、WASAPI 输出 |
+| [TagLib#](https://github.com/mono/taglib-sharp) | LGPL-2.1 | 音频标签、封面与内嵌歌词读写 |
+| [QRCoder](https://github.com/codebude/QRCoder) | MIT | 登录二维码生成 |
+| [ComputeSharp](https://github.com/Sergio0694/ComputeSharp) | MIT | GPU 计算（动态背景） |
+| [AutoEq](https://github.com/jaakkopasanen/AutoEq) | MIT | 耳机频响补偿数据 |
+| [LRCLIB](https://lrclib.net) | — | 歌词数据来源（开放接口） |
+
+### PyQt6 版
+
+| 项目 | 许可证 | 用途 |
+| :--- | :--- | :--- |
+| [PyNCM](https://github.com/greats3an/pyncm) | GPL-3.0 | 网易云音乐 API |
+| [PyQt-Frameless-Window](https://github.com/zhiyiYo/PyQt-Frameless-Window) | LGPL-3.0 | 无边框窗口与 Mica / Acrylic |
+| [mutagen](https://github.com/quodlibet/mutagen) | GPL-2.0-or-later | 音频标签与封面 |
+| [python-qrcode](https://github.com/lincolnloop/python-qrcode) | BSD-3-Clause | 登录二维码 |
+| [Pillow](https://github.com/python-pillow/Pillow) | HPND | 图像处理 |
+| [NumPy](https://github.com/numpy/numpy) / [SciPy](https://github.com/scipy/scipy) | BSD-3-Clause | DSP 与颜色聚类 |
+| [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) | GPL-3.0 | GUI 框架 |
 
 ## 开源协议
 
-本项目采用 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 协议开源。
+本项目采用 [GNU General Public License v3.0](LICENSE) 开源。

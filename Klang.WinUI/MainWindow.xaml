@@ -54,8 +54,11 @@
                 <Image
                     Width="20"
                     Height="20"
-                    VerticalAlignment="Center"
-                    Source="Assets/AppIcon.ico" />
+                    VerticalAlignment="Center">
+                    <Image.Source>
+                        <BitmapImage DecodePixelType="Logical" DecodePixelWidth="20" UriSource="ms-appx:///Assets/AppLogo.png" />
+                    </Image.Source>
+                </Image>
 
                 <TextBlock
                     Margin="2,0,0,0"
