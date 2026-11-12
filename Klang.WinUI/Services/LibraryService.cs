@@ -132,7 +132,10 @@ public class LibraryService
             PlayCount = s.PlayCount,
             LastPlayedTimestamp = s.LastPlayedTimestamp,
             FileMtimeTicks = s.FileMtimeTicks,
-            AudioFeat = s.AudioFeat
+            AudioFeat = s.AudioFeat,
+            AuthVerdict = s.AuthVerdict ?? "",
+            AuthCutoffHz = s.AuthCutoffHz,
+            AuthBits = s.AuthBits
         };
     }
 
@@ -170,6 +173,9 @@ public class LibraryService
                 PlayCount = t.PlayCount,
                 LastPlayedTimestamp = t.LastPlayedTimestamp,
                 AudioFeat = t.AudioFeat,
+                AuthVerdict = t.AuthVerdict,
+                AuthCutoffHz = t.AuthCutoffHz,
+                AuthBits = t.AuthBits,
                 FileMtimeTicks = mtime
             });
         }
@@ -217,6 +223,10 @@ public class LibraryService
                 existing.Bitrate = t.Bitrate;
                 existing.FormatBadge = t.FormatBadge;
                 existing.FileMtimeTicks = t.FileMtimeTicks;
+                existing.AuthVerdict = "";          // 文件改过：声学特征和真伪检测都要重新算
+                existing.AudioFeat = null;
+                QualityAnalysisService.Instance.Enqueue(new[] { existing });
+                AudioFeatureService.Instance.Enqueue(new[] { existing });
                 if (!string.IsNullOrEmpty(t.CoverPath)) existing.CoverPath = t.CoverPath;
                 existing.IsMissing = false;
                 continue;
@@ -238,6 +248,7 @@ public class LibraryService
         SaveLibrary();
         RestartWatching();
         AudioFeatureService.Instance.Enqueue(added);
+        QualityAnalysisService.Instance.Enqueue(added);
         return added;
     }
 
@@ -512,7 +523,7 @@ public class LibraryService
     {
         if (!track.IsCueTrack && !track.IsOnline)
         {
-            if (track.IsMissing || !File.Exists(track.FilePath)) return L.T("文件不存在，无法写入标签。");
+            if (track.IsMissing || !File.Exists(track.FilePath)) return L.T("文件不存在，没法写入标签。");
             try
             {
                 using var f = TagLib.File.Create(track.FilePath);
@@ -523,7 +534,7 @@ public class LibraryService
             }
             catch (Exception ex)
             {
-                return L.T("写入标签失败：") + ex.Message + L.T("\n（正在播放的文件可能被占用，先切到别的歌再试）");
+                return L.T("写入标签失败：") + ex.Message + L.T("\n（这首歌可能正在播放，换一首再试）");
             }
             track.FileMtimeTicks = SafeMtime(track.FilePath);
         }
@@ -544,6 +555,12 @@ public class LibraryService
         new SmartPlaylistDef { Name = L.T("最近添加"), AddedWithinDays = 30, SortBy = "added", Limit = 100 },
         new SmartPlaylistDef { Name = L.T("最近播放"), MinPlayCount = 1, SortBy = "played", Limit = 100 },
         new SmartPlaylistDef { Name = L.T("常听"), MinPlayCount = 2, SortBy = "plays", Limit = 50 },
+        // 心情歌单：根据歌曲的声学特征（响度 / 节奏密度 / 明暗）自动挑，歌曲库的声学分析完成后才有内容
+        new SmartPlaylistDef { Name = L.T("心情 · 安静"), Mood = "calm", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("心情 · 专注"), Mood = "focus", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("心情 · 动感"), Mood = "energetic", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("心情 · 明亮"), Mood = "bright", SortBy = "mood" },
+        new SmartPlaylistDef { Name = L.T("心情 · 沉稳"), Mood = "deep", SortBy = "mood" },
     };
 
     public IEnumerable<SmartPlaylistDef> AllSmartPlaylists => BuiltInSmartPlaylists.Concat(State.SmartPlaylists);
@@ -555,6 +572,11 @@ public class LibraryService
     public List<TrackItem> GetSmartTracks(SmartPlaylistDef d)
     {
         IEnumerable<TrackItem> q = Tracks.Where(t => !t.IsMissing);
+        if (!string.IsNullOrEmpty(d.Mood))
+        {
+            var moodSet = new HashSet<string>(AcousticService.Instance.MoodTracks(d.Mood, Tracks).Select(t => t.Id));
+            q = q.Where(t => moodSet.Contains(t.Id));
+        }
         if (d.MinQualityTier > 0) q = q.Where(t => t.QualityTier >= d.MinQualityTier);
         if (d.OnlyFavorite) q = q.Where(t => t.IsFavorite);
         if (d.MinPlayCount > 0) q = q.Where(t => t.PlayCount >= d.MinPlayCount);
@@ -568,6 +590,7 @@ public class LibraryService
             "played" => q.OrderByDescending(t => t.LastPlayedTimestamp),
             "plays" => q.OrderByDescending(t => t.PlayCount).ThenByDescending(t => t.LastPlayedTimestamp),
             "title" => q.OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase),
+            "mood" => q,   // 心情歌单：保持库里的顺序
             _ => q.OrderByDescending(t => t.AddedTimestamp)
         };
         var list = q.ToList();

@@ -26,7 +26,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="268" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="248" />
+                <ColumnDefinition Width="292" />
             </Grid.ColumnDefinitions>
 
             <!-- 0. 顶部整行进度条：当前时间在最左，总时长在最右，滑轨贯通 -->
@@ -262,6 +262,19 @@
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="8">
+
+                <!-- 信号路径：从文件到声卡的每一步，是不是比特完美 -->
+                <Button AutomationProperties.Name="信号路径"
+                    x:Name="SignalBtn"
+                    Width="32"
+                    Height="28"
+                    Padding="0"
+                    Click="SignalBtn_Click"
+                    CornerRadius="8"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="信号路径">
+                    <FontIcon FontSize="14" Glyph="&#xE9D9;" />
+                </Button>
 
                 <!-- DSP 均衡器药丸按钮 -->
                 <Button AutomationProperties.Name="DSP 声学效果器 &amp; 耳机校准"

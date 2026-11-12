@@ -262,6 +262,9 @@ public class NordicDspProcessor
         AccumulateSpectrum(left, right);
     }
 
+    /// <summary>绕过音效时，频谱动画仍然要有数据：只把原始采样送进频谱分析器。</summary>
+    public void PushForSpectrum(float left, float right) => AccumulateSpectrum(left, right);
+
     private void AccumulateSpectrum(float left, float right)
     {
         _analyzer.Push((left + right) * 0.5f);

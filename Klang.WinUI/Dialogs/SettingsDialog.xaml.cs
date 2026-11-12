@@ -39,6 +39,8 @@ public sealed partial class SettingsDialog : ContentDialog
             DeviceComboBox.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Id });
         SelectByTag(DeviceComboBox, State.SelectedDeviceId, "default");
         ReplayGainSwitch.IsOn = State.ReplayGainEnabled;
+        ExclusiveSwitch.IsOn = State.WasapiExclusive;
+        BypassSwitch.IsOn = State.BypassDsp;
         LyricZoomSwitch.IsOn = State.LyricZoomEmphasis;
         AutoMetaSwitch.IsOn = State.AutoFetchMetadata;
         SelectByTag(CacheLimitBox, State.NeteaseCacheLimitMb.ToString(), "2048");
@@ -68,6 +70,23 @@ public sealed partial class SettingsDialog : ContentDialog
 
         L.Apply(this);
         Loaded += (s, e) => L.Apply(this);   // 模板展开后（导航栏等）再翻译一遍
+    }
+
+    private void ExclusiveSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.WasapiExclusive = ExclusiveSwitch.IsOn;
+        AudioEngineService.Instance.ExclusiveMode = ExclusiveSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        AudioEngineService.Instance.ReopenOutput();
+    }
+
+    private void BypassSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.BypassDsp = BypassSwitch.IsOn;
+        AudioEngineService.Instance.BypassDsp = BypassSwitch.IsOn;   // 立即生效
+        StateService.Instance.RequestSave();
     }
 
     private void LyricZoomSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -118,7 +137,7 @@ public sealed partial class SettingsDialog : ContentDialog
             _update = await UpdateService.CheckAsync();
             if (_update.Latest == null)
             {
-                UpdateStatusText.Text = L.T("没有在 GitHub 上找到 WinUI 版本的发布。");
+                UpdateStatusText.Text = L.T("GitHub 上没有找到 WinUI 版的发布。");
             }
             else if (_update.HasUpdate)
             {
@@ -135,7 +154,7 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         catch (TaskCanceledException)
         {
-            UpdateStatusText.Text = L.T("连接 GitHub 超时，请检查网络后重试。");
+            UpdateStatusText.Text = L.T("连接 GitHub 超时，检查网络后再试。");
         }
         catch (Exception ex)
         {
@@ -203,6 +222,7 @@ public sealed partial class SettingsDialog : ContentDialog
         State.WasapiLatencyMs = ms;
         AudioEngineService.Instance.LatencyMs = ms;
         StateService.Instance.RequestSave();
+        AudioEngineService.Instance.ReopenOutput();
     }
 
     private void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -211,6 +231,7 @@ public sealed partial class SettingsDialog : ContentDialog
         State.SelectedDeviceId = id;
         AudioEngineService.Instance.OutputDeviceId = id;
         StateService.Instance.RequestSave();
+        AudioEngineService.Instance.ReopenOutput();
     }
 
     private void ReplayGainSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -322,7 +343,7 @@ public sealed partial class SettingsDialog : ContentDialog
         try
         {
             int added = await LibraryService.Instance.RescanWatchedFoldersAsync();
-            LibraryStatusText.Text = added > 0 ? L.F("扫描完成，新增 {0} 首", added) : L.T("扫描完成，没有新的歌曲");
+            LibraryStatusText.Text = added > 0 ? L.F("扫描完成，新增 {0} 首", added) : L.T("扫描完成，没有新歌");
             if (added > 0) LibraryChanged?.Invoke();
         }
         catch (Exception ex)
@@ -339,7 +360,7 @@ public sealed partial class SettingsDialog : ContentDialog
         {
             _clearArmed = true;
             ClearLibraryBtn.Content = L.T("再次点击确认清空");
-            LibraryStatusText.Text = L.T("将清空曲库与文件夹列表（不会删除磁盘上的音乐文件）");
+            LibraryStatusText.Text = L.T("将清空曲库和文件夹列表，不会删除磁盘上的音乐文件");
             return;
         }
 

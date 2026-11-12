@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.Brushes;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI.Xaml;
@@ -27,6 +28,10 @@ public sealed partial class LyricsStageControl : UserControl
     public ObservableCollection<LyricLine> Lyrics { get; } = new();
 
     public event EventHandler<double>? SeekRequested;
+
+    /// <summary>校准模式：下一次点击歌词行不跳播，而是上报该行时间（用来对齐“此刻正在唱的那句”）。</summary>
+    public bool CalibrationMode { get; set; }
+    public event EventHandler<double>? CalibrationPicked;
 
     private double _lyricFontSize = 22;
     public const int MinLyricFontSize = 14;
@@ -80,6 +85,8 @@ public sealed partial class LyricsStageControl : UserControl
         public float TargetOpacity;
         public double StartAt;        // 错峰：到这个时刻才开始朝目标动
         public double DrawTop, DrawBlock;   // 最近一次绘制的屏幕位置（点击命中用）
+        public int[]? WordStart;            // 逐字：每个字在整行文字里的起始字符位置（最后一项 = 总长度）
+        public Windows.Foundation.Rect[][]? WordRects;   // 逐字：每个字在排版里占的矩形（可能跨行，所以是数组）
     }
 
     private readonly List<Row> _rows = new();
@@ -201,9 +208,32 @@ public sealed partial class LyricsStageControl : UserControl
 
     // ================= 播放进度驱动 =================
 
+    // ---- 逐字高亮用的连续时间：播放位置一般几十毫秒才更新一次，逐帧渲染时在两次更新之间按时钟外推，
+    //      这样“扫过”每个字的过程才是顺滑的；暂停（位置不再前进）时停止外推并停掉渲染循环。
+    private double _timeBase;
+    private double _timeStamp;
+    private bool _paused = true;
+
+    private double CurrentTime()
+    {
+        if (_paused) return _timeBase;
+        return _timeBase + Math.Min(0.3, _clock.Elapsed.TotalSeconds - _timeStamp);
+    }
+
+    private bool ActiveHasWords => _active >= 0 && _active < _rows.Count && _rows[_active].Line.Words is { Count: > 0 };
+
+    private bool KaraokeRunning() => ActiveHasWords && !_paused && _clock.Elapsed.TotalSeconds - _timeStamp < 0.6;
+
     public void UpdatePlaybackTime(double currentTimeSeconds)
     {
         if (Lyrics.Count == 0) return;
+
+        double nowS = _clock.Elapsed.TotalSeconds;
+        // 位置没前进 = 暂停（或者刚 seek 过）；前进了 = 播放中
+        _paused = Math.Abs(currentTimeSeconds - _timeBase) < 0.001 && nowS - _timeStamp > 0.03;
+        if (Math.Abs(currentTimeSeconds - _timeBase) >= 0.001) _paused = false;
+        _timeBase = currentTimeSeconds;
+        _timeStamp = nowS;
 
         int activeIndex = LyricsService.Instance.FindActiveIndex(Lyrics, currentTimeSeconds);
 
@@ -215,7 +245,11 @@ public sealed partial class LyricsStageControl : UserControl
             Lyrics[activeIndex].PlayedWords = played;
         }
 
-        if (activeIndex == _lastActiveIndex) return;
+        if (activeIndex == _lastActiveIndex)
+        {
+            if (!_looping && KaraokeRunning()) StartLoop();   // 逐字高亮要每帧重绘
+            return;
+        }
         _lastActiveIndex = activeIndex;
 
         // 换句：其它行的逐字进度清零
@@ -327,7 +361,7 @@ public sealed partial class LyricsStageControl : UserControl
     private void Rebuild(bool snap, bool keepScroll = false)
     {
         if (_rows.Count == 0) { LyricsCanvas.Invalidate(); return; }
-        if (snap) { _layoutCache.Clear(); _subCache.Clear(); }
+        if (snap) { _layoutCache.Clear(); _subCache.Clear(); foreach (var r in _rows) r.WordRects = null; }
 
         var dev = CanvasDevice.GetSharedDevice();
         int center = _active >= 0 ? _active : 0;
@@ -441,7 +475,80 @@ public sealed partial class LyricsStageControl : UserControl
         }
 
         LyricsCanvas.Invalidate();
-        if (!moving) StopLoop();
+        if (!moving && !KaraokeRunning()) StopLoop();
+    }
+
+    // ================= 逐字高亮（卡拉 OK 扫过效果） =================
+
+    private static double WordEnd(IList<LyricWord> words, int k)
+    {
+        var w = words[k];
+        if (w.End > w.Start) return w.End;
+        return k + 1 < words.Count ? words[k + 1].Start : w.Start + 0.35;
+    }
+
+    /// <summary>
+    /// 已唱完的字亮、没唱的字暗；正在唱的那个字用一道带柔和边缘的“扫光”从左到右按进度逐渐点亮，而不是整字突然变色。
+    /// 每帧用外推后的连续时间计算，所以和显示器刷新率一样顺滑。
+    /// </summary>
+    private void DrawKaraokeLine(CanvasDrawingSession ds, Row row, CanvasTextLayout main, IList<LyricWord> words, float x0, float op, int len)
+    {
+        var dim = Color.FromArgb((byte)(op * 110), _primary.R, _primary.G, _primary.B);
+        var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
+
+        if (row.WordStart == null || row.WordStart.Length != words.Count + 1)
+        {
+            row.WordStart = new int[words.Count + 1];
+            for (int k = 0; k < words.Count; k++) row.WordStart[k + 1] = row.WordStart[k] + words[k].Text.Length;
+        }
+        var ws = row.WordStart;
+
+        double t = CurrentTime();
+        int cur = -1; double p = 0; int playedWords = 0;
+        for (int k = 0; k < words.Count; k++)
+        {
+            double end = WordEnd(words, k);
+            if (t >= end) { playedWords = k + 1; continue; }
+            if (t >= words[k].Start) { cur = k; p = Math.Clamp((t - words[k].Start) / Math.Max(0.02, end - words[k].Start), 0, 1); }
+            break;
+        }
+
+        main.SetColor(0, len, dim);
+        int playedChars = Math.Min(ws[playedWords], len);
+        if (playedChars > 0) main.SetColor(0, playedChars, full);
+        ds.DrawTextLayout(main, x0, 0, dim);
+
+        if (cur < 0 || p <= 0) return;
+        int start = ws[cur], wl = Math.Min(ws[cur + 1], len) - start;
+        if (wl <= 0) return;
+
+        row.WordRects ??= new Windows.Foundation.Rect[words.Count][];
+        if (row.WordRects[cur] == null)
+            row.WordRects[cur] = main.GetCharacterRegions(start, wl).Select(r => r.LayoutBounds).ToArray();
+
+        main.SetColor(start, wl, full);
+        const double soft = 0.35;                   // 扫光边缘的柔和宽度（占一个字宽度的比例）
+        double edge = p * (1 + soft);
+        float s0 = (float)Math.Clamp(edge - soft, 0, 1), s1 = (float)Math.Clamp(Math.Max(edge, edge - soft + 0.001), 0, 1);
+        if (s1 <= s0) s1 = Math.Min(1f, s0 + 0.001f);
+        var stops = new List<CanvasGradientStop>();
+        if (s0 > 0) stops.Add(new CanvasGradientStop { Position = 0f, Color = Color.FromArgb(255, 255, 255, 255) });
+        stops.Add(new CanvasGradientStop { Position = s0, Color = Color.FromArgb(255, 255, 255, 255) });
+        stops.Add(new CanvasGradientStop { Position = s1, Color = Color.FromArgb(0, 255, 255, 255) });
+        if (s1 < 1f) stops.Add(new CanvasGradientStop { Position = 1f, Color = Color.FromArgb(0, 255, 255, 255) });
+
+        foreach (var r in row.WordRects[cur])
+        {
+            var clip = new Windows.Foundation.Rect(r.X + x0 - 1, r.Y - 1, r.Width + 2, r.Height + 2);
+            using var mask = new CanvasLinearGradientBrush(ds, stops.ToArray())
+            {
+                StartPoint = new System.Numerics.Vector2((float)(r.X + x0), 0),
+                EndPoint = new System.Numerics.Vector2((float)(r.X + x0 + r.Width), 0)
+            };
+            using (ds.CreateLayer(mask, clip))
+                ds.DrawTextLayout(main, x0, 0, full);
+        }
+        main.SetColor(start, wl, dim);
     }
 
     // ================= 绘制 =================
@@ -494,22 +601,17 @@ public sealed partial class LyricsStageControl : UserControl
             ds.Transform = System.Numerics.Matrix3x2.CreateScale(f) * System.Numerics.Matrix3x2.CreateTranslation(cx, (float)textTop);
             float x0 = -layoutW / 2f;
 
-            // 主歌词：当前句有逐字时间轴 → 已唱的字亮、未唱的字暗；其他情况整行同色
+            // 主歌词。注意：排版对象是缓存的，上一次画它时设过的“按字上色”会一直留着，
+            // 所以每次画之前都要先把整行颜色重设一遍——否则唱完的那一行会一直保持“已唱”的亮色，不会随距离变灰。
             var words = row.Line.Words;
+            var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
+            int len = MainText(row.Line).Length;
             if (active && words is { Count: > 0 })
-            {
-                int played = Math.Clamp(row.Line.PlayedWords, 0, words.Count);
-                var dim = Color.FromArgb((byte)(op * 110), _primary.R, _primary.G, _primary.B);
-                var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
-                int len = MainText(row.Line).Length;
-                main.SetColor(0, len, dim);
-                int playedChars = words.Take(played).Sum(w => w.Text.Length);
-                if (playedChars > 0) main.SetColor(0, Math.Min(playedChars, len), full);
-                ds.DrawTextLayout(main, x0, 0, full);
-            }
+                DrawKaraokeLine(ds, row, main, words, x0, op, len);
             else
             {
-                ds.DrawTextLayout(main, x0, 0, Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B));
+                main.SetColor(0, len, full);
+                ds.DrawTextLayout(main, x0, 0, full);
             }
 
             if (sub != null)
@@ -598,9 +700,18 @@ public sealed partial class LyricsStageControl : UserControl
         bool still = Math.Abs(p.X - _pressedPt.X) < 6 && Math.Abs(p.Y - _pressedPt.Y) < 6;
         if (row >= 0 && row == _pressedRow && still && IsClickable(_rows[row].Line))
         {
-            // 点击某句：跳到那一刻播放，并回到自动居中
-            ResumeAutoCenter();
-            SeekRequested?.Invoke(this, _rows[row].Line.Time);
+            if (CalibrationMode)
+            {
+                // 校准：点的是“此刻正在唱的那一句”，不跳播，只上报这句的时间
+                CalibrationMode = false;
+                CalibrationPicked?.Invoke(this, _rows[row].Line.Time);
+            }
+            else
+            {
+                // 点击某句：跳到那一刻播放，并回到自动居中
+                ResumeAutoCenter();
+                SeekRequested?.Invoke(this, _rows[row].Line.Time);
+            }
         }
         _pressedRow = -1;
     }

@@ -183,7 +183,7 @@
                 <TextBlock
                     FontSize="12"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="加入轻微的谐波失真和底噪，声音更温暖。"
+                    Text="加一点谐波失真和底噪，声音更暖。"
                     TextWrapping="Wrap" />
             </StackPanel>
 
@@ -201,7 +201,7 @@
                     x:Name="HeadphoneDescLabel"
                     FontSize="12"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="未启用，声音直接输出。选择你的耳机型号后，会按其频响曲线做补偿。"
+                    Text="未启用。选择耳机型号后，会按它的频响曲线做补偿。"
                     TextWrapping="Wrap" />
             </StackPanel>
         </StackPanel>

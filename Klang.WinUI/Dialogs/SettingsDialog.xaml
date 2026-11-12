@@ -193,13 +193,51 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="输出设备" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="下一首开始生效" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="更换后立即生效" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="DeviceComboBox"
                                 Grid.Column="1"
                                 Width="230"
                                 SelectionChanged="DeviceComboBox_SelectionChanged" />
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="WASAPI 独占模式" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按文件原本的采样率和位深直接驱动声卡，不经过 Windows 混音器。开启后其他程序没有声音；声卡不支持时自动改用共享模式。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="ExclusiveSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="ExclusiveSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="绕过全部音效" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="关闭均衡器、空间音效、混响和软限幅。配合独占模式和 100% 音量即可比特完美。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="BypassSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="BypassSwitch_Toggled" />
                         </Grid>
                     </Border>
 
@@ -211,7 +249,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="WASAPI 输出缓冲" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="越大越不易卡顿，下一首开始生效" TextWrapping="Wrap" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="越大越不易卡顿，修改后立即生效" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="LatencyComboBox"
@@ -310,7 +348,7 @@
                                 <TextBlock
                                     FontSize="12"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="本地歌曲缺少封面、专辑、歌词时，用歌名和歌手在网易云搜索补全。会联网发送歌名和歌手。"
+                                    Text="本地歌曲缺封面、专辑或歌词时，到网易云按歌名和歌手查找；歌词还会去 LRCLIB 找。会联网发送歌名、歌手、专辑和时长。"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch
@@ -346,7 +384,7 @@
                                     VerticalAlignment="Center"
                                     FontSize="12"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="缓存上限（超出后淘汰最久未听的）" />
+                                    Text="缓存上限（超出后清掉最久没听的）" />
                                 <ComboBox
                                     x:Name="CacheLimitBox"
                                     Grid.Column="1"
@@ -390,7 +428,7 @@
                                 <TextBlock
                                     FontSize="12"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="基于 Windows App SDK (.NET 10) 的现代音乐播放器"
+                                    Text="Windows 音乐播放器（WinUI 3 / .NET 10）"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                         </Grid>
@@ -410,7 +448,7 @@
                                         x:Name="UpdateStatusText"
                                         FontSize="12"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Text="从 GitHub 发布页查看是否有新版本"
+                                        Text="到 GitHub 看有没有新版本"
                                         TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
@@ -449,7 +487,7 @@
                                 <TextBlock
                                     FontSize="11"
                                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Text="下载由系统浏览器完成，安装前请先退出 Klang。"
+                                    Text="用系统浏览器下载，安装前请先退出 Klang。"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                         </StackPanel>

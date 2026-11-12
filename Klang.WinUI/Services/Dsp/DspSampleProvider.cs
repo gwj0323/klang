@@ -91,6 +91,14 @@ public class DspSampleProvider : ISampleProvider
         return _fadeGain;
     }
 
+    /// <summary>
+    /// 绕过全部音效（均衡 / 空间 / 混响 / 软限幅）：采样原样通过，只剩音量、回放增益和起播淡入。
+    /// 音量 = 1、没有回放增益、淡入结束之后，输出和输入逐位相同（比特完美）。
+    /// </summary>
+    public bool Bypass { get; set; }
+
+    private float Out(float x) => Bypass ? Math.Clamp(x, -1f, 1f) : SoftClip(x);
+
     private void ProcessBlock(Span<float> span)
     {
         int channels = WaveFormat.Channels;
@@ -103,12 +111,13 @@ public class DspSampleProvider : ISampleProvider
                 float left = span[i];
                 float right = span[i + 1];
 
-                // 核心专业 DSP 声学链
-                Processor.ProcessStereo(ref left, ref right);
+                // 核心专业 DSP 声学链（绕过时只给频谱动画喂数据）
+                if (Bypass) Processor.PushForSpectrum(left, right);
+                else Processor.ProcessStereo(ref left, ref right);
 
                 float g = vol * NextFade();
-                span[i] = SoftClip(left * g);
-                span[i + 1] = SoftClip(right * g);
+                if (Bypass && g == 1f) { span[i] = left; span[i + 1] = right; }
+                else { span[i] = Out(left * g); span[i + 1] = Out(right * g); }
             }
         }
         else if (channels == 1)
@@ -117,10 +126,15 @@ public class DspSampleProvider : ISampleProvider
             {
                 float mono = span[i];
                 float r = mono;
-                Processor.ProcessStereo(ref mono, ref r);
+                if (Bypass) Processor.PushForSpectrum(mono, mono);
+                else
+                {
+                    Processor.ProcessStereo(ref mono, ref r);
+                    mono = (mono + r) * 0.5f;
+                }
 
-                mono = (mono + r) * 0.5f * vol * NextFade();
-                span[i] = SoftClip(mono);
+                float g = vol * NextFade();
+                span[i] = Bypass && g == 1f ? mono : Out(mono * g);
             }
         }
         else
@@ -131,7 +145,7 @@ public class DspSampleProvider : ISampleProvider
                 float g = vol * NextFade();
                 for (int c = 0; c < channels && i + c < span.Length; c++)
                 {
-                    span[i + c] = SoftClip(span[i + c] * g);
+                    span[i + c] = Bypass && g == 1f ? span[i + c] : Out(span[i + c] * g);
                 }
             }
         }

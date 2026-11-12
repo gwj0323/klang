@@ -100,6 +100,15 @@
                                 KeyboardAcceleratorTextOverride="Ctrl+D"
                                 Text="桌面歌词" />
                             <MenuFlyoutSeparator />
+                            <MenuFlyoutSubItem x:Name="LyricSyncMenu" Text="歌词时间校准">
+                                <MenuFlyoutItem x:Name="LyricOffsetInfo" IsEnabled="False" Text="当前偏移：0.0 秒" />
+                                <MenuFlyoutItem Click="LyricEarlier_Click" Text="歌词提前 0.5 秒" />
+                                <MenuFlyoutItem Click="LyricLater_Click" Text="歌词延后 0.5 秒" />
+                                <MenuFlyoutItem Click="LyricCalibrate_Click" Text="校准：点击正在唱的那一句" />
+                                <MenuFlyoutItem Click="LyricOffsetReset_Click" Text="重置偏移" />
+                            </MenuFlyoutSubItem>
+                            <MenuFlyoutItem Click="LyricOnline_Click" Text="在线搜索歌词（LRCLIB）" />
+                            <MenuFlyoutSeparator />
                             <MenuFlyoutItem
                                 Click="PosterBtn_Click"
                                 Text="生成歌词海报…" />
@@ -154,7 +163,7 @@
         <!-- 2. 中央核心工作区 (Workspace)：Qt 1:1 三栏一体化布局 -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SidebarColumn" Width="286" />
+                <ColumnDefinition x:Name="SidebarColumn" Width="342" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
@@ -165,34 +174,34 @@
                 SizeChanged="SidebarHost_SizeChanged">
                 <controls:NavigationPane
                     x:Name="LeftNavPane"
+                    Margin="56,0,0,0"
                     HorizontalAlignment="Left" />
 
-                <!-- 折叠后的竖排图标栏 -->
+                <!-- 竖排图标栏：展开和收起时都在，收起后只剩它 -->
                 <StackPanel
                     x:Name="SidebarRail"
                     Width="56"
-                    Padding="8,12,8,12"
+                    Padding="8,14,8,12"
                     HorizontalAlignment="Left"
-                    Spacing="4"
-                    Visibility="Collapsed">
-                    <Button x:Name="RailAll" Width="40" Height="40" Padding="0" AutomationProperties.Name="全部" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="all" ToolTipService.ToolTip="全部">
-                        <FontIcon FontSize="16" Glyph="&#xE8F1;" />
+                    Spacing="4">
+                    <Button x:Name="RailAll" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="全部" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="all" ToolTipService.ToolTip="全部">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE8F1;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="全部" Visibility="Collapsed" /></StackPanel>
                     </Button>
-                    <Button x:Name="RailFav" Width="40" Height="40" Padding="0" AutomationProperties.Name="喜欢" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="fav" ToolTipService.ToolTip="喜欢">
-                        <FontIcon FontSize="16" Glyph="&#xEB51;" />
+                    <Button x:Name="RailFav" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="喜欢" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="fav" ToolTipService.ToolTip="喜欢">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xEB51;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="喜欢" Visibility="Collapsed" /></StackPanel>
                     </Button>
-                    <Button x:Name="RailAlbums" Width="40" Height="40" Padding="0" AutomationProperties.Name="专辑" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="albums" ToolTipService.ToolTip="专辑">
-                        <FontIcon FontSize="16" Glyph="&#xE93C;" />
+                    <Button x:Name="RailAlbums" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="专辑" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="albums" ToolTipService.ToolTip="专辑">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE93C;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="专辑" Visibility="Collapsed" /></StackPanel>
                     </Button>
-                    <Button x:Name="RailPlaylists" Width="40" Height="40" Padding="0" AutomationProperties.Name="歌单" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="playlists" ToolTipService.ToolTip="歌单">
-                        <FontIcon FontSize="16" Glyph="&#xE8FD;" />
+                    <Button x:Name="RailPlaylists" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="歌单" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="playlists" ToolTipService.ToolTip="歌单">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE8FD;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="歌单" Visibility="Collapsed" /></StackPanel>
                     </Button>
-                    <Button x:Name="RailCloud" Width="40" Height="40" Padding="0" AutomationProperties.Name="云端" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="netease" ToolTipService.ToolTip="云端">
-                        <FontIcon FontSize="16" Glyph="&#xE753;" />
+                    <Button x:Name="RailCloud" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="云端" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="netease" ToolTipService.ToolTip="云端">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE753;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="云端" Visibility="Collapsed" /></StackPanel>
                     </Button>
                     <Rectangle Height="1" Margin="4,6,4,6" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                    <Button Width="40" Height="40" Padding="0" AutomationProperties.Name="搜索" Click="RailSearch_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="搜索 (Ctrl+F)">
-                        <FontIcon FontSize="16" Glyph="&#xE721;" />
+                    <Button Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="搜索" Click="RailSearch_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="搜索 (Ctrl+F)">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE721;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="搜索" Visibility="Collapsed" /></StackPanel>
                     </Button>
                 </StackPanel>
             </Grid>
@@ -266,6 +275,12 @@
                 </Grid>
             </Grid>
         </Grid>
+
+        <!-- 封面画廊（盖住中央工作区，播放栏保持可见） -->
+        <controls:CoverGalleryView
+            x:Name="GalleryLayer"
+            Grid.Row="1"
+            Visibility="Collapsed" />
 
         <!-- 3. 底部：TransportBar (毛玻璃磨砂播放控制栏) -->
         <controls:TransportBar

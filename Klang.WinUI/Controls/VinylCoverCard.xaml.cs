@@ -290,6 +290,15 @@ public sealed partial class VinylCoverCard : UserControl
         metaOp.Duration = dur;
         _metaVisual.StartAnimation("Opacity", metaOp);
     }
+    /// <summary>质量徽标：格式信息，疑似假无损时加一个警示后缀并在提示里说明原因。</summary>
+    public void UpdateTrackBadge(TrackItem track)
+    {
+        if (string.IsNullOrEmpty(track.FormatBadge)) { QualityBadgeBorder.Visibility = Visibility.Collapsed; return; }
+        QualityBadgeText.Text = track.IsSuspectFake ? track.FormatBadge + " ⚠" : track.FormatBadge;
+        ToolTipService.SetToolTip(QualityBadgeBorder, track.IsSuspectFake ? track.AuthText : null);
+        QualityBadgeBorder.Visibility = Visibility.Visible;
+    }
+
     public void UpdateTrack(TrackItem? track)
     {
         PlayTrackChangeAnimation();
@@ -297,7 +306,7 @@ public sealed partial class VinylCoverCard : UserControl
         if (track == null)
         {
             TitleText.Text = L.T("暂无播放曲目");
-            ArtistText.Text = L.T("点击左侧栏按钮导入本地音乐");
+            ArtistText.Text = L.T("点左侧栏的按钮导入本地音乐");
             AlbumText.Text = "";
             QualityBadgeBorder.Visibility = Visibility.Collapsed;
             CoverImage.Visibility = Visibility.Collapsed;
@@ -309,15 +318,7 @@ public sealed partial class VinylCoverCard : UserControl
         ArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知艺术家" : track.Artist;
         AlbumText.Text = string.IsNullOrWhiteSpace(track.Album) ? "" : track.Album;
 
-        if (!string.IsNullOrEmpty(track.FormatBadge))
-        {
-            QualityBadgeText.Text = track.FormatBadge;
-            QualityBadgeBorder.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            QualityBadgeBorder.Visibility = Visibility.Collapsed;
-        }
+        UpdateTrackBadge(track);
 
         if (!string.IsNullOrEmpty(track.CoverPath) && File.Exists(track.CoverPath))
         {

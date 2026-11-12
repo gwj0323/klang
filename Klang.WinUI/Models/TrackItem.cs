@@ -94,6 +94,40 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
     public int PlayCount { get; set; }
     public long LastPlayedTimestamp { get; set; }
 
+    // ---- 无损真伪检测结果（后台分析无损文件的频谱得出）----
+    private string _authVerdict = "";
+    /// <summary>"" = 还没分析 / 不适用；ok = 正常；lossy = 疑似有损转码；upsampled = 疑似升采样的 Hi-Res；padded = 疑似位深填充。</summary>
+    public string AuthVerdict
+    {
+        get => _authVerdict;
+        set
+        {
+            if (_authVerdict == value) return;
+            _authVerdict = value;
+            Raise(nameof(AuthVerdict));
+            Raise(nameof(IsSuspectFake));
+            Raise(nameof(SuspectVisibility));
+            Raise(nameof(RowToolTip));
+        }
+    }
+    /// <summary>频谱上高频被“一刀切”的频率（Hz），没有明显截止时为 0。</summary>
+    public float AuthCutoffHz { get; set; }
+    /// <summary>有效位深（16 / 24），0 = 未检测。</summary>
+    public int AuthBits { get; set; }
+
+    public bool IsSuspectFake => _authVerdict is "lossy" or "upsampled" or "padded";
+    public Microsoft.UI.Xaml.Visibility SuspectVisibility => IsSuspectFake ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    /// <summary>一句话说明检测结论（用于提示 / 徽标）。</summary>
+    public string AuthText => _authVerdict switch
+    {
+        "lossy" => L.F("疑似有损转码：频谱在 {0:0.#} kHz 处截止", AuthCutoffHz / 1000f),
+        "upsampled" => L.F("疑似假 Hi-Res：实际内容只到 {0:0.#} kHz", AuthCutoffHz / 1000f),
+        "padded" => L.T("疑似位深填充：实际只有 16 bit"),
+        "ok" => L.T("频谱与位深检测正常"),
+        _ => ""
+    };
+
     /// <summary>从音频里算出的声学特征（音量 / 动态 / 明暗 / 频段 / 节奏），漫游模式用它找“听起来像”的歌；还没算出来为 null。</summary>
     public float[]? AudioFeat { get; set; }
 
@@ -115,7 +149,8 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
         }
     }
     public double RowOpacity => _isMissing ? 0.45 : 1.0;
-    public string RowToolTip => _isMissing ? "文件丢失：" + FilePath : FormatBadge;
+    public string RowToolTip => _isMissing ? L.T("文件丢失：") + FilePath
+        : (IsSuspectFake ? FormatBadge + "\n⚠ " + AuthText : FormatBadge);
 
     /// <summary>音质档位：2 = Hi-Res，1 = 无损，0 = 有损。</summary>
     public int QualityTier

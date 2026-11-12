@@ -111,6 +111,7 @@ public class AudioEngineService : IDisposable
         }
 
         Stop();
+        _filePath = filePath;
         _segStart = Math.Max(0, segmentStart);
         _segEnd = segmentEnd > _segStart ? segmentEnd : 0;
 
@@ -135,6 +136,21 @@ public class AudioEngineService : IDisposable
         }
     }
 
+    private string? _filePath;
+
+    /// <summary>输出设备 / 独占模式改了之后，在当前位置无缝重开输出（保持播放或暂停状态）。</summary>
+    public void ReopenOutput()
+    {
+        if (_audioFileReader == null || string.IsNullOrEmpty(_filePath)) return;
+        string path = _filePath;
+        double start = _segStart, end = _segEnd, pos = CurrentTime;
+        bool wasPlaying = IsPlaying;
+        Play(path, start, end);
+        if (!HasSource) return;
+        if (pos > 0.05) Seek(pos);
+        if (!wasPlaying) Pause();
+    }
+
     /// <summary>读取 → (变速) → DSP → WASAPI 输出。</summary>
     private void StartPipeline(WaveStream reader)
     {
@@ -148,13 +164,16 @@ public class AudioEngineService : IDisposable
         _dspProvider = new DspSampleProvider(_stretch)
         {
             Volume = _volume,
-            TrackGain = ComputeTrackGain()
+            TrackGain = ComputeTrackGain(),
+            Bypass = BypassDsp
         };
         ApplyDspSettingsTo(_dspProvider.Processor);
 
-        var wasapi = CreateOutput();
+        // 输出：优先按设置走独占模式（文件原采样率 / 位深），失败则回退到共享模式并记下原因
+        var plan = BuildOutput(_dspProvider, reader.WaveFormat);
+        _outputPlan = plan;
+        var wasapi = plan.Player;
         wasapi.PlaybackStopped += OnPlaybackStopped;
-        wasapi.Init(_dspProvider.ToWaveProvider());
 
         _wavePlayer = wasapi;
         _wavePlayer.Play();
@@ -164,29 +183,180 @@ public class AudioEngineService : IDisposable
         PositionChanged?.Invoke(0, TotalDuration);
     }
 
-    private WasapiOut CreateOutput()
+    // ---------------- 输出：独占 / 共享 ----------------
+
+    /// <summary>WASAPI 独占模式：按文件的原采样率和位深直接驱动声卡（绕过 Windows 混音器），下一首开始生效。</summary>
+    public bool ExclusiveMode { get; set; }
+
+    /// <summary>绕过全部音效（均衡 / 空间 / 混响 / 软限幅），纯净直通。</summary>
+    public bool BypassDsp
     {
-        if (!string.IsNullOrEmpty(OutputDeviceId) && OutputDeviceId != "default")
+        get => _bypassDsp;
+        set { _bypassDsp = value; if (_dspProvider != null) _dspProvider.Bypass = value; }
+    }
+    private bool _bypassDsp;
+
+    private OutputPlan? _outputPlan;
+    private MMDevice? _outputDevice;
+
+    private MMDevice? GetOutputDevice()
+    {
+        try
         {
-            try
+            using var enumerator = new MMDeviceEnumerator();
+            if (!string.IsNullOrEmpty(OutputDeviceId) && OutputDeviceId != "default")
             {
-                using var enumerator = new MMDeviceEnumerator();
-                var device = enumerator.GetDevice(OutputDeviceId);
-                if (device.State == DeviceState.Active)
+                try
                 {
-                    return new WasapiOut(device, AudioClientShareMode.Shared, true, LatencyMs);
+                    var d = enumerator.GetDevice(OutputDeviceId);
+                    if (d.State == DeviceState.Active) return d;
                 }
+                catch { /* 设备已拔出 / 不可用：回退系统默认设备 */ }
             }
-            catch
+            return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        }
+        catch { return null; }
+    }
+
+    private void ReleaseOutputDevice()
+    {
+        try { _outputDevice?.Dispose(); } catch { }
+        _outputDevice = null;
+        _outputPlan = null;
+    }
+
+    private OutputPlan BuildOutput(DspSampleProvider chain, WaveFormat src)
+    {
+        ReleaseOutputDevice();
+        var device = _outputDevice = GetOutputDevice();
+        string? fallback = null;
+
+        if (ExclusiveMode)
+        {
+            if (device == null) fallback = L.T("找不到输出设备");
+            else
             {
-                // 设备已拔出 / 不可用：回退系统默认设备
+                try
+                {
+                    var plan = TryExclusive(device, chain, src, out fallback);
+                    if (plan != null) return plan;
+                }
+                catch (Exception ex) { fallback = ex.Message; }
             }
         }
-        return new WasapiOut(AudioClientShareMode.Shared, LatencyMs);
+
+        // 共享模式：Windows 混音器会把音频转成声卡当前的混音格式
+        var wasapi = device != null
+            ? new WasapiOut(device, AudioClientShareMode.Shared, true, LatencyMs)
+            : new WasapiOut(AudioClientShareMode.Shared, LatencyMs);
+        wasapi.Init(chain.ToWaveProvider());
+
+        var shared = new OutputPlan { Player = wasapi, Mode = "Shared", DeviceName = device?.FriendlyName ?? L.T("系统默认"), FallbackReason = fallback };
+        try
+        {
+            var mix = device?.AudioClient.MixFormat;
+            if (mix != null) { shared.MixRate = mix.SampleRate; shared.MixBits = mix.BitsPerSample; shared.MixIsFloat = mix.Encoding == WaveFormatEncoding.IeeeFloat || (mix is WaveFormatExtensible wx && wx.SubFormat == AudioMediaSubtypes.MEDIASUBTYPE_IEEE_FLOAT); }
+        }
+        catch { }
+        shared.Rate = src.SampleRate; shared.Bits = 32; shared.IsFloat = true; shared.Channels = src.Channels;
+        return shared;
+    }
+
+    private OutputPlan? TryExclusive(MMDevice device, DspSampleProvider chain, WaveFormat src, out string? reason)
+    {
+        reason = null;
+        int rate = src.SampleRate, ch = src.Channels, srcBits = src.BitsPerSample > 0 ? src.BitsPerSample : 16;
+
+        // 候选位深：先试“刚好装得下源文件的”，再往大试（24 位数据也可以放进 32 位容器）
+        int[] order = srcBits <= 16 ? new[] { 16, 24, 32 } : new[] { 24, 32, 16 };
+        foreach (int bits in order)
+        {
+            if (bits < srcBits && srcBits > 16 && bits == 16 && order[0] != 16)
+            {
+                // 源是 24 位却只剩 16 位可选：宁可回退到共享模式，也不静默丢位深
+                continue;
+            }
+            foreach (WaveFormat fmt in new WaveFormat[] { new WaveFormatExtensible(rate, bits, ch), new WaveFormat(rate, bits, ch) })
+            {
+                bool ok;
+                try { ok = device.AudioClient.IsFormatSupported(AudioClientShareMode.Exclusive, fmt); }
+                catch { ok = false; }
+                if (!ok) continue;
+
+                try
+                {
+                    var wasapi = new WasapiOut(device, AudioClientShareMode.Exclusive, true, Math.Max(LatencyMs, 40));
+                    wasapi.Init(new FloatToPcmWaveProvider(chain, fmt));
+                    return new OutputPlan { Player = wasapi, Mode = "Exclusive", DeviceName = device.FriendlyName, Rate = rate, Bits = bits, Channels = ch, IsFloat = false };
+                }
+                catch (Exception ex) { reason = ex.Message; }
+            }
+        }
+        reason ??= L.F("声卡不支持 {0} Hz 的独占输出", rate);
+        return null;
+    }
+
+    /// <summary>当前播放的信号路径（用于“信号路径”面板）。没有在播放时 Playing = false。</summary>
+    public SignalPathInfo GetSignalPath()
+    {
+        var reader = _audioFileReader;
+        var plan = _outputPlan;
+        if (reader == null || plan == null)
+            return new SignalPathInfo(false, "", "", "", "", "", "", false, Array.Empty<string>());
+
+        var f = reader.WaveFormat;
+        string chName = f.Channels switch { 1 => L.T("单声道"), 2 => L.T("立体声"), _ => L.F("{0} 声道", f.Channels) };
+        bool srcFloat = f.Encoding == WaveFormatEncoding.IeeeFloat;
+        string src = L.F("{0} Hz · {1} · {2}", f.SampleRate, srcFloat ? "32-bit float" : $"{f.BitsPerSample} bit", chName);
+
+        string decode = L.F("Media Foundation 解码 → {0}（保持文件原采样率）", srcFloat ? "32-bit float" : $"{f.BitsPerSample}-bit PCM");
+
+        bool stretched = Math.Abs(_playbackRate - 1.0) > 0.001;
+        string rateStep = stretched ? L.F("变速 {0:0.0#}×（WSOLA，保持音高）", _playbackRate) : L.T("关（1.0×，直通）");
+
+        var dspParts = new List<string>();
+        if (!BypassDsp)
+        {
+            if (EqGains.Any(g => Math.Abs(g) > 0.01f)) dspParts.Add(L.T("均衡器"));
+            if (SpatialAudioMode != SpatialMode.Off) dspParts.Add(L.T("空间音效"));
+            if (Math.Abs(VocalBalance) > 0.02f) dspParts.Add(L.T("人声平衡"));
+            if (VinylWarmth > 0.02f) dspParts.Add(L.T("黑胶质感"));
+            if (HeadphoneProfileId != "bypass") dspParts.Add(L.T("耳机补偿"));
+            dspParts.Add(L.T("混响")); dspParts.Add(L.T("软限幅"));
+        }
+        string dsp = BypassDsp ? L.T("已绕过（纯净直通）") : string.Join(" · ", dspParts);
+
+        var vol = new List<string> { L.F("软件音量 {0}%", (int)Math.Round(_volume * 100)) };
+        bool rg = ReplayGainEnabled && _trackGainDb.HasValue;
+        if (rg) vol.Add(L.F("回放增益 {0:+0.0;-0.0} dB", _trackGainDb!.Value));
+        string volume = string.Join(" · ", vol);
+
+        string output;
+        if (plan.Mode == "Exclusive")
+            output = L.F("WASAPI 独占 · {0} · {1} Hz · {2} bit PCM", plan.DeviceName, plan.Rate, plan.Bits);
+        else
+            output = L.F("WASAPI 共享 · {0} · 混音器转为 {1} Hz / {2}", plan.DeviceName, plan.MixRate > 0 ? plan.MixRate : 0,
+                plan.MixBits > 0 ? (plan.MixIsFloat ? $"{plan.MixBits}-bit float" : $"{plan.MixBits} bit") : "?");
+        if (!string.IsNullOrEmpty(plan.FallbackReason)) output += "\n" + L.F("（独占失败，已改用共享：{0}）", plan.FallbackReason);
+
+        // ---- 比特完美的条件 ----
+        var reasons = new List<string>();
+        if (plan.Mode != "Exclusive") reasons.Add(L.T("没用 WASAPI 独占，声音会经过 Windows 混音器"));
+        if (!BypassDsp) reasons.Add(L.T("音效未绕过"));
+        if (stretched) reasons.Add(L.T("正在变速"));
+        if (_volume < 0.999f) reasons.Add(L.F("软件音量 {0}%，需要 100%", (int)Math.Round(_volume * 100)));
+        if (rg) reasons.Add(L.T("回放增益已开启"));
+        if (plan.Mode == "Exclusive")
+        {
+            if (plan.Rate != f.SampleRate) reasons.Add(L.T("输出采样率与文件不同"));
+            if (!srcFloat && plan.Bits < f.BitsPerSample) reasons.Add(L.T("输出位深低于文件位深"));
+        }
+        return new SignalPathInfo(true, src, decode, rateStep, dsp, volume, output, reasons.Count == 0, reasons);
     }
 
     private void DisposeCurrent()
     {
+        ReleaseOutputDevice();
         if (_wavePlayer != null)
         {
             _wavePlayer.PlaybackStopped -= OnPlaybackStopped;
@@ -345,6 +515,7 @@ public class AudioEngineService : IDisposable
 
         _dspProvider = null;
         _stretch = null;
+        ReleaseOutputDevice();
         StateChanged?.Invoke(PlaybackState.Stopped);
     }
 
@@ -378,6 +549,8 @@ public class AudioEngineService : IDisposable
     {
         _volume = Math.Clamp((float)state.Volume, 0f, 1f);
         LatencyMs = Math.Clamp(state.WasapiLatencyMs, 20, 500);
+        ExclusiveMode = state.WasapiExclusive;
+        _bypassDsp = state.BypassDsp;
         _playbackRate = Math.Clamp(state.PlaybackRate, 0.5, 2.0);
         OutputDeviceId = string.IsNullOrEmpty(state.SelectedDeviceId) ? "default" : state.SelectedDeviceId;
         ReplayGainEnabled = state.ReplayGainEnabled;
@@ -395,6 +568,8 @@ public class AudioEngineService : IDisposable
     {
         state.Volume = _volume;
         state.WasapiLatencyMs = LatencyMs;
+        state.WasapiExclusive = ExclusiveMode;
+        state.BypassDsp = _bypassDsp;
         state.PlaybackRate = _playbackRate;
         state.SelectedDeviceId = OutputDeviceId;
         state.ReplayGainEnabled = ReplayGainEnabled;

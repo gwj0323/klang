@@ -49,7 +49,7 @@ public static class LibraryDialogs
 
         panel.Children.Add(new TextBlock
         {
-            Text = L.F("发现 {0} 组重复。每组第一首是建议保留的（音质更高 / 文件在），其余默认勾选移除。\n只会从曲库里移除，不会删除磁盘上的文件。", groups.Count),
+            Text = L.F("发现 {0} 组重复。每组第一首建议保留（音质更高或文件还在），其余已勾选。\n只是从曲库移除，不会删除磁盘上的文件。", groups.Count),
             TextWrapping = TextWrapping.Wrap,
             Foreground = Secondary(root),
             FontSize = 12,
@@ -96,7 +96,7 @@ public static class LibraryDialogs
         var panel = new StackPanel { Spacing = 6 };
         panel.Children.Add(new TextBlock
         {
-            Text = L.F("有 {0} 首歌的文件找不到了（被移走、重命名，或外接盘没插）。", missing.Count),
+            Text = L.F("有 {0} 首歌找不到文件了（可能被移动、改名，或外接硬盘没插上）。", missing.Count),
             TextWrapping = TextWrapping.Wrap
         });
         var list = new StackPanel { Spacing = 2 };
@@ -107,7 +107,7 @@ public static class LibraryDialogs
         panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 220 });
         panel.Children.Add(new TextBlock
         {
-            Text = L.T("“重新定位”会在你选的文件夹里按文件名找回（收藏和歌单会保留）；“清理”会把它们从曲库移除。"),
+            Text = L.T("重新定位：在你选的文件夹里按文件名找回，收藏和歌单会保留。\n从曲库清理：把这些歌移出曲库。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Foreground = Secondary(root)
@@ -135,12 +135,12 @@ public static class LibraryDialogs
         var album = new TextBox { Header = L.T("专辑名"), Text = track.Album };
         var apply = new CheckBox
         {
-            Content = L.F("把歌手和专辑同步到同专辑的另外 {0} 首", sameAlbumOthers),
+            Content = L.F("同专辑的另外 {0} 首也一起改", sameAlbumOthers),
             Visibility = sameAlbumOthers > 0 ? Visibility.Visible : Visibility.Collapsed
         };
         var note = new TextBlock
         {
-            Text = track.IsCueTrack ? L.T("CUE 分轨只修改曲库里的显示，不写入音频文件。") : L.T("修改会写回音频文件的标签。"),
+            Text = track.IsCueTrack ? L.T("CUE 分轨只改曲库里的显示，不写入音频文件。") : L.T("修改会写入音频文件的标签。"),
             FontSize = 12,
             Foreground = Secondary(root)
         };
@@ -162,7 +162,7 @@ public static class LibraryDialogs
             MinWidth = 380,
             Children =
             {
-                new TextBlock { Text = L.F("将修改这张专辑的 {0} 首歌，并写回各自的音频文件。", count), TextWrapping = TextWrapping.Wrap, FontSize = 12 },
+                new TextBlock { Text = L.F("这张专辑的 {0} 首歌都会被修改，并写入各自的音频文件。", count), TextWrapping = TextWrapping.Wrap, FontSize = 12 },
                 albumBox,
                 artistBox
             }
@@ -193,6 +193,10 @@ public static class LibraryDialogs
         foreach (var s in new[] { L.T("不限"), L.T("至少 1 次"), L.T("至少 3 次"), L.T("至少 10 次") }) plays.Items.Add(s);
         plays.SelectedIndex = 0;
 
+        var mood = new ComboBox { Header = L.T("心情（按声学特征）"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        foreach (var s in new[] { L.T("不限"), L.T("安静"), L.T("专注"), L.T("动感"), L.T("明亮"), L.T("沉稳") }) mood.Items.Add(s);
+        mood.SelectedIndex = 0;
+
         var sort = new ComboBox { Header = L.T("排序"), HorizontalAlignment = HorizontalAlignment.Stretch };
         foreach (var s in new[] { L.T("最近添加"), L.T("最近播放"), L.T("播放最多"), L.T("歌名") }) sort.Items.Add(s);
         sort.SelectedIndex = 0;
@@ -201,7 +205,7 @@ public static class LibraryDialogs
         foreach (var s in new[] { L.T("不限"), L.T("50 首"), L.T("100 首"), L.T("200 首") }) limit.Items.Add(s);
         limit.SelectedIndex = 0;
 
-        var panel = new StackPanel { Spacing = 10, MinWidth = 380, Children = { name, quality, fav, added, plays, sort, limit } };
+        var panel = new StackPanel { Spacing = 10, MinWidth = 380, Children = { name, quality, fav, mood, added, plays, sort, limit } };
         var dlg = NewDialog(root, L.T("新建智能歌单"), new ScrollViewer { Content = panel, MaxHeight = 480 }, L.T("创建"));
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return null;
 
@@ -212,6 +216,7 @@ public static class LibraryDialogs
             OnlyFavorite = fav.IsChecked == true,
             AddedWithinDays = new[] { 0, 7, 30, 90 }[Math.Max(0, added.SelectedIndex)],
             MinPlayCount = new[] { 0, 1, 3, 10 }[Math.Max(0, plays.SelectedIndex)],
+            Mood = new[] { "", "calm", "focus", "energetic", "bright", "deep" }[Math.Max(0, mood.SelectedIndex)],
             SortBy = new[] { "added", "played", "plays", "title" }[Math.Max(0, sort.SelectedIndex)],
             Limit = new[] { 0, 50, 100, 200 }[Math.Max(0, limit.SelectedIndex)]
         };

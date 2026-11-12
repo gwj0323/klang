@@ -134,6 +134,7 @@
             <SelectorBar
                 x:Name="TabSelector"
                 Grid.Row="0"
+                Visibility="Collapsed"
                 SelectionChanged="TabSelector_SelectionChanged">
                 <SelectorBarItem x:Name="TabAllItem" IsSelected="True" Tag="all" Text="全部" />
                 <SelectorBarItem Tag="fav" Text="喜欢" />
@@ -146,6 +147,7 @@
             <AutoSuggestBox
                 x:Name="SearchBox"
                 Grid.Row="1"
+                Margin="0,-10,0,0"
                 Height="32"
                 CornerRadius="4"
                 PlaceholderText="搜索歌名 / 歌手 / 专辑…"
@@ -226,6 +228,7 @@
                                 <ToggleMenuFlyoutItem x:Name="FilterNoAlbum" Click="MissingFilter_Click" Text="缺专辑 / 歌手信息" />
                                 <ToggleMenuFlyoutItem x:Name="FilterNoLyrics" Click="MissingFilter_Click" Text="缺歌词（无同名 .lrc）" />
                                 <ToggleMenuFlyoutItem x:Name="FilterMissingFile" Click="MissingFilter_Click" Text="文件丢失" />
+                                <ToggleMenuFlyoutItem x:Name="FilterFake" Click="MissingFilter_Click" Text="疑似假无损" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Click="ClearFilters_Click" Text="清除筛选" />
                             </MenuFlyoutSubItem>
@@ -239,6 +242,7 @@
                             <MenuFlyoutSubItem Text="曲库工具">
                                 <MenuFlyoutItem Click="FindDuplicates_Click" Text="检查重复歌曲…" />
                                 <MenuFlyoutItem Click="FindMissing_Click" Text="检查丢失文件…" />
+                                <MenuFlyoutItem Click="AcousticMap_Click" Text="声学地图…" />
                                 <MenuFlyoutItem Click="RescanNow_Click" Text="立即重新扫描文件夹" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Click="ResetRoam_Click" Text="重置漫游学习记录…" />

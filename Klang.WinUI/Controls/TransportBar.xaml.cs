@@ -155,11 +155,19 @@ public sealed partial class TransportBar : UserControl
     {
         bool roam = playMode == "roam";
         ShuffleIcon.Glyph = roam ? "" : "";   // 漫游用地球图标，其余用随机图标
-        string tip = roam ? L.T("漫游：根据你的口味猜下一首（点击切换为顺序播放）")
+        string tip = roam ? L.T("漫游：按你的口味挑下一首（点击切换为顺序播放）")
             : playMode == "random" ? L.T("随机播放（点击切换为漫游）") : L.T("随机播放 / 漫游");
         ToolTipService.SetToolTip(ShuffleBtn, tip);
         AutomationProperties.SetName(ShuffleBtn, tip);
         SetShuffleState(playMode is "random" or "roam");
+    }
+
+    private void SignalBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var info = AudioEngineService.Instance.GetSignalPath();
+        var flyout = new Flyout { Content = Dialogs.SignalPathPanel.Build(info, this) };
+        flyout.Opened += (s, a) => L.Apply(flyout.Content);
+        flyout.ShowAt(SignalBtn);
     }
 
     private bool _shuffleOn;

@@ -61,15 +61,16 @@ public sealed partial class MainWindow : Window
         LeftNavPane.TabChanged += (s, tab) => UpdateRail(tab);
         UpdateRail("all");
         ((FrameworkElement)Content).ActualThemeChanged += (s, e) => UpdateRail(_railTab);
+        StageLyricsControl.CalibrationPicked += StageLyricsControl_CalibrationPicked;
         ImmersiveLayer.CloseRequested += (s, e) => CloseImmersive();
-        ImmersiveLayer.SeekRequested += (s, t) => AudioEngineService.Instance.Seek(t);
+        ImmersiveLayer.SeekRequested += (s, t) => AudioEngineService.Instance.Seek(Math.Max(0, t - _lyricOffset));
         ImmersiveLayer.VolumeChanged += (s, v) => BottomTransportBar.SetVolume(v);
         ImmersiveLayer.SetVolume(AudioEngineService.Instance.Volume);
         ImmersiveLayer.PlayPauseRequested += (s, e) => TogglePlayPause();
         ImmersiveLayer.PrevRequested += (s, e) => PlayPrev();
         ImmersiveLayer.NextRequested += (s, e) => PlayNext();
         _playMode = st.PlayMode is "loop_single" or "random" or "roam" ? st.PlayMode : "loop_list";
-        if (st.SidebarCollapsed) SetSidebarOpen(false);
+        if (st.SidebarCollapsed) SetSidebarOpen(false); 
         LeftNavPane.ApplyViewState(st.NavSortMode, st.NavGroupMode);
 
         // 1. 初始化音频引擎调度器
@@ -84,7 +85,7 @@ public sealed partial class MainWindow : Window
         _media.SeekRequested += pos =>
         {
             AudioEngineService.Instance.Seek(pos);
-            StageLyricsControl.UpdatePlaybackTime(pos); ImmersiveLayer.UpdateTime(pos);
+            StageLyricsControl.UpdatePlaybackTime(pos + _lyricOffset); ImmersiveLayer.UpdateTime(pos + _lyricOffset);
         };
 
         // 2. 监听音频进度与状态
@@ -92,11 +93,18 @@ public sealed partial class MainWindow : Window
         {
             BottomTransportBar.UpdateProgress(current, total);
             if (ImmersiveLayer.IsOpen) ImmersiveLayer.UpdateProgress(current, total);
-            StageLyricsControl.UpdatePlaybackTime(current); ImmersiveLayer.UpdateTime(current);
+            StageLyricsControl.UpdatePlaybackTime(current + _lyricOffset); ImmersiveLayer.UpdateTime(current + _lyricOffset);
             _media.UpdateTimeline(current, total);
 
             // 同步底栏单句微缩歌词
-            int activeIdx = LyricsService.Instance.FindActiveIndex(StageLyricsControl.Lyrics, current);
+            int activeIdx = LyricsService.Instance.FindActiveIndex(StageLyricsControl.Lyrics, current + _lyricOffset);
+            if (GalleryLayer.Visibility == Visibility.Visible)
+            {
+                var gl = StageLyricsControl.Lyrics;
+                bool real = activeIdx >= 0 && activeIdx < gl.Count && gl[activeIdx].EndTime < 9000;
+                GalleryLayer.SetProgress(current, total);
+                GalleryLayer.SetLyric(real && activeIdx > 0 ? gl[activeIdx - 1].Text : "", real ? gl[activeIdx].Text : "", real && activeIdx + 1 < gl.Count ? gl[activeIdx + 1].Text : "");
+            }
             if (activeIdx >= 0 && activeIdx < StageLyricsControl.Lyrics.Count)
             {
                 // “暂无歌词”之类的占位行不显示，改显示歌手
@@ -109,7 +117,7 @@ public sealed partial class MainWindow : Window
             // 同步桌面歌词与迷你播放器
             if (_desktopLyricWindow != null && _isDesktopLyricVisible)
             {
-                _desktopLyricWindow.UpdatePlaybackTime(current);
+                _desktopLyricWindow.UpdatePlaybackTime(current + _lyricOffset);
             }
             if (_miniPlayerWindow != null && _miniPlayerWindow.AppWindow.IsVisible)
             {
@@ -131,6 +139,7 @@ public sealed partial class MainWindow : Window
             bool isPlaying = (state == PlaybackState.Playing);
             BottomTransportBar.IsPlaying = isPlaying;
             ImmersiveLayer.SetPlaying(isPlaying);
+            GalleryLayer.SetIsPlaying(isPlaying);
             StageCoverCard.SetPlaying(isPlaying);
             _media.SetPlaybackState(isPlaying, _currentTrack != null);
         };
@@ -158,6 +167,9 @@ public sealed partial class MainWindow : Window
             PlayTrack(track);
         };
 
+        GalleryLayer.CloseRequested += (s, e) => CloseGallery();
+        GalleryLayer.PlayPauseRequested += (s, e) => TogglePlayPause();
+        GalleryLayer.AlbumPicked += (s, tracks) => LeftNavPane.PlayQueue(tracks);
         LeftNavPane.FavoriteToggled += (s, track) => ToggleFavorite(track);
         LeftNavPane.CloudCoverReady += (s, track) => RefreshTrackCover(track);
         MetadataService.Instance.TrackEnriched += track => DispatcherQueue.TryEnqueue(() =>
@@ -183,7 +195,7 @@ public sealed partial class MainWindow : Window
         // 4. 歌词点击跳播
         StageLyricsControl.SeekRequested += (s, timeSec) =>
         {
-            AudioEngineService.Instance.Seek(timeSec);
+            AudioEngineService.Instance.Seek(Math.Max(0, timeSec - _lyricOffset));
         };
 
         // 5. 底栏控制事件绑定
@@ -201,7 +213,7 @@ public sealed partial class MainWindow : Window
             BottomTransportBar.UpdateLyricSnippet(_playMode switch
             {
                 "random" => L.T("已开启随机播放"),
-                "roam" => L.T("已开启漫游：会根据你的听歌习惯猜下一首"),
+                "roam" => L.T("漫游已开启：按你的听歌习惯挑下一首"),
                 _ => L.T("已开启列表循环")
             });
             SavePlayMode();
@@ -235,7 +247,7 @@ public sealed partial class MainWindow : Window
 
         AudioEngineService.Instance.SleepTimerElapsed += () =>
         {
-            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("睡眠定时已到，已暂停播放")));
+            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("定时结束，已暂停播放")));
         };
 
         BottomTransportBar.FavoriteClicked += (s, e) =>
@@ -251,7 +263,7 @@ public sealed partial class MainWindow : Window
         BottomTransportBar.UserSeekRequested += (s, pos) =>
         {
             AudioEngineService.Instance.Seek(pos);
-            StageLyricsControl.UpdatePlaybackTime(pos); ImmersiveLayer.UpdateTime(pos);
+            StageLyricsControl.UpdatePlaybackTime(pos + _lyricOffset); ImmersiveLayer.UpdateTime(pos + _lyricOffset);
         };
 
         BottomTransportBar.UserVolumeChanged += (s, vol) =>
@@ -334,6 +346,15 @@ public sealed partial class MainWindow : Window
             if (added.Count > 0) MetadataService.Instance.Enqueue(added);
             LeftNavPane.RefreshView();
             AudioFeatureService.Instance.Enqueue(lib.Tracks);   // 后台慢慢给还没算过的歌提取声学特征
+
+            // 无损真伪检测：后台分析所有无损文件的频谱，结果出来后刷新徽标 / 列表
+            QualityAnalysisService.Instance.Start(DispatcherQueue);
+            QualityAnalysisService.Instance.Analyzed += t =>
+            {
+                if (_currentTrack == t) StageCoverCard.UpdateTrackBadge(t);
+                if (LeftNavPane.HasActiveFilter) LeftNavPane.RefreshView();
+            };
+            QualityAnalysisService.Instance.Enqueue(lib.Tracks);
 
             lib.LibraryChangedOnDisk += newTracks =>
             {
@@ -445,12 +466,15 @@ public sealed partial class MainWindow : Window
         StageCoverCard.UpdateTrack(track);
         UpdateNarrowHeader(track);
         // CUE 分轨暂不加载整轨歌词（整轨 .lrc 与分轨时间轴不一致）
+        StageLyricsControl.CalibrationMode = false;
+        LoadLyricOffset(track);
         StageLyricsControl.LoadLyrics(track.IsCueTrack || track.IsOnline ? null : track.FilePath);
         SyncImmersive();
         BottomTransportBar.UpdateTrackState(track.Title, track.Artist, track.CoverPath);
         BottomTransportBar.SetFavorite(track.IsFavorite);
         BottomTransportBar.UpdateProgress(0, track.Duration);
         LeftNavPane.SetCurrentTrack(track);
+        GalleryLayer.SetCurrent(track);
         _media.UpdateTrack(track);
         _media.SetPlaybackState(autoPlay, true);
 
@@ -520,6 +544,16 @@ public sealed partial class MainWindow : Window
                     _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
                 }
             }
+
+            // 网易云也没有时，再试 LRCLIB 开放歌词库（同样受“自动补全”开关控制）
+            lyr = StageLyricsControl.Lyrics;
+            noLyrics = lyr.Count == 0 || (lyr.Count == 1 && lyr[0].EndTime >= 9000);
+            if (noLyrics && !track.IsCueTrack && !cts.IsCancellationRequested && _currentTrack == track)
+            {
+                var lrc = await LrclibService.FetchSyncedAsync(track, cts.Token);
+                if (lrc != null && _currentTrack == track && !cts.IsCancellationRequested)
+                    ApplyOnlineLyrics(lrc);
+            }
         }
         catch (OperationCanceledException) { }
         catch { }
@@ -556,8 +590,8 @@ public sealed partial class MainWindow : Window
             if (!ok)
             {
                 _onlineStatus = IsNeteaseLoggedIn()
-                    ? L.T("无法获取音源（可能是会员专享或无版权）")
-                    : L.T("无法获取音源（可能需要登录网易云账号）");
+                    ? L.T("获取不到音源（可能是会员专享或没有版权）")
+                    : L.T("获取不到音源（可能要先登录网易云）");
                 BottomTransportBar.UpdateLyricSnippet(_onlineStatus);
             }
             else
@@ -676,7 +710,7 @@ public sealed partial class MainWindow : Window
     {
         if (track.IsOnline)
         {
-            BottomTransportBar.UpdateLyricSnippet(L.T("云端曲目暂不支持“喜欢”"));
+            BottomTransportBar.UpdateLyricSnippet(L.T("云端曲目不能加“喜欢”"));
             BottomTransportBar.SetFavorite(false);
             return;
         }
@@ -697,7 +731,7 @@ public sealed partial class MainWindow : Window
         if (!engine.HasSource) return;
         double pos = Math.Clamp(engine.CurrentTime + deltaSeconds, 0, engine.TotalDuration);
         engine.Seek(pos);
-        StageLyricsControl.UpdatePlaybackTime(pos); ImmersiveLayer.UpdateTime(pos);
+        StageLyricsControl.UpdatePlaybackTime(pos + _lyricOffset); ImmersiveLayer.UpdateTime(pos + _lyricOffset);
     }
 
     private void ChangeVolume(float delta)
@@ -729,6 +763,12 @@ public sealed partial class MainWindow : Window
         if (key == VirtualKey.F11)
         {
             ToggleFullscreen();
+            e.Handled = true;
+            return;
+        }
+        if (key == VirtualKey.Escape && GalleryLayer.Visibility == Visibility.Visible)
+        {
+            CloseGallery();
             e.Handled = true;
             return;
         }
@@ -850,7 +890,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private const double SidebarOpenWidth = 286;
+    private const double SidebarOpenWidth = 342;
     private const double SidebarRailWidth = 56;
 
     private void SetSidebarOpen(bool open)
@@ -905,7 +945,6 @@ public sealed partial class MainWindow : Window
     private void ShowSidebarPart(bool full)
     {
         LeftNavPane.Visibility = full ? Visibility.Visible : Visibility.Collapsed;
-        SidebarRail.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>竖排图标栏：高亮当前分页。</summary>
@@ -922,7 +961,7 @@ public sealed partial class MainWindow : Window
         {
             bool sel = tag == tab;
             btn.Background = sel ? selBg : null;
-            if (btn.Content is FontIcon icon) icon.Foreground = sel ? accent : normal;
+            if (btn.Content is StackPanel { Children: [FontIcon icon, ..] }) icon.Foreground = sel ? accent : normal;
         }
     }
 
@@ -993,7 +1032,7 @@ public sealed partial class MainWindow : Window
             _miniPlayerWindow.SeekRequested += (s, pos) =>
             {
                 AudioEngineService.Instance.Seek(pos);
-                StageLyricsControl.UpdatePlaybackTime(pos); ImmersiveLayer.UpdateTime(pos);
+                StageLyricsControl.UpdatePlaybackTime(pos + _lyricOffset); ImmersiveLayer.UpdateTime(pos + _lyricOffset);
             };
             _miniPlayerWindow.RestoreRequested += (s, ev) =>
             {
@@ -1045,15 +1084,85 @@ public sealed partial class MainWindow : Window
         if (announce) BottomTransportBar.UpdateLyricSnippet(L.F("歌词副行：{0}", L.T(SubModeLabels[i])));
     }
 
+    // ---------------- 歌词时间校准 / 在线补全 ----------------
+
+    /// <summary>当前曲目的歌词偏移（秒）。正值 = 歌词提前出现。显示时间 = 播放位置 + 偏移。</summary>
+    private double _lyricOffset;
+
+    private void LoadLyricOffset(TrackItem? track)
+    {
+        _lyricOffset = 0;
+        if (track != null && State.LyricOffsets.TryGetValue(track.Id, out var o)) _lyricOffset = o;
+        UpdateOffsetLabel();
+    }
+
+    private void SetLyricOffset(double v)
+    {
+        _lyricOffset = Math.Round(Math.Clamp(v, -30, 30), 2);
+        if (_currentTrack != null)
+        {
+            if (Math.Abs(_lyricOffset) < 0.005) State.LyricOffsets.Remove(_currentTrack.Id);
+            else State.LyricOffsets[_currentTrack.Id] = _lyricOffset;
+            StateService.Instance.RequestSave();
+        }
+        UpdateOffsetLabel();
+        double now = AudioEngineService.Instance.CurrentTime + _lyricOffset;
+        StageLyricsControl.UpdatePlaybackTime(now); ImmersiveLayer.UpdateTime(now);
+        BottomTransportBar.UpdateLyricSnippet(L.F("歌词偏移：{0} 秒", _lyricOffset.ToString("+0.0;-0.0;0.0")));
+    }
+
+    private void UpdateOffsetLabel() =>
+        LyricOffsetInfo.Text = L.F("当前偏移：{0} 秒", _lyricOffset.ToString("+0.0;-0.0;0.0"));
+
+    private void LyricEarlier_Click(object sender, RoutedEventArgs e) => SetLyricOffset(_lyricOffset + 0.5);
+    private void LyricLater_Click(object sender, RoutedEventArgs e) => SetLyricOffset(_lyricOffset - 0.5);
+    private void LyricOffsetReset_Click(object sender, RoutedEventArgs e) => SetLyricOffset(0);
+
+    private void LyricCalibrate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentTrack == null) return;
+        StageLyricsControl.CalibrationMode = true;
+        BottomTransportBar.UpdateLyricSnippet(L.T("请点此刻正在唱的那一句"));
+    }
+
+    private void StageLyricsControl_CalibrationPicked(object? sender, double lineTime)
+    {
+        // 此刻引擎位置 pos 唱的是 lineTime 这句 → 需要 pos + offset = lineTime
+        SetLyricOffset(lineTime - AudioEngineService.Instance.CurrentTime);
+    }
+
+    private async void LyricOnline_Click(object sender, RoutedEventArgs e)
+    {
+        var track = _currentTrack;
+        if (track == null || track.IsOnline || track.IsCueTrack) return;
+        BottomTransportBar.UpdateLyricSnippet(L.T("正在 LRCLIB 搜索歌词…"));
+        string? lrc = await LrclibService.FetchSyncedAsync(track, System.Threading.CancellationToken.None);
+        if (_currentTrack != track) return;
+        if (lrc == null)
+        {
+            BottomTransportBar.UpdateLyricSnippet(L.T("LRCLIB 没有找到这首歌的歌词"));
+            return;
+        }
+        ApplyOnlineLyrics(lrc);
+        BottomTransportBar.UpdateLyricSnippet(L.T("已从 LRCLIB 找到歌词"));
+    }
+
+    private void ApplyOnlineLyrics(string lrc)
+    {
+        StageLyricsControl.LoadLyricLines(LyricsService.Instance.ParseLrc(lrc));
+        SyncImmersive();
+        _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
+    }
+
     private async void PosterBtn_Click(object sender, RoutedEventArgs e)
     {
         if (_currentTrack == null)
         {
-            BottomTransportBar.UpdateLyricSnippet(L.T("先播放一首歌再生成海报"));
+            BottomTransportBar.UpdateLyricSnippet(L.T("先放一首歌，再生成海报"));
             return;
         }
         var lyrics = StageLyricsControl.Lyrics;
-        int active = LyricsService.Instance.FindActiveIndex(lyrics, AudioEngineService.Instance.CurrentTime);
+        int active = LyricsService.Instance.FindActiveIndex(lyrics, AudioEngineService.Instance.CurrentTime + _lyricOffset);
         try
         {
             var dlg = new PosterDialog(_currentTrack, lyrics.ToList(), active)
@@ -1072,6 +1181,26 @@ public sealed partial class MainWindow : Window
     private bool _immersiveSetFullscreen;
 
     private void ImmersiveBtn_Click(object sender, RoutedEventArgs e) => ToggleImmersive();
+
+    // ---------------- 封面画廊 ----------------
+
+    private void GalleryBtn_Click(object sender, RoutedEventArgs e) => ToggleGallery();
+
+    private void ToggleGallery()
+    {
+        if (GalleryLayer.Visibility == Visibility.Visible) CloseGallery(); else OpenGallery();
+    }
+
+    private void OpenGallery()
+    {
+        GalleryLayer.Load(LibraryService.Instance.Tracks);
+        GalleryLayer.SetCurrent(_currentTrack);
+        GalleryLayer.SetIsPlaying(AudioEngineService.Instance.IsPlaying);
+        GalleryLayer.Visibility = Visibility.Visible;
+        GalleryLayer.PlayOpenAnimation();
+    }
+
+    private void CloseGallery() => GalleryLayer.Visibility = Visibility.Collapsed;
 
     private void ToggleImmersive()
     {
@@ -1125,7 +1254,7 @@ public sealed partial class MainWindow : Window
         ImmersiveLayer.SetPlaying(AudioEngineService.Instance.IsPlaying);
         ImmersiveLayer.UpdateProgress(AudioEngineService.Instance.CurrentTime, AudioEngineService.Instance.TotalDuration);
         ImmersiveLayer.SetLyrics(StageLyricsControl.Lyrics);
-        ImmersiveLayer.UpdateTime(AudioEngineService.Instance.CurrentTime);
+        ImmersiveLayer.UpdateTime(AudioEngineService.Instance.CurrentTime + _lyricOffset);
     }
 
     #endregion

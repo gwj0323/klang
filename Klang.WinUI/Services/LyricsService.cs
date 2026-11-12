@@ -98,6 +98,18 @@ public class LyricsService
             System.Diagnostics.Debug.WriteLine($"Error reading embedded lyrics: {ex.Message}");
         }
 
+        // 3. 之前在线补全并缓存下来的歌词（LRCLIB）
+        try
+        {
+            var cached = LrclibService.ReadCache(TrackItem.MakeId(Path.GetFullPath(audioFilePath)));
+            if (!string.IsNullOrWhiteSpace(cached))
+            {
+                var parsed = ParseLrc(cached);
+                if (parsed.Count > 0) return parsed;
+            }
+        }
+        catch { }
+
         return CreateEmptyPlaceholder(L.T("暂无歌词"));
     }
 
