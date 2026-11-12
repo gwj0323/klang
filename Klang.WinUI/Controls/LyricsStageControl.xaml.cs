@@ -843,7 +843,7 @@ public sealed partial class LyricsStageControl : UserControl
                         cds.TextAntialiasing = CanvasTextAntialiasing.Grayscale;
                         cds.Transform = ds.Transform;
                         foreach (var r in rects)
-                            using (cds.CreateLayer(1f, new Windows.Foundation.Rect(r.X + x0, r.Y - r.Height * 0.5, r.Width, r.Height * 2)))
+                            using (cds.CreateLayer(1f, new Windows.Foundation.Rect(r.X + x0, r.Y, r.Width, r.Height)))
                                 cds.DrawTextLayout(main, x0, 0, full);
                     }
                     using var blurFx = new GaussianBlurEffect { Source = cl, BlurAmount = (float)(_lyricFontSize * 0.28), BorderMode = EffectBorderMode.Soft };
@@ -857,7 +857,7 @@ public sealed partial class LyricsStageControl : UserControl
 
             // 这个字本体：按自己的矩形裁剪后画（只画到这个字，整行排版不变）
             foreach (var r in rects)
-                using (ds.CreateLayer(1f, new Windows.Foundation.Rect(r.X + x0, r.Y - r.Height * 0.5, r.Width, r.Height * 2)))
+                using (ds.CreateLayer(1f, new Windows.Foundation.Rect(r.X + x0, r.Y, r.Width, r.Height)))
                     ds.DrawTextLayout(main, x0, 0, dim);
 
             // 正在唱的字：扫光
@@ -876,7 +876,7 @@ public sealed partial class LyricsStageControl : UserControl
                 var stopArr = stops.ToArray();
                 foreach (var r in rects)
                 {
-                    var clip = new Windows.Foundation.Rect(r.X + x0, r.Y - r.Height * 0.5, r.Width, r.Height * 2);
+                    var clip = new Windows.Foundation.Rect(r.X + x0, r.Y, r.Width, r.Height);
                     using var mask = new CanvasLinearGradientBrush(ds, stopArr)
                     {
                         StartPoint = new System.Numerics.Vector2((float)(r.X + x0), 0),
