@@ -135,7 +135,7 @@ public sealed partial class NavigationPane : UserControl
         UpdateEmptyState();
 
         // 切换语言后重建列表区的文字（“共 N 首”、空状态提示这些是代码拼出来的）
-        L.LanguageChanged += () => DispatcherQueue.TryEnqueue(RefreshView);
+        L.LanguageChanged += () => DispatcherQueue.SafeEnqueue(RefreshView);
 
         UiAnimations.AttachFade(PlaylistsPanel);
         UiAnimations.AttachFade(CloudView);
@@ -868,6 +868,7 @@ public sealed partial class NavigationPane : UserControl
         var dlg = new ContentDialog
         {
             Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+            RequestedTheme = ThemeService.Current,
             XamlRoot = XamlRoot,
             Title = L.T("重置漫游学习数据"),
             Content = L.F("漫游已累计 {0} 条收听记录。\n重置仅清除学习数据，不影响曲库和播放统计。", RoamingService.Instance.Samples),
@@ -1166,6 +1167,7 @@ public sealed partial class NavigationPane : UserControl
         var dlg = new ContentDialog
         {
             Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+            RequestedTheme = ThemeService.Current,
             XamlRoot = XamlRoot,
             Title = title,
             Content = box,
@@ -1185,6 +1187,7 @@ public sealed partial class NavigationPane : UserControl
         var dlg = new ContentDialog
         {
             Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+            RequestedTheme = ThemeService.Current,
             XamlRoot = XamlRoot,
             Title = title,
             Content = message,

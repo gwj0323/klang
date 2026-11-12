@@ -76,7 +76,7 @@ public sealed class AudioFeatureService
         });
     }
 
-    private void SaveSoon() => _ui?.TryEnqueue(() => LibraryService.Instance.SaveLibrary());
+    private void SaveSoon() => _ui?.SafeEnqueue(() => LibraryService.Instance.SaveLibrary());
 
     public static float[]? Extract(string path, double durationSeconds)
     {

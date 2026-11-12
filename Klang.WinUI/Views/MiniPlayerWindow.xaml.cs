@@ -59,7 +59,7 @@ public sealed partial class MiniPlayerWindow : Window
 
         UpdatePlayState(AudioEngineService.Instance.IsPlaying);
         AudioEngineService.Instance.StateChanged += state =>
-            DispatcherQueue.TryEnqueue(() => UpdatePlayState(state == PlaybackState.Playing));
+            DispatcherQueue.SafeEnqueue(() => UpdatePlayState(state == PlaybackState.Playing));
     }
 
     private void Root_PointerEntered(object sender, PointerRoutedEventArgs e)

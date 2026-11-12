@@ -89,7 +89,7 @@ public sealed partial class MainWindow : Window
         };
 
         // 设置里重新打开波形进度条：为当前曲目补上波形
-        Controls.TransportBar.WaveformModeChanged += () => DispatcherQueue.TryEnqueue(() =>
+        Controls.TransportBar.WaveformModeChanged += () => DispatcherQueue.SafeEnqueue(() =>
         {
             if (State.WaveformSeekBar && _currentTrack != null) _ = LoadWaveformAsync(_currentTrack);
         });
@@ -151,12 +151,12 @@ public sealed partial class MainWindow : Window
             _media.SetPlaybackState(isPlaying, _currentTrack != null);
         };
 
-        AudioEngineService.Instance.MixAdopted += path => DispatcherQueue.TryEnqueue(() => OnMixAdopted(path));
+        AudioEngineService.Instance.MixAdopted += path => DispatcherQueue.SafeEnqueue(() => OnMixAdopted(path));
 
         // 曲目自然播放结束，自动切下一首
         AudioEngineService.Instance.TrackEnded += () =>
         {
-            DispatcherQueue.TryEnqueue(() =>
+            DispatcherQueue.SafeEnqueue(() =>
             {
                 _endedNaturally = true;   // 引擎此时已复位，听了多少得靠这个标记告诉漫游模型：整首都听完了
                 if (_playMode == "loop_single" && _currentTrack != null)
@@ -181,7 +181,7 @@ public sealed partial class MainWindow : Window
         GalleryLayer.AlbumPicked += (s, tracks) => LeftNavPane.PlayQueue(tracks);
         LeftNavPane.FavoriteToggled += (s, track) => ToggleFavorite(track);
         LeftNavPane.CloudCoverReady += (s, track) => RefreshTrackCover(track);
-        MetadataService.Instance.TrackEnriched += track => DispatcherQueue.TryEnqueue(() =>
+        MetadataService.Instance.TrackEnriched += track => DispatcherQueue.SafeEnqueue(() =>
         {
             RefreshTrackCover(track);
             // 歌手 / 专辑变了，且列表正按它们分组或排序时才重建，避免无谓闪动
@@ -256,7 +256,7 @@ public sealed partial class MainWindow : Window
 
         AudioEngineService.Instance.SleepTimerElapsed += () =>
         {
-            DispatcherQueue.TryEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("睡眠定时已结束，已暂停播放")));
+            DispatcherQueue.SafeEnqueue(() => BottomTransportBar.UpdateLyricSnippet(L.T("睡眠定时已结束，已暂停播放")));
         };
 
         BottomTransportBar.FavoriteClicked += (s, e) =>
@@ -1098,7 +1098,7 @@ public sealed partial class MainWindow : Window
     private void RailSearch_Click(object sender, RoutedEventArgs e)
     {
         SetSidebarOpen(true);
-        DispatcherQueue.TryEnqueue(() => LeftNavPane.FocusSearch());
+        DispatcherQueue.SafeEnqueue(() => LeftNavPane.FocusSearch());
     }
 
     private void SidebarToggleBtn_Click(object sender, RoutedEventArgs e) => SetSidebarOpen(!_isSidebarOpen);

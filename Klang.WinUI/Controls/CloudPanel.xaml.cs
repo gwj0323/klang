@@ -63,8 +63,8 @@ public sealed partial class CloudPanel : UserControl
         _qrTimer.Interval = TimeSpan.FromSeconds(2);
         _qrTimer.Tick += async (s, e) => await PollQrAsync();
 
-        Svc.LoginChanged += () => DispatcherQueue.TryEnqueue(UpdateView);
-        Svc.CoverCached += t => DispatcherQueue.TryEnqueue(() => CoverReady?.Invoke(t));
+        Svc.LoginChanged += () => DispatcherQueue.SafeEnqueue(UpdateView);
+        Svc.CoverCached += t => DispatcherQueue.SafeEnqueue(() => CoverReady?.Invoke(t));
         UpdateView();
     }
 

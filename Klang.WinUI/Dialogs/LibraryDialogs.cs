@@ -17,6 +17,7 @@ public static class LibraryDialogs
     private static ContentDialog NewDialog(XamlRoot root, string title, object content, string primary, string close = "取消") => new()
     {
         Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+        RequestedTheme = ThemeService.Current,
         XamlRoot = root,
         Title = title,
         Content = content,

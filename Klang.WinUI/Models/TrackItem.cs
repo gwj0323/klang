@@ -18,7 +18,7 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
         if (handler == null) return;
         var d = UiDispatcher;
         if (d == null || d.HasThreadAccess) handler(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-        else d.TryEnqueue(() => handler(this, new System.ComponentModel.PropertyChangedEventArgs(name)));
+        else d.SafeEnqueue(() => handler(this, new System.ComponentModel.PropertyChangedEventArgs(name)));
     }
     private bool _isCurrent;
     /// <summary>是不是正在播放（列表里左侧画强调色竖条）。</summary>

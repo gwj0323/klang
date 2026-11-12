@@ -227,8 +227,13 @@ public class StateService
             {
                 json = JsonSerializer.Serialize(State, AppStateJsonContext.Default.AppState);
             }
-            catch
+            catch (Exception ex)
             {
+                // 序列化在计时器线程上进行，界面线程正好在改列表时会失败（大量导入时尤其常见）。
+                // 以前直接放弃，这一轮的改动就丢了；现在保留“未保存”标记，稍后重试
+                _dirty = true;
+                _debounce.Change(800, Timeout.Infinite);
+                App.LogError("Save state (will retry)", ex.Message);
                 return;
             }
 

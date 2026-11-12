@@ -183,6 +183,7 @@ public static class AcousticMapDialog
             var dlg = new ContentDialog
             {
                 Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+                RequestedTheme = ThemeService.Current,
                 XamlRoot = root,
                 Title = L.T("声学地图"),
                 Content = panel,
@@ -199,6 +200,7 @@ public static class AcousticMapDialog
         var d2 = new ContentDialog
         {
             Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+            RequestedTheme = ThemeService.Current,
             XamlRoot = root,
             Title = L.T("声学地图"),
             Content = panel,

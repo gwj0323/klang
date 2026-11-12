@@ -24,6 +24,7 @@ public static class QualityDialog
         var dlg = new ContentDialog
         {
             Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+            RequestedTheme = ThemeService.Current,
             XamlRoot = root,
             Title = L.T("音质分析"),
             Content = holder,

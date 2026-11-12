@@ -80,7 +80,7 @@ public sealed partial class TransportBar : UserControl
         TimelineSlider.AddHandler(UIElement.PointerExitedEvent, new PointerEventHandler((s, e) => Waveform.SetHover(-1)), true);
 
         ApplyWaveformMode();
-        void OnModeChanged() => DispatcherQueue.TryEnqueue(ApplyWaveformMode);
+        void OnModeChanged() => DispatcherQueue.SafeEnqueue(ApplyWaveformMode);
         WaveformModeChanged += OnModeChanged;
         Unloaded += (s, e) => WaveformModeChanged -= OnModeChanged;
         Loaded += (s, e) => { WaveformModeChanged -= OnModeChanged; WaveformModeChanged += OnModeChanged; ApplyWaveformMode(); };

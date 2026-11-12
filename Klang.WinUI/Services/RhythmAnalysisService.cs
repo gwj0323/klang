@@ -74,17 +74,17 @@ public sealed class RhythmAnalysisService
                     {
                         RhythmResult? r = null;
                         try { r = Analyze(t.FilePath, t.Duration); } catch { }
-                        _ui?.TryEnqueue(() =>
+                        _ui?.SafeEnqueue(() =>
                         {
                             Apply(t, r);
                             Analyzed?.Invoke(t);
                         });
-                        if (++sinceSave >= 8) { sinceSave = 0; _ui?.TryEnqueue(() => LibraryService.Instance.SaveLibrary()); }
+                        if (++sinceSave >= 8) { sinceSave = 0; _ui?.SafeEnqueue(() => LibraryService.Instance.SaveLibrary()); }
                     }
                     catch { }
                     await Task.Delay(80);
                 }
-                if (sinceSave > 0) _ui?.TryEnqueue(() => LibraryService.Instance.SaveLibrary());
+                if (sinceSave > 0) _ui?.SafeEnqueue(() => LibraryService.Instance.SaveLibrary());
             }
             finally
             {

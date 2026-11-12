@@ -17,6 +17,12 @@ public static class ThemeService
         _ => ElementTheme.Default
     };
 
+    /// <summary>
+    /// 当前设置的主题。代码里新建的 ContentDialog 显示在弹出层，不继承窗口内容的 RequestedTheme，
+    /// 必须把它设成这个值，否则系统是浅色、应用设成深色时对话框仍是白底。
+    /// </summary>
+    public static ElementTheme Current => ToElementTheme(StateService.Instance.State.Theme);
+
     /// <summary>把保存的主题 (system | light | dark) 应用到窗口内容，并同步标题栏按钮颜色。</summary>
     public static void Apply(Window? window, string theme)
     {

@@ -55,7 +55,7 @@ public sealed class MediaControlService : IDisposable
     private void OnButtonPressed(SystemMediaTransportControls sender, SystemMediaTransportControlsButtonPressedEventArgs args)
     {
         var button = args.Button;
-        _dispatcher?.TryEnqueue(() =>
+        _dispatcher?.SafeEnqueue(() =>
         {
             switch (button)
             {
@@ -70,7 +70,7 @@ public sealed class MediaControlService : IDisposable
     private void OnPositionChangeRequested(SystemMediaTransportControls sender, PlaybackPositionChangeRequestedEventArgs args)
     {
         double sec = args.RequestedPlaybackPosition.TotalSeconds;
-        _dispatcher?.TryEnqueue(() => SeekRequested?.Invoke(sec));
+        _dispatcher?.SafeEnqueue(() => SeekRequested?.Invoke(sec));
     }
 
     public void UpdateTrack(TrackItem? track)

@@ -334,7 +334,7 @@ public static class L
         root.LayoutUpdated += (s, e) => Schedule();
         LanguageChanged += () =>
         {
-            queue.TryEnqueue(() => { Apply(root); if (window != null) Apply(window); });
+            queue.SafeEnqueue(() => { Apply(root); if (window != null) Apply(window); });
         };
     }
 

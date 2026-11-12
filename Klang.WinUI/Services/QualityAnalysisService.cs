@@ -67,20 +67,20 @@ public sealed class QualityAnalysisService
                         var r = Analyze(t.FilePath, t.Duration, t.BitDepth);
                         if (r != null)
                         {
-                            _ui?.TryEnqueue(() =>
+                            _ui?.SafeEnqueue(() =>
                             {
                                 t.AuthCutoffHz = r.CutoffHz;
                                 t.AuthBits = r.EffectiveBits;
                                 t.AuthVerdict = r.Verdict;
                                 Analyzed?.Invoke(t);
                             });
-                            if (++sinceSave >= 8) { sinceSave = 0; _ui?.TryEnqueue(() => LibraryService.Instance.SaveLibrary()); }
+                            if (++sinceSave >= 8) { sinceSave = 0; _ui?.SafeEnqueue(() => LibraryService.Instance.SaveLibrary()); }
                         }
                     }
                     catch { }
                     await Task.Delay(60);
                 }
-                if (sinceSave > 0) _ui?.TryEnqueue(() => LibraryService.Instance.SaveLibrary());
+                if (sinceSave > 0) _ui?.SafeEnqueue(() => LibraryService.Instance.SaveLibrary());
             }
             finally
             {

@@ -42,7 +42,7 @@
         <Grid Grid.Row="1">
             <!-- 未登录：二维码 / Cookie 登录 -->
             <ScrollViewer x:Name="LoginView" VerticalScrollBarVisibility="Auto">
-                <StackPanel Spacing="10" Padding="0,4,0,8">
+                <StackPanel Spacing="10" Padding="6,4,6,8">
                     <TextBlock
                         HorizontalAlignment="Center"
                         FontSize="14"
@@ -79,8 +79,15 @@
 
                     <Expander
                         HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Stretch"
-                        Header="扫码登录不可用时，可使用 Cookie 登录">
+                        HorizontalContentAlignment="Stretch">
+                        <!-- 侧栏很窄：标题允许换行，不再被截断 -->
+                        <Expander.Header>
+                            <TextBlock
+                                Margin="0,8,0,8"
+                                FontSize="13"
+                                Text="扫码登录不可用时，可使用 Cookie 登录"
+                                TextWrapping="Wrap" />
+                        </Expander.Header>
                         <StackPanel Spacing="8">
                             <TextBox
                                 x:Name="CookieBox"

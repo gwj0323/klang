@@ -55,7 +55,7 @@ public sealed partial class DesktopLyricWindow : Window
         Toolbar.OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(180) };
         UpdatePlayState(AudioEngineService.Instance.IsPlaying);
         AudioEngineService.Instance.StateChanged += state =>
-            DispatcherQueue.TryEnqueue(() => UpdatePlayState(state == PlaybackState.Playing));
+            DispatcherQueue.SafeEnqueue(() => UpdatePlayState(state == PlaybackState.Playing));
     }
 
     private void Root_PointerEntered(object sender, PointerRoutedEventArgs e)

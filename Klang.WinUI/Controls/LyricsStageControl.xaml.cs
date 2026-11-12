@@ -196,7 +196,7 @@ public sealed partial class LyricsStageControl : UserControl
     public static event Action? EmphasisChanged;
     public static void NotifyEmphasisChanged() => EmphasisChanged?.Invoke();
 
-    private void OnEmphasisChanged() => DispatcherQueue.TryEnqueue(() => Rebuild(snap: false));
+    private void OnEmphasisChanged() => DispatcherQueue.SafeEnqueue(() => Rebuild(snap: false));
 
     // ================= 载入歌词 =================
 

@@ -35,6 +35,17 @@ public sealed class MetadataService
 
     private static bool Enabled => StateService.Instance.State.AutoFetchMetadata;
 
+    /// <summary>
+    /// 补全在后台线程进行；保存曲库要遍历曲目列表，必须回到界面线程做，
+    /// 否则会和界面线程上的导入 / 删除同时改动列表。
+    /// </summary>
+    private static void SaveLibraryOnUi()
+    {
+        var d = TrackItem.UiDispatcher;
+        if (d == null || d.HasThreadAccess) LibraryService.Instance.SaveLibrary();
+        else d.SafeEnqueue(() => LibraryService.Instance.SaveLibrary());
+    }
+
     private MetadataService()
     {
         _coverDir = Path.Combine(
@@ -162,7 +173,7 @@ public sealed class MetadataService
             return false;
         }
 
-        LibraryService.Instance.SaveLibrary();
+        SaveLibraryOnUi();
         if (changed) TrackEnriched?.Invoke(t);
         return changed;
     }
@@ -195,7 +206,7 @@ public sealed class MetadataService
                 var m = await FindMatchAsync(t);
                 if (m == null) return null;
                 t.MetaNeteaseId = m.NeteaseId;
-                LibraryService.Instance.SaveLibrary();
+                SaveLibraryOnUi();
             }
             ct.ThrowIfCancellationRequested();
             var lb = await NeteaseService.Instance.GetLyricsAsync(t.MetaNeteaseId, ct);

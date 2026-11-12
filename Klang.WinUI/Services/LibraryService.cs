@@ -54,6 +54,8 @@ public class LibraryService
             foreach (var s in saved)
             {
                 if (string.IsNullOrEmpty(s.FilePath)) continue;
+                // 旧版本误导入的 macOS “._” 资源分支文件：直接从曲库去掉
+                if (Path.GetFileName(s.FilePath).StartsWith("._", StringComparison.Ordinal)) continue;
                 if (!File.Exists(s.FilePath))
                 {
                     // 文件丢了（移走 / 外接盘没插）：仍留在列表里，标灰提示，收藏和歌单引用都不丢
@@ -215,6 +217,17 @@ public class LibraryService
 
     /// <summary>扫描文件夹并合并到曲库（按文件路径/轨号去重），返回新增的曲目。</summary>
     public async Task<List<TrackItem>> AddFolderAsync(string folderPath)
+    {
+        // 同一时间只做一次合并：手动导入、启动时的增量扫描、文件夹监视可能同时触发，
+        // 并发合并会把同一首歌加两次
+        await _addGate.WaitAsync();
+        try { return await AddFolderCoreAsync(folderPath); }
+        finally { _addGate.Release(); }
+    }
+
+    private readonly SemaphoreSlim _addGate = new(1, 1);
+
+    private async Task<List<TrackItem>> AddFolderCoreAsync(string folderPath)
     {
         var byId = new Dictionary<string, TrackItem>();
         foreach (var t in Tracks) byId[t.Id] = t;
@@ -510,7 +523,7 @@ public class LibraryService
 
     private void SyncAfterDiskChange()
     {
-        _watchDispatcher?.TryEnqueue(async () =>
+        _watchDispatcher?.SafeEnqueue(async () =>
         {
             try
             {
@@ -786,6 +799,17 @@ public class LibraryService
     /// <summary>
     /// 扫描文件夹。传入 knownById 时做增量扫描：已在曲库里、文件修改时间没变的文件直接跳过，不再读标签。
     /// </summary>
+    /// <summary>
+    /// 不是真正音频的文件：macOS 拷贝时留下的 “._歌名.flac”（AppleDouble 资源分支，几 KB 的元数据），
+    /// 以及隐藏 / 系统文件。它们扩展名像音频，但解码必然失败，导入后只会显示成时长 00:00 的“未知歌手”。
+    /// </summary>
+    internal static bool IsJunkFile(string path)
+    {
+        if (Path.GetFileName(path).StartsWith("._", StringComparison.Ordinal)) return true;
+        try { return (File.GetAttributes(path) & (FileAttributes.Hidden | FileAttributes.System)) != 0; }
+        catch { return false; }
+    }
+
     public async Task<List<TrackItem>> ScanFolderAsync(string folderPath, IReadOnlyDictionary<string, TrackItem>? knownById = null)
     {
         return await Task.Run(() =>
@@ -833,7 +857,7 @@ public class LibraryService
                 }
 
                 // 2. 普通音频文件
-                foreach (var file in allFiles.Where(f => SupportedExtensions.Contains(Path.GetExtension(f))))
+                foreach (var file in allFiles.Where(f => SupportedExtensions.Contains(Path.GetExtension(f)) && !IsJunkFile(f)))
                 {
                     if (cueAudio.Contains(Path.GetFullPath(file))) continue;
                     try
