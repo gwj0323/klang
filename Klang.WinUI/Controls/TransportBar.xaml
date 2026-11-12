@@ -50,6 +50,13 @@
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="00:00" />
 
+                <!-- 波形进度条：下层画波形，上层是透明的 Slider，负责点击、拖动和键盘操作 -->
+                <local:WaveformBar
+                    x:Name="Waveform"
+                    Grid.Column="1"
+                    Height="24"
+                    Margin="9,0,9,0"
+                    VerticalAlignment="Center" />
                 <Slider
                     x:Name="TimelineSlider"
                     Grid.Column="1"
@@ -58,6 +65,7 @@
                     ThumbToolTipValueConverter="{StaticResource TimeToolTipConverter}"
                     Maximum="100"
                     Minimum="0"
+                    Opacity="0"
                     ValueChanged="TimelineSlider_ValueChanged"
                     Value="0" />
 
@@ -106,6 +114,7 @@
 
                 <!-- 标题与副标题（歌手 / 当前歌词） -->
                 <StackPanel
+                    x:Name="TrackTextPanel"
                     Grid.Column="1"
                     VerticalAlignment="Center"
                     Spacing="2">

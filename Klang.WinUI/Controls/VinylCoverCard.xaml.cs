@@ -260,35 +260,87 @@ public sealed partial class VinylCoverCard : UserControl
         specVisual.StartAnimation("Opacity", fade);
     }
 
-    /// <summary>切歌过渡：封面从 94% 放大淡入，文字从下方 8px 上浮淡入（合成动画）。</summary>
-    private void PlayTrackChangeAnimation()
+    private string? _lastTrackId;
+    private string? _lastCoverPath;
+    private int _swapSeq;
+
+    private ScalarKeyFrameAnimation Scalar(float from, float to, int ms, CompositionEasingFunction ease)
     {
-        var ease = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 1f), new Vector2(0.3f, 1f));
-        var dur = TimeSpan.FromMilliseconds(380);
+        var a = _compositor.CreateScalarKeyFrameAnimation();
+        a.InsertKeyFrame(0f, from);
+        a.InsertKeyFrame(1f, to, ease);
+        a.Duration = TimeSpan.FromMilliseconds(ms);
+        return a;
+    }
 
-        var scale = _compositor.CreateVector3KeyFrameAnimation();
-        scale.InsertKeyFrame(0f, new Vector3(0.94f, 0.94f, 1f));
-        scale.InsertKeyFrame(1f, Vector3.One, ease);
-        scale.Duration = dur;
-        _jacketVisual.StartAnimation("Scale", scale);
+    private Vector3KeyFrameAnimation Scale3(float from, float to, int ms, CompositionEasingFunction ease)
+    {
+        var a = _compositor.CreateVector3KeyFrameAnimation();
+        a.InsertKeyFrame(0f, new Vector3(from, from, 1f));
+        a.InsertKeyFrame(1f, new Vector3(to, to, 1f), ease);
+        a.Duration = TimeSpan.FromMilliseconds(ms);
+        return a;
+    }
 
-        var jacketOp = _compositor.CreateScalarKeyFrameAnimation();
-        jacketOp.InsertKeyFrame(0f, 0.3f);
-        jacketOp.InsertKeyFrame(1f, 1f, ease);
-        jacketOp.Duration = dur;
-        _jacketVisual.StartAnimation("Opacity", jacketOp);
+    /// <summary>
+    /// 封面交叉过渡：旧封面盖在上面，轻微放大并淡出；新封面从略大的尺寸收回原位并淡入。
+    /// 唱片封套整体只做很轻的缩放，不再整块变暗。
+    /// </summary>
+    private void CrossfadeCover(ImageSource? oldSource, bool newHasCover)
+    {
+        var ease = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0f), new Vector2(0f, 1f));
+        const int ms = 560;
 
-        var metaY = _compositor.CreateScalarKeyFrameAnimation();
-        metaY.InsertKeyFrame(0f, 8f);
-        metaY.InsertKeyFrame(1f, 0f, ease);
-        metaY.Duration = dur;
-        _metaVisual.StartAnimation("Translation.Y", metaY);
+        var newV = ElementCompositionPreview.GetElementVisual(CoverImage);
+        var oldV = ElementCompositionPreview.GetElementVisual(OldCoverImage);
+        var size = new Vector3((float)JacketCard.ActualWidth / 2f, (float)JacketCard.ActualHeight / 2f, 0f);
+        newV.CenterPoint = size;
+        oldV.CenterPoint = size;
 
-        var metaOp = _compositor.CreateScalarKeyFrameAnimation();
-        metaOp.InsertKeyFrame(0f, 0.2f);
-        metaOp.InsertKeyFrame(1f, 1f, ease);
-        metaOp.Duration = dur;
-        _metaVisual.StartAnimation("Opacity", metaOp);
+        if (oldSource != null)
+        {
+            OldCoverImage.Source = oldSource;
+            OldCoverImage.Visibility = Visibility.Visible;
+            var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+            oldV.StartAnimation("Opacity", Scalar(1f, 0f, ms, ease));
+            oldV.StartAnimation("Scale", Scale3(1f, 1.06f, ms, ease));
+            batch.End();
+            int seq = _swapSeq;
+            batch.Completed += (s, e) =>
+            {
+                if (seq != _swapSeq) return;
+                OldCoverImage.Visibility = Visibility.Collapsed;
+                OldCoverImage.Source = null;
+            };
+        }
+
+        if (newHasCover)
+        {
+            newV.StartAnimation("Opacity", Scalar(0f, 1f, ms, ease));
+            newV.StartAnimation("Scale", Scale3(1.04f, 1f, ms + 120, ease));
+        }
+
+        _jacketVisual.StartAnimation("Scale", Scale3(0.985f, 1f, ms, ease));
+    }
+
+    /// <summary>标题 / 歌手 / 专辑：旧文字上移淡出，换成新文字后从下方上浮淡入。</summary>
+    private void RollMeta(Action swap)
+    {
+        var easeOut = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(1f, 1f));
+        var easeIn = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 1f), new Vector2(0.3f, 1f));
+        int seq = _swapSeq;
+
+        var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+        _metaVisual.StartAnimation("Opacity", Scalar(_metaVisual.Opacity, 0f, 150, easeOut));
+        _metaVisual.StartAnimation("Translation.Y", Scalar(0f, -8f, 150, easeOut));
+        batch.End();
+        batch.Completed += (s, e) =>
+        {
+            if (seq != _swapSeq) return;   // 期间又换了歌：交给最新那次
+            swap();
+            _metaVisual.StartAnimation("Opacity", Scalar(0f, 1f, 420, easeIn));
+            _metaVisual.StartAnimation("Translation.Y", Scalar(10f, 0f, 460, easeIn));
+        };
     }
     /// <summary>质量徽标：格式信息，疑似假无损时加一个警示后缀并在提示里说明原因。</summary>
     public void UpdateTrackBadge(TrackItem track)
@@ -301,44 +353,56 @@ public sealed partial class VinylCoverCard : UserControl
 
     public void UpdateTrack(TrackItem? track)
     {
-        PlayTrackChangeAnimation();
+        string? id = track?.Id;
+        string? cover = track != null && !string.IsNullOrEmpty(track.CoverPath) && File.Exists(track.CoverPath) ? track.CoverPath : null;
+        bool trackChanged = id != _lastTrackId;
+        bool coverChanged = cover != _lastCoverPath;
+        _lastTrackId = id;
+        _lastCoverPath = cover;
+        _swapSeq++;
 
-        if (track == null)
+        // ---- 文字：换歌时滚动替换；同一首歌（比如补全了信息）直接替换 ----
+        void SwapMeta()
         {
-            TitleText.Text = L.T("暂无播放曲目");
-            ArtistText.Text = L.T("点击左侧栏的按钮导入本地音乐");
-            AlbumText.Text = "";
-            QualityBadgeBorder.Visibility = Visibility.Collapsed;
-            CoverImage.Visibility = Visibility.Collapsed;
-            FallbackPanel.Visibility = Visibility.Visible;
-            return;
+            if (track == null)
+            {
+                TitleText.Text = L.T("暂无播放曲目");
+                ArtistText.Text = L.T("点击左侧栏的按钮导入本地音乐");
+                AlbumText.Text = "";
+                QualityBadgeBorder.Visibility = Visibility.Collapsed;
+                return;
+            }
+            TitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? L.T("未命名曲目") : track.Title;
+            ArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知艺术家" : track.Artist;
+            AlbumText.Text = string.IsNullOrWhiteSpace(track.Album) ? "" : track.Album;
+            UpdateTrackBadge(track);
         }
+        if (trackChanged && IsLoaded) RollMeta(SwapMeta);
+        else SwapMeta();
 
-        TitleText.Text = string.IsNullOrWhiteSpace(track.Title) ? L.T("未命名曲目") : track.Title;
-        ArtistText.Text = string.IsNullOrWhiteSpace(track.Artist) ? "未知艺术家" : track.Artist;
-        AlbumText.Text = string.IsNullOrWhiteSpace(track.Album) ? "" : track.Album;
+        // ---- 封面：旧封面盖在上面淡出，新封面淡入 ----
+        if (!coverChanged && !trackChanged) return;
+        ImageSource? oldSource = CoverImage.Visibility == Visibility.Visible ? CoverImage.Source : null;
 
-        UpdateTrackBadge(track);
-
-        if (!string.IsNullOrEmpty(track.CoverPath) && File.Exists(track.CoverPath))
+        bool hasCover = false;
+        if (cover != null)
         {
             try
             {
-                CoverImage.Source = new BitmapImage(new Uri(track.CoverPath));
+                CoverImage.Source = new BitmapImage(new Uri(cover));
                 CoverImage.Visibility = Visibility.Visible;
                 FallbackPanel.Visibility = Visibility.Collapsed;
+                hasCover = true;
             }
-            catch
-            {
-                CoverImage.Visibility = Visibility.Collapsed;
-                FallbackPanel.Visibility = Visibility.Visible;
-            }
+            catch { }
         }
-        else
+        if (!hasCover)
         {
             CoverImage.Visibility = Visibility.Collapsed;
             FallbackPanel.Visibility = Visibility.Visible;
         }
+
+        if (IsLoaded && coverChanged) CrossfadeCover(oldSource, hasCover);
     }
 
     public void UpdateSpectrum(float[] bands)

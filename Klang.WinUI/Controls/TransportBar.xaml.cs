@@ -68,6 +68,38 @@ public sealed partial class TransportBar : UserControl
                 UserSeekRequested?.Invoke(this, TimelineSlider.Value);
             }
         }), true);
+
+        // 悬停：波形上把“从当前位置到鼠标处”的部分提亮，预示点击后跳到哪里
+        TimelineSlider.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler((s, e) =>
+        {
+            double w = Waveform.ActualWidth;
+            if (w <= 0) return;
+            double x = e.GetCurrentPoint(Waveform).Position.X;
+            Waveform.SetHover(Math.Clamp(x / w, 0, 1));
+        }), true);
+        TimelineSlider.AddHandler(UIElement.PointerExitedEvent, new PointerEventHandler((s, e) => Waveform.SetHover(-1)), true);
+
+        ApplyWaveformMode();
+        void OnModeChanged() => DispatcherQueue.TryEnqueue(ApplyWaveformMode);
+        WaveformModeChanged += OnModeChanged;
+        Unloaded += (s, e) => WaveformModeChanged -= OnModeChanged;
+        Loaded += (s, e) => { WaveformModeChanged -= OnModeChanged; WaveformModeChanged += OnModeChanged; ApplyWaveformMode(); };
+    }
+
+    /// <summary>设置当前曲目的波形（null = 暂无，显示为细轨道）。</summary>
+    public void SetWaveform(float[]? data) => Waveform.SetData(data);
+
+    /// <summary>设置里切换“波形进度条”后通知所有底栏（以及负责加载波形的主窗口）。</summary>
+    public static event Action? WaveformModeChanged;
+    public static void NotifyWaveformModeChanged() => WaveformModeChanged?.Invoke();
+
+    /// <summary>开：显示波形，上面的 Slider 透明只负责操作；关：标准滑块。</summary>
+    private void ApplyWaveformMode()
+    {
+        bool on = StateService.Instance.State.WaveformSeekBar;
+        Waveform.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        TimelineSlider.Opacity = on ? 0 : 1;
+        if (!on) Waveform.SetHover(-1);
     }
 
     public bool IsPlaying
@@ -81,10 +113,28 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
+    private string? _lastTitle, _lastCover;
+
     public void UpdateTrackState(string? title, string? artist, string? coverPath = null)
     {
-        StatusCaptionText.Text = string.IsNullOrWhiteSpace(title) ? L.T("未加载曲目") : title;
-        LyricSnippetText.Text = string.IsNullOrWhiteSpace(artist) ? "Klang" : artist;
+        string t = string.IsNullOrWhiteSpace(title) ? L.T("未加载曲目") : title;
+        string a = string.IsNullOrWhiteSpace(artist) ? "Klang" : artist;
+        // 换歌：标题与歌手上移淡出后换成新内容再上浮淡入；只是信息补全时直接替换
+        if (_lastTitle != null && _lastTitle != t && IsLoaded)
+        {
+            int snip = ++_snippetSeq;
+            UiAnimations.FadeThrough(TrackTextPanel, () =>
+            {
+                StatusCaptionText.Text = t;
+                // 淡出期间副标题已被更新（比如“正在获取云端音源…”）就不再覆盖
+                if (snip == _snippetSeq) LyricSnippetText.Text = a;
+            }, 120, 340, 6f);
+        }
+        else { StatusCaptionText.Text = t; LyricSnippetText.Text = a; }
+        _lastTitle = t;
+
+        bool coverChanged = coverPath != _lastCover;
+        _lastCover = coverPath;
 
         if (!string.IsNullOrEmpty(coverPath) && File.Exists(coverPath))
         {
@@ -93,6 +143,7 @@ public sealed partial class TransportBar : UserControl
                 MiniCoverImage.Source = new BitmapImage(new Uri(coverPath));
                 MiniCoverImage.Visibility = Visibility.Visible;
                 MiniCoverFallback.Visibility = Visibility.Collapsed;
+                if (coverChanged && IsLoaded) UiAnimations.FadeIn(MiniCoverImage, 420);
             }
             catch
             {
@@ -107,8 +158,11 @@ public sealed partial class TransportBar : UserControl
         }
     }
 
+    private int _snippetSeq;
+
     public void UpdateLyricSnippet(string text)
     {
+        _snippetSeq++;
         LyricSnippetText.Text = string.IsNullOrWhiteSpace(text) ? "Klang" : text;
     }
 
@@ -129,11 +183,13 @@ public sealed partial class TransportBar : UserControl
         {
             TimelineSlider.Maximum = totalSec;
             TimelineSlider.Value = Math.Min(currentSec, totalSec);
+            Waveform.SetProgress(currentSec / totalSec);
         }
         else
         {
             TimelineSlider.Maximum = 100;
             TimelineSlider.Value = 0;
+            Waveform.SetProgress(0);
         }
     }
 
@@ -292,6 +348,7 @@ public sealed partial class TransportBar : UserControl
         if (_isUserDragging)
         {
             CurrentTimeText.Text = FormatTime(e.NewValue);
+            if (TimelineSlider.Maximum > 0) Waveform.SetProgress(e.NewValue / TimelineSlider.Maximum);
         }
     }
 }

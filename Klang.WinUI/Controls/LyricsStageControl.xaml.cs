@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Linq;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Brushes;
+using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI.Xaml;
@@ -83,11 +84,54 @@ public sealed partial class LyricsStageControl : UserControl
         public float TargetFactor = 1f;
         public float Opacity;         // 当前透明度（动画值）
         public float TargetOpacity;
+        public Tween FT = new(), OT = new();   // 字号倍率 / 透明度的过渡曲线
+        public float TargetBlur, Blur;         // 景深模糊（高斯模糊标准差，DIP）
+        public Tween BT = new();
+        public Tween LT = new();               // 逐字上移：这一行唱完离开当前句后，整行从“抬起”回落到原位
         public double StartAt;        // 错峰：到这个时刻才开始朝目标动
         public double DrawTop, DrawBlock;   // 最近一次绘制的屏幕位置（点击命中用）
         public int[]? WordStart;            // 逐字：每个字在整行文字里的起始字符位置（最后一项 = 总长度）
         public Windows.Foundation.Rect[][]? WordRects;   // 逐字：每个字在排版里占的矩形（可能跨行，所以是数组）
     }
+
+    /// <summary>
+    /// 五次 Hermite 过渡：起点和终点的加速度都为 0，起步是“慢慢加力”而不是一下子被拽走
+    /// （弹簧从静止出发时加速度最大，放大那一下就显得生硬）。中途换目标时保留当前速度，曲线连续不折。
+    /// </summary>
+    private sealed class Tween
+    {
+        public double From, V0, To, T0, Dur = 1;
+
+        public void Snap(double v) { From = To = v; V0 = 0; T0 = 0; }
+
+        public void Retarget(double to, double now, double startAt, double dur)
+        {
+            double cur = Eval(now, out double vel);
+            From = cur; V0 = now >= T0 ? vel : 0; To = to; T0 = Math.Max(now, startAt); Dur = dur;
+        }
+
+        public bool Done(double now) => now >= T0 + Dur;
+
+        public double Eval(double now, out double vel)
+        {
+            if (now <= T0) { vel = 0; return From; }
+            double t = (now - T0) / Dur;
+            if (t >= 1) { vel = 0; return To; }
+            double t2 = t * t, t3 = t2 * t, t4 = t3 * t, t5 = t4 * t;
+            double h0 = 1 - 10 * t3 + 15 * t4 - 6 * t5;
+            double h1 = t - 6 * t3 + 8 * t4 - 3 * t5;
+            double h5 = 10 * t3 - 15 * t4 + 6 * t5;
+            double d0 = -30 * t2 + 60 * t3 - 30 * t4;
+            double d1 = 1 - 18 * t2 + 32 * t3 - 15 * t4;
+            double vT = V0 * Dur;
+            vel = (From * d0 + vT * d1 + To * (-d0)) / Dur;
+            return From * h0 + vT * h1 + To * h5;
+        }
+    }
+
+    // 放大 / 缩小和明暗变化的时长（秒）
+    private const double ScaleDuration = 0.62;
+    private const double FadeDuration = 0.5;
 
     private readonly List<Row> _rows = new();
     private int _active = -1;
@@ -259,6 +303,15 @@ public sealed partial class LyricsStageControl : UserControl
             Lyrics[i].IsActive = i == activeIndex;
         }
 
+        // 逐字上移：刚唱完的那一行离开当前句时，整行从抬起的位置平滑落回
+        if (WordMotion && _active >= 0 && _active < _rows.Count && _rows[_active].Line.Words is { Count: > 0 })
+        {
+            double now0 = _clock.Elapsed.TotalSeconds;
+            var lt = _rows[_active].LT;
+            lt.Snap(1);
+            lt.Retarget(0, now0, now0, 0.5);
+        }
+
         _active = activeIndex;
         // 用户正在手动滚动时只更新高亮，不抢滚动位置
         Rebuild(snap: false, keepScroll: _isUserScrolling);
@@ -269,6 +322,24 @@ public sealed partial class LyricsStageControl : UserControl
     private double ViewW => Math.Max(80, Viewport.ActualWidth);
     private double ViewH => Math.Max(80, Viewport.ActualHeight);
     private double TextW => Math.Max(60, ViewW - SidePad * 2);
+
+    private static bool DepthBlur => StateService.Instance.State.LyricDepthBlur;
+    private static bool WordMotion => StateService.Instance.State.LyricWordMotion;
+
+    /// <summary>景深模糊的目标强度：当前句和相邻句清晰，往外逐级加深；随字号等比。</summary>
+    private float BlurFor(int dist)
+    {
+        if (!DepthBlur || _isUserScrolling) return 0f;
+        float s = (float)(_lyricFontSize / 22.0);
+        return dist switch
+        {
+            0 => 0f,
+            1 => 0.7f * s,
+            2 => 1.5f * s,
+            3 => 2.2f * s,
+            _ => 2.8f * s
+        };
+    }
 
     private static (float SizeFactor, float Opacity) StateFor(int dist)
     {
@@ -375,6 +446,7 @@ public sealed partial class LyricsStageControl : UserControl
             var (factor, opacity) = StateFor(dist);
             row.TargetFactor = factor;
             row.TargetOpacity = opacity;
+            row.TargetBlur = BlurFor(dist);
 
             var main = MainLayout(dev, i, factor);
             double h = main.LayoutBounds.Height * factor;
@@ -403,16 +475,28 @@ public sealed partial class LyricsStageControl : UserControl
                 row.VY = 0;
                 row.Factor = row.TargetFactor;
                 row.Opacity = row.TargetOpacity;
+                row.FT.Snap(row.TargetFactor);
+                row.OT.Snap(row.TargetOpacity);
+                row.Blur = row.TargetBlur;
+                row.BT.Snap(row.TargetBlur);
+                row.LT.Snap(0);
                 row.StartAt = 0;
             }
             else
             {
-                // 错峰：当前句最先动，离得越远越晚。用户滚动时不错峰，跟手
-                int dist = Math.Abs(i - center);
-                row.StartAt = keepScroll ? now : now + StaggerSeconds * Math.Min(dist, MaxStaggerRows);
+                // 错峰：当前句最先动，其后的行像波浪一样依次跟上（间隔逐行略微收窄，尾部不会拖沓）；
+                // 已唱过的行离场更干脆。用户滚动时不错峰，跟手
+                int k = Math.Min(Math.Abs(i - center), MaxStaggerRows);
+                double delay = i >= center
+                    ? StaggerSeconds * (k + 0.6 * k * (1 - k / (MaxStaggerRows + 1.0)))
+                    : StaggerSeconds * 0.5 * k;
+                row.StartAt = keepScroll ? now : now + delay * 0.7;
+                if (Math.Abs(row.FT.To - row.TargetFactor) > 1e-5) row.FT.Retarget(row.TargetFactor, now, row.StartAt, ScaleDuration);
+                if (Math.Abs(row.OT.To - row.TargetOpacity) > 1e-5) row.OT.Retarget(row.TargetOpacity, now, row.StartAt, FadeDuration);
+                if (Math.Abs(row.BT.To - row.TargetBlur) > 1e-4) row.BT.Retarget(row.TargetBlur, now, row.StartAt, ScaleDuration);
             }
         }
-        if (!snap && !keepScroll) _omega = 12.0;   // 自动换句：柔和一点（约 0.4 秒到位）
+        if (!snap && !keepScroll) { _omega = 11.0; _zeta = 0.8; }   // 自动换句：轻微欠阻尼，到位时有一点点回弹
 
         if (snap) LyricsCanvas.Invalidate();
         else StartLoop();
@@ -420,7 +504,30 @@ public sealed partial class LyricsStageControl : UserControl
 
     // 位置用临界阻尼弹簧：起步速度为 0（缓入）、到位时速度也趋于 0（缓出），整个过程加速度连续，
     // 不会像“指数缓出”那样第一帧就以最大速度冲出去（那一下就是轻微的抽动）。
-    private double _omega = 12.0;
+    private double _omega = 11.0;
+    private double _zeta = 0.8;     // 阻尼比：1 = 临界阻尼（无回弹），<1 = 到位时轻微回弹
+
+    /// <summary>弹簧的解析解（任意阻尼比、任何帧间隔下都稳定）。</summary>
+    private static void Spring(ref double x, ref double v, double target, double omega, double zeta, double dt)
+    {
+        double rel = x - target;
+        if (zeta >= 0.999)
+        {
+            double decay = Math.Exp(-omega * dt);
+            double tmp = v + omega * rel;
+            x = target + (rel + tmp * dt) * decay;
+            v = (v - tmp * omega * dt) * decay;
+            return;
+        }
+        double wd = omega * Math.Sqrt(1 - zeta * zeta);
+        double e = Math.Exp(-zeta * omega * dt);
+        double c = Math.Cos(wd * dt), s = Math.Sin(wd * dt);
+        double a = zeta * omega / wd;
+        double nx = e * (rel * (c + a * s) + v / wd * s);
+        double nv = e * (v * (c - a * s) - rel * (omega * omega / wd) * s);
+        x = target + nx;
+        v = nv;
+    }
 
     private double SnapY(double y)
     {
@@ -451,27 +558,26 @@ public sealed partial class LyricsStageControl : UserControl
         double dt = Math.Min(0.05, now - _lastFrame);
         _lastFrame = now;
 
-        // 先快后慢的指数缓出：位置、字号、透明度各用一个速率
-        double ap = 1 - Math.Exp(-8.0 * dt);
-        double asz = 1 - Math.Exp(-9.0 * dt);
+        // 位置用弹簧（跟手、可随时改目标）；字号和透明度用五次曲线过渡（起步柔和，不会“猛地一放大”）
         bool moving = false;
+
+        // 帧间隔不稳定时（掉帧）切成固定小步，避免一帧大跳
+        int steps = Math.Max(1, (int)Math.Ceiling(dt / (1.0 / 120)));
+        double h = dt / steps;
 
         foreach (var r in _rows)
         {
+            r.Factor = (float)r.FT.Eval(now, out _);
+            r.Opacity = (float)r.OT.Eval(now, out _);
+            r.Blur = (float)r.BT.Eval(now, out _);
+            if (!r.FT.Done(now) || !r.OT.Done(now) || !r.BT.Done(now) || !r.LT.Done(now)) moving = true;
+
             if (now < r.StartAt) { moving = true; continue; }
 
-            // 临界阻尼弹簧的解析解（任何帧间隔下都稳定）
-            double rel = r.Y - r.TargetY;
-            double decay = Math.Exp(-_omega * dt);
-            double tmp = r.VY + _omega * rel;
-            r.Y = r.TargetY + (rel + tmp * dt) * decay;
-            r.VY = (r.VY - tmp * _omega * dt) * decay;
-            r.Factor += (float)((r.TargetFactor - r.Factor) * asz);
-            r.Opacity += (float)((r.TargetOpacity - r.Opacity) * asz);
-
-            if (Math.Abs(r.TargetY - r.Y) < 0.05 && Math.Abs(r.VY) < 1.5) { r.Y = r.TargetY; r.VY = 0; } else moving = true;
-            if (Math.Abs(r.TargetFactor - r.Factor) < 0.0004f) r.Factor = r.TargetFactor; else moving = true;
-            if (Math.Abs(r.TargetOpacity - r.Opacity) < 0.004f) r.Opacity = r.TargetOpacity; else moving = true;
+            double y = r.Y, vy = r.VY;
+            for (int s = 0; s < steps; s++) Spring(ref y, ref vy, r.TargetY, _omega, _zeta, h);
+            r.Y = y; r.VY = vy;
+            if (Math.Abs(r.TargetY - r.Y) < 0.05 && Math.Abs(r.VY) < 1.0) { r.Y = r.TargetY; r.VY = 0; } else moving = true;
         }
 
         LyricsCanvas.Invalidate();
@@ -493,7 +599,11 @@ public sealed partial class LyricsStageControl : UserControl
     /// </summary>
     private void DrawKaraokeLine(CanvasDrawingSession ds, Row row, CanvasTextLayout main, IList<LyricWord> words, float x0, float op, int len)
     {
-        var dim = Color.FromArgb((byte)(op * 110), _primary.R, _primary.G, _primary.B);
+        // 未唱部分的亮度随行的透明度渐变：刚成为当前句时和上一状态（0.6）一样亮，之后慢慢暗到 0.43，
+        // 避免换句瞬间整行突然变暗再扫光
+        double t01 = Math.Clamp((op - 0.60) / 0.40, 0, 1);
+        double dimFrac = 1.0 - t01 * (1.0 - 110.0 / 255.0);
+        var dim = Color.FromArgb((byte)(op * 255 * dimFrac), _primary.R, _primary.G, _primary.B);
         var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
 
         if (row.WordStart == null || row.WordStart.Length != words.Count + 1)
@@ -597,31 +707,188 @@ public sealed partial class LyricsStageControl : UserControl
             }
 
             // 以“文字块上边的水平中心”为原点缩放：Direct2D 在缩放变换下用字形轮廓渲染，放大缩小过程都是锐利的
+            // 缩放原点取文字块（按目标倍率排好版的那块）的垂直中心：放大时向上下同时长开，
+            // 不会像以顶边为原点那样只往下压、和下一行抢空间；位置动画与缩放动画才合成同一个自然的运动。
+            float hc = (float)(main.LayoutBounds.Height + (sub != null ? SubGap / Math.Max(0.01f, tf) + sub.LayoutBounds.Height : 0));
             var saved = ds.Transform;
-            ds.Transform = System.Numerics.Matrix3x2.CreateScale(f) * System.Numerics.Matrix3x2.CreateTranslation(cx, (float)textTop);
+            var rowTransform = System.Numerics.Matrix3x2.CreateTranslation(0, -hc / 2f)
+                             * System.Numerics.Matrix3x2.CreateScale(f)
+                             * System.Numerics.Matrix3x2.CreateTranslation(cx, (float)(textTop + hc * tf / 2.0));
             float x0 = -layoutW / 2f;
 
-            // 主歌词。注意：排版对象是缓存的，上一次画它时设过的“按字上色”会一直留着，
-            // 所以每次画之前都要先把整行颜色重设一遍——否则唱完的那一行会一直保持“已唱”的亮色，不会随距离变灰。
-            var words = row.Line.Words;
-            var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
-            int len = MainText(row.Line).Length;
-            if (active && words is { Count: > 0 })
-                DrawKaraokeLine(ds, row, main, words, x0, op, len);
+            float blur = row.Blur;
+            if (blur > 0.05f)
+            {
+                // 景深模糊：把这一行先录进命令列表，再整体做高斯模糊（GPU 上完成）
+                using var cl = new CanvasCommandList(sender);
+                using (var cds = cl.CreateDrawingSession())
+                {
+                    cds.TextAntialiasing = CanvasTextAntialiasing.Grayscale;
+                    cds.Transform = rowTransform;
+                    DrawRowText(cds, row, main, sub, active, x0, op, f);
+                }
+                using var fx = new GaussianBlurEffect
+                {
+                    Source = cl,
+                    BlurAmount = blur,
+                    BorderMode = EffectBorderMode.Soft,
+                    Optimization = EffectOptimization.Speed
+                };
+                ds.DrawImage(fx);
+            }
             else
             {
-                main.SetColor(0, len, full);
-                ds.DrawTextLayout(main, x0, 0, full);
+                ds.Transform = rowTransform;
+                DrawRowText(ds, row, main, sub, active, x0, op, f);
+                ds.Transform = saved;
+            }
+        }
+    }
+
+    /// <summary>画一行的主歌词与副行（坐标系已经变换到这一行的排版原点）。</summary>
+    private void DrawRowText(CanvasDrawingSession ds, Row row, CanvasTextLayout main, CanvasTextLayout? sub, bool active, float x0, float op, float f)
+    {
+        // 主歌词。注意：排版对象是缓存的，上一次画它时设过的“按字上色”会一直留着，
+        // 所以每次画之前都要先把整行颜色重设一遍——否则唱完的那一行会一直保持“已唱”的亮色，不会随距离变灰。
+        var words = row.Line.Words;
+        var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
+        int len = MainText(row.Line).Length;
+        if (active && words is { Count: > 0 })
+        {
+            if (WordMotion) DrawKaraokeLineMotion(ds, row, main, words, x0, op, len);
+            else DrawKaraokeLine(ds, row, main, words, x0, op, len);
+        }
+        else
+        {
+            main.SetColor(0, len, full);
+            // 刚唱完的逐字行：从抬起的位置落回
+            double lift = WordMotion ? row.LT.Eval(_clock.Elapsed.TotalSeconds, out _) * WordLift : 0;
+            ds.DrawTextLayout(main, x0, (float)-lift, full);
+        }
+
+        if (sub != null)
+        {
+            float subTop = (float)(main.LayoutBounds.Height + SubGap / Math.Max(0.01f, f));
+            ds.DrawTextLayout(sub, x0, subTop,
+                Color.FromArgb((byte)(op * 255 * 0.62), _primary.R, _primary.G, _primary.B));
+        }
+    }
+
+    // ================= 逐字动效：唱到的字上移，长音辉光 =================
+
+    /// <summary>唱到的字上移的距离（排版坐标，随字号等比，22 号字约 2 DIP）。</summary>
+    private double WordLift => _lyricFontSize * 0.095;
+
+    private static double Smooth(double x)
+    {
+        x = Math.Clamp(x, 0, 1);
+        return x * x * x * (x * (x * 6 - 15) + 10);
+    }
+
+    private void DrawKaraokeLineMotion(CanvasDrawingSession ds, Row row, CanvasTextLayout main, IList<LyricWord> words, float x0, float op, int len)
+    {
+        double t01 = Math.Clamp((op - 0.60) / 0.40, 0, 1);
+        double dimFrac = 1.0 - t01 * (1.0 - 110.0 / 255.0);
+        var dim = Color.FromArgb((byte)(op * 255 * dimFrac), _primary.R, _primary.G, _primary.B);
+        var full = Color.FromArgb((byte)(op * 255), _primary.R, _primary.G, _primary.B);
+
+        if (row.WordStart == null || row.WordStart.Length != words.Count + 1)
+        {
+            row.WordStart = new int[words.Count + 1];
+            for (int k = 0; k < words.Count; k++) row.WordStart[k + 1] = row.WordStart[k] + words[k].Text.Length;
+        }
+        var ws = row.WordStart;
+        row.WordRects ??= new Windows.Foundation.Rect[words.Count][];
+
+        double t = CurrentTime();
+        int playedWords = 0, cur = -1; double p = 0;
+        for (int k = 0; k < words.Count; k++)
+        {
+            double end = WordEnd(words, k);
+            if (t >= end) { playedWords = k + 1; continue; }
+            if (t >= words[k].Start) { cur = k; p = Math.Clamp((t - words[k].Start) / Math.Max(0.02, end - words[k].Start), 0, 1); }
+            break;
+        }
+
+        main.SetColor(0, len, dim);
+        int playedChars = Math.Min(ws[playedWords], len);
+        if (playedChars > 0) main.SetColor(0, playedChars, full);
+
+        var baseT = ds.Transform;
+        bool dark = _primary.R > 128;
+        double liftMax = WordLift;
+
+        for (int k = 0; k < words.Count; k++)
+        {
+            int start = ws[k], wl = Math.Min(ws[k + 1], len) - start;
+            if (wl <= 0) continue;
+            row.WordRects[k] ??= main.GetCharacterRegions(start, wl).Select(r => r.LayoutBounds).ToArray();
+            var rects = row.WordRects[k];
+
+            double s = words[k].Start, e = WordEnd(words, k), d = e - s;
+            // 上移：在这个字的时长内抬起（太短的字至少用 0.18 秒，太长的字 0.6 秒内抬完）
+            double lift = t <= s ? 0 : liftMax * Smooth((t - s) / Math.Clamp(d, 0.18, 0.6));
+
+            ds.Transform = System.Numerics.Matrix3x2.CreateTranslation(0, (float)-lift) * baseT;
+
+            // 长音辉光：时长 ≥ 0.9 秒的字，演唱过程中辉光渐强，唱完后 0.35 秒内退去
+            if (d >= 0.9 && t > s)
+            {
+                double g = t < e ? Smooth((t - s) / d) : 1 - Math.Clamp((t - e) / 0.35, 0, 1);
+                if (g > 0.01)
+                {
+                    using var cl = new CanvasCommandList(ds);
+                    using (var cds = cl.CreateDrawingSession())
+                    {
+                        cds.TextAntialiasing = CanvasTextAntialiasing.Grayscale;
+                        cds.Transform = ds.Transform;
+                        foreach (var r in rects)
+                            using (cds.CreateLayer(1f, new Windows.Foundation.Rect(r.X + x0, r.Y - r.Height * 0.5, r.Width, r.Height * 2)))
+                                cds.DrawTextLayout(main, x0, 0, full);
+                    }
+                    using var blurFx = new GaussianBlurEffect { Source = cl, BlurAmount = (float)(_lyricFontSize * 0.28), BorderMode = EffectBorderMode.Soft };
+                    using var opFx = new OpacityEffect { Source = blurFx, Opacity = (float)(g * (dark ? 0.75 : 0.22) * op) };
+                    var tt = ds.Transform;
+                    ds.Transform = System.Numerics.Matrix3x2.Identity;
+                    ds.DrawImage(opFx);
+                    ds.Transform = tt;
+                }
             }
 
-            if (sub != null)
+            // 这个字本体：按自己的矩形裁剪后画（只画到这个字，整行排版不变）
+            foreach (var r in rects)
+                using (ds.CreateLayer(1f, new Windows.Foundation.Rect(r.X + x0, r.Y - r.Height * 0.5, r.Width, r.Height * 2)))
+                    ds.DrawTextLayout(main, x0, 0, dim);
+
+            // 正在唱的字：扫光
+            if (k == cur && p > 0)
             {
-                float subTop = (float)(main.LayoutBounds.Height + SubGap / Math.Max(0.01f, f));
-                ds.DrawTextLayout(sub, x0, subTop,
-                    Color.FromArgb((byte)(op * 255 * 0.62), _primary.R, _primary.G, _primary.B));
+                main.SetColor(start, wl, full);
+                const double soft = 0.35;
+                double edge = p * (1 + soft);
+                float s0 = (float)Math.Clamp(edge - soft, 0, 1), s1 = (float)Math.Clamp(Math.Max(edge, edge - soft + 0.001), 0, 1);
+                if (s1 <= s0) s1 = Math.Min(1f, s0 + 0.001f);
+                var stops = new List<CanvasGradientStop>();
+                if (s0 > 0) stops.Add(new CanvasGradientStop { Position = 0f, Color = Color.FromArgb(255, 255, 255, 255) });
+                stops.Add(new CanvasGradientStop { Position = s0, Color = Color.FromArgb(255, 255, 255, 255) });
+                stops.Add(new CanvasGradientStop { Position = s1, Color = Color.FromArgb(0, 255, 255, 255) });
+                if (s1 < 1f) stops.Add(new CanvasGradientStop { Position = 1f, Color = Color.FromArgb(0, 255, 255, 255) });
+                var stopArr = stops.ToArray();
+                foreach (var r in rects)
+                {
+                    var clip = new Windows.Foundation.Rect(r.X + x0, r.Y - r.Height * 0.5, r.Width, r.Height * 2);
+                    using var mask = new CanvasLinearGradientBrush(ds, stopArr)
+                    {
+                        StartPoint = new System.Numerics.Vector2((float)(r.X + x0), 0),
+                        EndPoint = new System.Numerics.Vector2((float)(r.X + x0 + r.Width), 0)
+                    };
+                    using (ds.CreateLayer(mask, clip))
+                        ds.DrawTextLayout(main, x0, 0, full);
+                }
+                main.SetColor(start, wl, dim);
             }
-            ds.Transform = saved;
         }
+        ds.Transform = baseT;
     }
 
     // ================= 尺寸 / 滚轮 / 点击 =================
@@ -651,8 +918,13 @@ public sealed partial class LyricsStageControl : UserControl
 
         _scrollTarget = Math.Clamp(_scrollTarget + delta * 0.9, tMin, tMax);
         double now = _clock.Elapsed.TotalSeconds;
-        _omega = 20.0;   // 滚轮要跟手，弹簧硬一点
-        foreach (var r in _rows) { r.TargetY = SnapY(_scrollTarget + r.Top); r.StartAt = now; }
+        _omega = 20.0; _zeta = 1.0;   // 滚轮要跟手，弹簧硬一点，不回弹
+        foreach (var r in _rows)
+        {
+            r.TargetY = SnapY(_scrollTarget + r.Top); r.StartAt = now;
+            // 手动滚动时要看清每一行：模糊很快退掉
+            if (r.BT.To > 0) { r.TargetBlur = 0; r.BT.Retarget(0, now, now, 0.25); }
+        }
         StartLoop();
         e.Handled = true;
     }

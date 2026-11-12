@@ -88,7 +88,10 @@ public class AppState
     public string BackdropMaterial { get; set; } = "mica"; // mica | acrylic | solid
     public bool SidebarCollapsed { get; set; }
     public int LyricFontSize { get; set; } = 22;
-    public bool LyricZoomEmphasis { get; set; } = true;    // 歌词“放大强调”（当前句放大、远处缩小）；Win2D 逐帧按真实字号绘制，放大也锐利
+    public bool WaveformSeekBar { get; set; } = true;      // 底栏进度条显示振幅波形（关 = 标准滑块）
+    public bool LyricDepthBlur { get; set; } = true;      // 歌词景深模糊（离当前句越远越模糊）
+    public bool LyricWordMotion { get; set; } = true;      // 逐字歌词：唱到的字上移、长音辉光
+    public bool LyricZoomEmphasis { get; set; } = true;   // 歌词“放大强调”（当前句放大、远处缩小）；Win2D 逐帧按真实字号绘制，放大也锐利
     // 悬浮窗口：位置与字号
     public int? DesktopLyricX { get; set; }
     public int? DesktopLyricY { get; set; }

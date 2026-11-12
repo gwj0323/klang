@@ -88,6 +88,12 @@ public sealed partial class MainWindow : Window
             StageLyricsControl.UpdatePlaybackTime(pos + _lyricOffset); ImmersiveLayer.UpdateTime(pos + _lyricOffset);
         };
 
+        // 设置里重新打开波形进度条：为当前曲目补上波形
+        Controls.TransportBar.WaveformModeChanged += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (State.WaveformSeekBar && _currentTrack != null) _ = LoadWaveformAsync(_currentTrack);
+        });
+
         // 2. 监听音频进度与状态
         AudioEngineService.Instance.PositionChanged += (current, total) =>
         {
@@ -479,6 +485,7 @@ public sealed partial class MainWindow : Window
         BottomTransportBar.UpdateTrackState(track.Title, track.Artist, track.CoverPath);
         BottomTransportBar.SetFavorite(track.IsFavorite);
         BottomTransportBar.UpdateProgress(0, track.Duration);
+        _ = LoadWaveformAsync(track);
         LeftNavPane.SetCurrentTrack(track);
         GalleryLayer.SetCurrent(track);
         _media.UpdateTrack(track);
@@ -510,6 +517,27 @@ public sealed partial class MainWindow : Window
     }
 
     private int _playSeq;
+
+    private System.Threading.CancellationTokenSource? _waveCts;
+
+    /// <summary>底栏波形：先压平旧波形，再在后台取新波形（有缓存时几乎立即出现）。</summary>
+    private async System.Threading.Tasks.Task LoadWaveformAsync(TrackItem track)
+    {
+        _waveCts?.Cancel();
+        var cts = _waveCts = new System.Threading.CancellationTokenSource();
+        BottomTransportBar.SetWaveform(null);
+        if (!State.WaveformSeekBar) return;   // 关闭时不解码计算
+        if (string.IsNullOrEmpty(track.FilePath) || track.FilePath.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return;
+        try
+        {
+            double start = track.IsCueTrack ? track.StartTime : 0;
+            double end = track.IsCueTrack ? track.EndTime : 0;
+            var data = await WaveformService.GetAsync(track.FilePath, start, end, cts.Token);
+            if (!cts.IsCancellationRequested && _currentTrack == track) BottomTransportBar.SetWaveform(data);
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
 
     /// <summary>正在播放时先淡出旧曲再起播，避免切歌时电平突然截断的爆音。</summary>
     private async System.Threading.Tasks.Task PlayLocalAsync(string path, double start, double end, int seq)
@@ -604,6 +632,7 @@ public sealed partial class MainWindow : Window
             {
                 RefreshTrackCover(track);
                 if (autoPlay && seq == _playSeq) AudioEngineService.Instance.Play(track.FilePath);
+                _ = LoadWaveformAsync(track);   // 云端音源缓存到本地后才有波形
                 BottomTransportBar.UpdateLyricSnippet(track.FormatBadge);
             }
 

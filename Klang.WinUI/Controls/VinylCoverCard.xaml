@@ -89,10 +89,18 @@
 
                         <!-- 高清专辑封面图 (圆角剪裁平滑淡入) -->
                         <Border CornerRadius="13">
-                            <Image
-                                x:Name="CoverImage"
-                                Stretch="UniformToFill"
-                                Visibility="Collapsed" />
+                            <Grid>
+                                <Image
+                                    x:Name="CoverImage"
+                                    Stretch="UniformToFill"
+                                    Visibility="Collapsed" />
+                                <!-- 切歌时盖在上面的旧封面，淡出后隐藏 -->
+                                <Image
+                                    x:Name="OldCoverImage"
+                                    IsHitTestVisible="False"
+                                    Stretch="UniformToFill"
+                                    Visibility="Collapsed" />
+                            </Grid>
                         </Border>
                     </Grid>
                 </Border>

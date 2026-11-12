@@ -43,6 +43,9 @@ public sealed partial class SettingsDialog : ContentDialog
         ExclusiveSwitch.IsOn = State.WasapiExclusive;
         BypassSwitch.IsOn = State.BypassDsp;
         LyricZoomSwitch.IsOn = State.LyricZoomEmphasis;
+        LyricBlurSwitch.IsOn = State.LyricDepthBlur;
+        WaveformSwitch.IsOn = State.WaveformSeekBar;
+        LyricWordMotionSwitch.IsOn = State.LyricWordMotion;
         AutoMetaSwitch.IsOn = State.AutoFetchMetadata;
         SelectByTag(CacheLimitBox, State.NeteaseCacheLimitMb.ToString(), "2048");
         RefreshCacheInfo();
@@ -94,6 +97,30 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         if (_loading) return;
         State.LyricZoomEmphasis = LyricZoomSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        Controls.LyricsStageControl.NotifyEmphasisChanged();
+    }
+
+    private void WaveformSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.WaveformSeekBar = WaveformSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        Controls.TransportBar.NotifyWaveformModeChanged();
+    }
+
+    private void LyricBlurSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.LyricDepthBlur = LyricBlurSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        Controls.LyricsStageControl.NotifyEmphasisChanged();
+    }
+
+    private void LyricWordMotionSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.LyricWordMotion = LyricWordMotionSwitch.IsOn;
         StateService.Instance.RequestSave();
         Controls.LyricsStageControl.NotifyEmphasisChanged();
     }
