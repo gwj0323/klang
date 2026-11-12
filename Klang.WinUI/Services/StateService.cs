@@ -85,7 +85,7 @@ public class AppState
     public string AutoMix { get; set; } = "roam";           // 节拍对齐的自动混音：off | roam（仅漫游模式）| all
     public string Language { get; set; } = "auto";          // auto（跟随系统）| zh-CN | en | Languages 文件夹里其他语言
     public string Theme { get; set; } = "system";          // system | light | dark
-    public string BackdropMaterial { get; set; } = "mica"; // mica | acrylic | solid
+    public string BackdropMaterial { get; set; } = "mica"; // mica | acrylic（旧版本的 solid 按 mica 处理）
     public bool SidebarCollapsed { get; set; }
     public int LyricFontSize { get; set; } = 22;
     public bool WaveformSeekBar { get; set; } = true;      // 底栏进度条显示振幅波形（关 = 标准滑块）

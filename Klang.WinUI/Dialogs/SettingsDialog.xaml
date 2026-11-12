@@ -123,7 +123,6 @@
                                 SelectionChanged="BackdropComboBox_SelectionChanged">
                                 <ComboBoxItem Content="云母 (Mica)" Tag="mica" />
                                 <ComboBoxItem Content="亚克力 (Acrylic)" Tag="acrylic" />
-                                <ComboBoxItem Content="标准纯色" Tag="solid" />
                             </ComboBox>
                         </Grid>
                     </Border>

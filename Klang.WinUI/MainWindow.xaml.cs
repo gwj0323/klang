@@ -982,8 +982,7 @@ public sealed partial class MainWindow : Window
         this.SystemBackdrop = material switch
         {
             "acrylic" => new DesktopAcrylicBackdrop(),
-            "solid" => null,
-            _ => new MicaBackdrop()
+            _ => new MicaBackdrop()   // 旧版本保存的 "solid"（已移除）也按云母处理
         };
     }
 
