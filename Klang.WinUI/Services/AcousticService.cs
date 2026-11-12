@@ -67,8 +67,21 @@ public sealed class AcousticService
             });
         }
 
+        // 能量 / 明暗再各自标准化（均值 0、标准差 1），后面的心情阈值才有统一的含义
+        Standardize(e => e.Energy, (e, v) => e.Energy = v);
+        Standardize(e => e.Brightness, (e, v) => e.Brightness = v);
+
         ComputeMap();
         ComputeClusters();
+    }
+
+    private void Standardize(Func<Entry, float> get, Action<Entry, float> set)
+    {
+        if (_entries.Count == 0) return;
+        float m = _entries.Average(get);
+        float sd = MathF.Sqrt(_entries.Sum(e => (get(e) - m) * (get(e) - m)) / _entries.Count);
+        if (sd < 1e-5f) sd = 1f;
+        foreach (var e in _entries) set(e, (get(e) - m) / sd);
     }
 
     // ---------- PCA（幂迭代求前两个主成分） ----------
@@ -193,25 +206,33 @@ public sealed class AcousticService
             .ToList();
     }
 
-    /// <summary>心情："calm" 安静 | "focus" 专注 | "energetic" 动感 | "bright" 明亮 | "deep" 沉稳。</summary>
+    /// <summary>
+    /// 心情："calm" 安静 | "focus" 专注 | "energetic" 动感 | "bright" 明亮 | "deep" 沉稳。
+    /// 按分数阈值筛选（能量、明暗都已标准化，单位是曲库内的标准差），所以每个歌单的数量取决于曲库本身的分布，
+    /// 而不是固定比例；结果按贴合程度从高到低排列。
+    /// </summary>
     public List<TrackItem> MoodTracks(string mood, IReadOnlyList<TrackItem> lib)
     {
         Ensure(lib);
         if (_entries.Count == 0) return new List<TrackItem>();
 
-        // 每种心情取最贴合的前 40%（至少 1 首）
-        IEnumerable<Entry> ordered = mood switch
+        const float T = 0.5f;   // 偏离曲库平均水平半个标准差以上，才算明显“安静 / 动感 / 明亮 / 沉稳”
+        IEnumerable<(Entry E, float Score)> scored = mood switch
         {
-            "calm" => _entries.OrderBy(e => e.Energy),
-            "energetic" => _entries.OrderByDescending(e => e.Energy),
-            "bright" => _entries.OrderByDescending(e => e.Brightness),
-            "deep" => _entries.OrderBy(e => e.Brightness),
-            // 专注：能量适中偏低、动态起伏小（没有突然的大声小声）
-            "focus" => _entries.OrderBy(e => Math.Abs(e.Energy + 0.2f) + 0.6f * Math.Max(0, e.Z[1])),
-            _ => _entries
+            "calm" => _entries.Select(e => (e, -e.Energy)),
+            "energetic" => _entries.Select(e => (e, e.Energy)),
+            "bright" => _entries.Select(e => (e, e.Brightness)),
+            "deep" => _entries.Select(e => (e, -e.Brightness)),
+            // 专注：能量在平均附近略偏低、动态起伏小（没有突然的大声小声）
+            "focus" => _entries
+                .Where(e => Math.Abs(e.Energy + 0.2f) < 0.6f && e.Z[1] < 0.3f)
+                .Select(e => (e, T + 1f - Math.Abs(e.Energy + 0.2f) - 0.5f * Math.Max(0, e.Z[1]))),
+            _ => Enumerable.Empty<(Entry, float)>()
         };
-        int take = Math.Max(1, (int)Math.Ceiling(_entries.Count * 0.4));
-        return ordered.Take(take).Select(e => e.Track).ToList();
+        return scored.Where(x => x.Score >= T)
+            .OrderByDescending(x => x.Score)
+            .Select(x => x.E.Track)
+            .ToList();
     }
 
     public static string MoodName(string mood) => mood switch

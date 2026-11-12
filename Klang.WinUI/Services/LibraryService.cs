@@ -588,10 +588,13 @@ public class LibraryService
     public List<TrackItem> GetSmartTracks(SmartPlaylistDef d)
     {
         IEnumerable<TrackItem> q = Tracks.Where(t => !t.IsMissing);
+        Dictionary<string, int>? moodRank = null;
         if (!string.IsNullOrEmpty(d.Mood))
         {
-            var moodSet = new HashSet<string>(AcousticService.Instance.MoodTracks(d.Mood, Tracks).Select(t => t.Id));
-            q = q.Where(t => moodSet.Contains(t.Id));
+            moodRank = new Dictionary<string, int>();
+            int r = 0;
+            foreach (var t in AcousticService.Instance.MoodTracks(d.Mood, Tracks)) moodRank.TryAdd(t.Id, r++);
+            q = q.Where(t => moodRank.ContainsKey(t.Id));
         }
         if (d.MinQualityTier > 0) q = q.Where(t => t.QualityTier >= d.MinQualityTier);
         if (d.OnlyFavorite) q = q.Where(t => t.IsFavorite);
@@ -606,7 +609,8 @@ public class LibraryService
             "played" => q.OrderByDescending(t => t.LastPlayedTimestamp),
             "plays" => q.OrderByDescending(t => t.PlayCount).ThenByDescending(t => t.LastPlayedTimestamp),
             "title" => q.OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase),
-            "mood" => q,   // 心情歌单：保持库里的顺序
+            // 心情歌单：最贴合的排在前面
+            "mood" => moodRank != null ? q.OrderBy(t => moodRank[t.Id]) : q,
             _ => q.OrderByDescending(t => t.AddedTimestamp)
         };
         var list = q.ToList();
