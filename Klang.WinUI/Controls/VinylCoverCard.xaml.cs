@@ -260,6 +260,90 @@ public sealed partial class VinylCoverCard : UserControl
         specVisual.StartAnimation("Opacity", fade);
     }
 
+    // ================= 封面跟随鼠标倾斜 =================
+    // 鼠标在封面上移动时，封面朝鼠标所在的一侧轻微倾斜（带透视），并有一块高光跟着鼠标走；移开后平滑回正。
+
+    private const float MaxTiltDeg = 7f;
+    private float _tiltX, _tiltY, _tiltTargetX, _tiltTargetY;   // 绕 X / Y 轴的角度（度）
+    private float _shine, _shineTarget;
+    private double _shineX = 0.5, _shineY = 0.5;
+    private bool _tiltHooked;
+    private DateTime _tiltLast;
+
+    private void JacketCard_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        double w = JacketCard.ActualWidth, h = JacketCard.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        var p = e.GetCurrentPoint(JacketCard).Position;
+        double nx = Math.Clamp(p.X / w, 0, 1), ny = Math.Clamp(p.Y / h, 0, 1);
+        // 鼠标在右边 → 右侧“被按下去”；在上边 → 上侧被按下去
+        _tiltTargetY = (float)((nx - 0.5) * 2 * MaxTiltDeg);
+        _tiltTargetX = (float)(-(ny - 0.5) * 2 * MaxTiltDeg);
+        _shineTarget = 1f;
+        _shineX = nx; _shineY = ny;
+        HookTilt();
+    }
+
+    private void JacketCard_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _tiltTargetX = _tiltTargetY = 0;
+        _shineTarget = 0f;
+        HookTilt();
+    }
+
+    private void HookTilt()
+    {
+        if (_tiltHooked) return;
+        _tiltHooked = true;
+        _tiltLast = DateTime.UtcNow;
+        CompositionTarget.Rendering += OnTiltFrame;
+    }
+
+    private void OnTiltFrame(object? sender, object e)
+    {
+        var now = DateTime.UtcNow;
+        float dt = (float)Math.Min(0.05, (now - _tiltLast).TotalSeconds);
+        _tiltLast = now;
+        float k = 1f - MathF.Exp(-10f * dt);
+        _tiltX += (_tiltTargetX - _tiltX) * k;
+        _tiltY += (_tiltTargetY - _tiltY) * k;
+        _shine += (_shineTarget - _shine) * k;
+
+        bool settled = MathF.Abs(_tiltTargetX - _tiltX) < 0.02f && MathF.Abs(_tiltTargetY - _tiltY) < 0.02f && MathF.Abs(_shineTarget - _shine) < 0.01f;
+        if (settled) { _tiltX = _tiltTargetX; _tiltY = _tiltTargetY; _shine = _shineTarget; }
+
+        float cx = (float)JacketCard.ActualWidth / 2f, cy = (float)JacketCard.ActualHeight / 2f;
+        if (_tiltX == 0 && _tiltY == 0) _jacketVisual.TransformMatrix = Matrix4x4.Identity;
+        else
+        {
+            var persp = Matrix4x4.Identity;
+            persp.M34 = -1f / 900f;   // 透视：观察点在 900 DIP 之外
+            _jacketVisual.TransformMatrix =
+                Matrix4x4.CreateTranslation(-cx, -cy, 0)
+                * Matrix4x4.CreateRotationX(_tiltX * MathF.PI / 180f)
+                * Matrix4x4.CreateRotationY(_tiltY * MathF.PI / 180f)
+                * persp
+                * Matrix4x4.CreateTranslation(cx, cy, 0);
+        }
+
+        TiltShine.Opacity = _shine;
+        var pt = new Windows.Foundation.Point(_shineX, _shineY);
+        TiltShineBrush.Center = pt;
+        TiltShineBrush.GradientOrigin = pt;
+
+        if (settled)
+        {
+            _tiltHooked = false;
+            CompositionTarget.Rendering -= OnTiltFrame;
+        }
+    }
+
+    /// <summary>封面所在的元素：列表缩略图 / 沉浸模式的封面和它之间做连贯转场。</summary>
+    public UIElement CoverTarget => JacketCard;
+
+    /// <summary>下一次换封面不做交叉淡入（由连贯转场接管，两个动画叠在一起会出现一次明暗跳变）。</summary>
+    public bool SkipNextCrossfade { get; set; }
+
     private string? _lastTrackId;
     private string? _lastCoverPath;
     private int _swapSeq;
@@ -402,7 +486,9 @@ public sealed partial class VinylCoverCard : UserControl
             FallbackPanel.Visibility = Visibility.Visible;
         }
 
-        if (IsLoaded && coverChanged) CrossfadeCover(oldSource, hasCover);
+        bool skip = SkipNextCrossfade;
+        SkipNextCrossfade = false;
+        if (IsLoaded && coverChanged && !skip) CrossfadeCover(oldSource, hasCover);
     }
 
     public void UpdateSpectrum(float[] bands)

@@ -427,6 +427,58 @@ public sealed class NeteaseService
     public async Task<bool> ResolveAsync(TrackItem track, CancellationToken ct)
     {
         if (!track.IsOnline) return !string.IsNullOrEmpty(track.FilePath);
+
+        // 这首歌正在预缓冲：等它下完直接用，不再另开一次下载
+        Task<bool>? pending;
+        lock (_prefetching) _prefetching.TryGetValue(track.NeteaseId, out pending);
+        if (pending != null)
+        {
+            try { await pending.WaitAsync(ct); }
+            catch (OperationCanceledException) { throw; }
+            catch { }
+            // 下完后走下面的常规流程：命中缓存，立即返回，并把路径 / 音质写到这个曲目对象上
+        }
+        return await ResolveCoreAsync(track, ct);
+    }
+
+    private readonly Dictionary<string, Task<bool>> _prefetching = new();
+
+    /// <summary>这首云端曲目的音源是否已在本地缓存（按当前首选音质）。</summary>
+    public bool IsCached(TrackItem track)
+    {
+        if (!track.IsOnline) return true;
+        string quality = PreferredQuality;
+        foreach (var ext in new[] { "flac", "m4a", "mp3", "ogg" })
+        {
+            var p = Path.Combine(_cacheDir, $"{track.NeteaseId}_{quality}.{ext}");
+            try { if (File.Exists(p) && new FileInfo(p).Length > 10240) return true; } catch { }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 预缓冲：在后台把下一首云端曲目下载到缓存，切过去时即可直接播放。
+    /// 已缓存或正在下载时什么都不做；下载不随切歌取消（下完就留在缓存里）。
+    /// </summary>
+    public void Prefetch(TrackItem track)
+    {
+        if (!track.IsOnline || string.IsNullOrEmpty(track.NeteaseId) || IsCached(track)) return;
+        string id = track.NeteaseId;
+        lock (_prefetching)
+        {
+            if (_prefetching.ContainsKey(id)) return;
+            var task = Task.Run(async () =>
+            {
+                try { return await ResolveCoreAsync(track, CancellationToken.None); }
+                catch { return false; }
+                finally { lock (_prefetching) _prefetching.Remove(id); }
+            });
+            _prefetching[id] = task;
+        }
+    }
+
+    private async Task<bool> ResolveCoreAsync(TrackItem track, CancellationToken ct)
+    {
         var id = track.NeteaseId;
 
         // 封面先行（失败不影响播放）

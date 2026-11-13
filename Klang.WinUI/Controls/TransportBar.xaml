@@ -208,11 +208,12 @@
                         <Button.RenderTransform>
                             <ScaleTransform x:Name="PlayPauseScale" CenterX="21" CenterY="21" ScaleX="1.0" ScaleY="1.0" />
                         </Button.RenderTransform>
-                        <FontIcon
+                        <!-- 播放 / 暂停图标：两种状态之间形变过渡 -->
+                        <local:PlayPauseGlyph
                             x:Name="PlayPauseIcon"
-                            FontSize="17"
-                            Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
-                            Glyph="&#xE768;" />
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Fill="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                     </Button>
 
                     <!-- 下一曲 -->

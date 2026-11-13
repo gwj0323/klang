@@ -130,6 +130,7 @@ public sealed partial class NavigationPane : UserControl
     {
         InitializeComponent();
         TracksListView.ItemsSource = _listItems;
+        TracksListView.ContainerContentChanging += TracksListView_ContainerContentChanging;
         PlaylistsListView.ItemsSource = _playlistEntries;
         AlbumsGridView.ItemsSource = _albumEntries;
         UpdateEmptyState();
@@ -301,8 +302,9 @@ public sealed partial class NavigationPane : UserControl
         if (tag != "playlists") { _openPlaylist = null; _openIsSmart = false; }
         if (tag != "albums") _openAlbum = null;
 
+        BeginStagger();
+
         RefreshView();
-        UiAnimations.Pulse(TracksListView);
         TabChanged?.Invoke(this, tag);
     }
 
@@ -609,12 +611,69 @@ public sealed partial class NavigationPane : UserControl
 
     private void TrackRow_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
-        if (HoverPlayOf(sender) is UIElement el) el.Opacity = 1;
+        if (HoverPlayOf(sender) is UIElement el) { el.Opacity = 1; UiAnimations.FadeIn(el, 160); }
     }
 
     private void TrackRow_PointerExited(object sender, PointerRoutedEventArgs e)
     {
-        if (HoverPlayOf(sender) is UIElement el) el.Opacity = 0;
+        if (HoverPlayOf(sender) is UIElement el) UiAnimations.OpacityTo(el, 0f, 140);
+        if (sender is FrameworkElement row) UiAnimations.ScaleTo(row, 1f);
+    }
+
+    // 按下时整行轻微缩小，松开恢复
+    private void TrackRow_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement row && e.GetCurrentPoint(row).Properties.IsLeftButtonPressed)
+            UiAnimations.ScaleTo(row, 0.975f, 90);
+    }
+
+    private void TrackRow_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement row) UiAnimations.ScaleTo(row, 1f, 220);
+    }
+
+    private void TrackThumb_ImageOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is UIElement img) UiAnimations.FadeIn(img, 200);
+    }
+
+    /// <summary>
+    /// 为“列表缩略图飞到主界面封面”的转场做准备：给这一行的缩略图拍快照。
+    /// 这一行不在屏幕上（被虚拟化掉）或者这首歌没有封面时返回 false，调用方就按普通方式切换。
+    /// </summary>
+    public bool PrepareCoverAnimation(TrackItem track, string key)
+    {
+        try
+        {
+            if (TracksListView.Visibility != Visibility.Visible || string.IsNullOrEmpty(track.CoverPath)) return false;
+            if (TracksListView.ContainerFromItem(track) is not ListViewItem item) return false;
+            if (item.ContentTemplateRoot is not Grid row || row.Children.Count == 0 || row.Children[0] is not Border thumb) return false;
+            // 只拍缩略图本身：整块封面区域上还盖着悬停时的深色播放图标和“正在播放”频谱，不能带进快照
+            if (thumb.Child is not Grid g) return false;
+            var img = g.Children.OfType<Image>().FirstOrDefault();
+            if (img == null || img.ActualWidth <= 0) return false;
+            Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationService.GetForCurrentView().PrepareToAnimate(key, img);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // ---- 列表项依次淡入：切换标签 / 打开歌单后的一小段时间内，新出现的行按顺序错开入场 ----
+    private long _staggerUntilTick;
+    private int _staggerIndex;
+
+    private void BeginStagger()
+    {
+        _staggerUntilTick = Environment.TickCount64 + 350;
+        _staggerIndex = 0;
+    }
+
+    private void TracksListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.InRecycleQueue || args.Phase != 0) return;
+        if (Environment.TickCount64 > _staggerUntilTick) return;
+        int i = Math.Min(_staggerIndex++, 14);
+        UiAnimations.StaggerIn(args.ItemContainer, i * 28);
     }
 
     private void TrackItem_ContextRequested(UIElement sender, ContextRequestedEventArgs args)
@@ -903,8 +962,8 @@ public sealed partial class NavigationPane : UserControl
         if (e.ClickedItem is AlbumEntry a)
         {
             _openAlbum = a.Name;
+            BeginStagger();
             RefreshView();
-            UiAnimations.Pulse(TracksListView);
         }
     }
 
@@ -1063,8 +1122,8 @@ public sealed partial class NavigationPane : UserControl
         {
             _openPlaylist = entry.Name;
             _openIsSmart = entry.IsSmart;
+            BeginStagger();
             RefreshView();
-            UiAnimations.Pulse(TracksListView);
         }
     }
 

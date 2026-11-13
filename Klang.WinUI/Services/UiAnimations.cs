@@ -92,6 +92,95 @@ public static class UiAnimations
         };
     }
 
+    private static Visual Centered(FrameworkElement el)
+    {
+        var v = ElementCompositionPreview.GetElementVisual(el);
+        v.CenterPoint = new Vector3((float)el.ActualWidth / 2f, (float)el.ActualHeight / 2f, 0f);
+        return v;
+    }
+
+    /// <summary>弹跳：从 from 放大到 peak 再回到 1（点收藏时的红心）。</summary>
+    public static void Bounce(FrameworkElement el, float from = 0.6f, float peak = 1.28f, int ms = 420)
+    {
+        var v = Centered(el);
+        var c = v.Compositor;
+        var a = c.CreateVector3KeyFrameAnimation();
+        a.InsertKeyFrame(0f, new Vector3(from, from, 1f));
+        a.InsertKeyFrame(0.45f, new Vector3(peak, peak, 1f), c.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0.8f), new Vector2(0.3f, 1f)));
+        a.InsertKeyFrame(0.75f, new Vector3(0.94f, 0.94f, 1f), c.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.6f, 1f)));
+        a.InsertKeyFrame(1f, Vector3.One, c.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.6f, 1f)));
+        a.Duration = TimeSpan.FromMilliseconds(ms);
+        v.StartAnimation("Scale", a);
+    }
+
+    /// <summary>转一圈（切换循环模式）。</summary>
+    public static void Spin(FrameworkElement el, float degrees = 360f, int ms = 480)
+    {
+        var v = Centered(el);
+        var c = v.Compositor;
+        var a = c.CreateScalarKeyFrameAnimation();
+        a.InsertKeyFrame(0f, 0f);
+        a.InsertKeyFrame(1f, degrees, c.CreateCubicBezierEasingFunction(new Vector2(0.3f, 0f), new Vector2(0.1f, 1f)));
+        a.Duration = TimeSpan.FromMilliseconds(ms);
+        v.StartAnimation("RotationAngleInDegrees", a);
+    }
+
+    /// <summary>从一侧滑入并淡入（切换随机 / 漫游模式时图标替换）。</summary>
+    public static void SlideIn(FrameworkElement el, float dx = -8f, int ms = 300)
+    {
+        var v = ElementCompositionPreview.GetElementVisual(el);
+        var c = v.Compositor;
+        ElementCompositionPreview.SetIsTranslationEnabled(el, true);
+        var d = TimeSpan.FromMilliseconds(ms);
+        var x = c.CreateScalarKeyFrameAnimation();
+        x.InsertKeyFrame(0f, dx);
+        x.InsertKeyFrame(1f, 0f, EaseOut(c));
+        x.Duration = d;
+        v.StartAnimation("Translation.X", x);
+        v.StartAnimation("Opacity", Fade(c, 0f, 1f, d));
+    }
+
+    /// <summary>把元素缩放到指定倍率（按下 / 松开的反馈）。</summary>
+    public static void ScaleTo(FrameworkElement el, float scale, int ms = 140)
+    {
+        var v = Centered(el);
+        var c = v.Compositor;
+        var a = c.CreateVector3KeyFrameAnimation();
+        a.InsertKeyFrame(1f, new Vector3(scale, scale, 1f), EaseOut(c));
+        a.Duration = TimeSpan.FromMilliseconds(ms);
+        v.StartAnimation("Scale", a);
+    }
+
+    /// <summary>透明度过渡到指定值。</summary>
+    public static void OpacityTo(UIElement el, float to, int ms = 160)
+    {
+        var v = ElementCompositionPreview.GetElementVisual(el);
+        var c = v.Compositor;
+        var a = c.CreateScalarKeyFrameAnimation();
+        a.InsertKeyFrame(1f, to, EaseOut(c));
+        a.Duration = TimeSpan.FromMilliseconds(ms);
+        v.StartAnimation("Opacity", a);
+    }
+
+    /// <summary>延迟一段时间后淡入上浮（列表项依次出现）。</summary>
+    public static void StaggerIn(UIElement element, int delayMs, float offsetY = 12f, int ms = 320)
+    {
+        var v = ElementCompositionPreview.GetElementVisual(element);
+        var c = v.Compositor;
+        ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+        var d = TimeSpan.FromMilliseconds(ms);
+        var delay = TimeSpan.FromMilliseconds(delayMs);
+
+        var op = Fade(c, 0f, 1f, d);
+        op.DelayTime = delay;
+        op.DelayBehavior = AnimationDelayBehavior.SetInitialValueBeforeDelay;
+        var y = Rise(c, offsetY, d);
+        y.DelayTime = delay;
+        y.DelayBehavior = AnimationDelayBehavior.SetInitialValueBeforeDelay;
+        v.StartAnimation("Opacity", op);
+        v.StartAnimation("Translation.Y", y);
+    }
+
     /// <summary>内容整体换了（切换标签 / 打开歌单）时播放一次淡入上浮。</summary>
     public static void Pulse(UIElement element, float offsetY = 10f)
     {

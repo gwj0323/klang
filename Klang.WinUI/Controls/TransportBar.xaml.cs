@@ -108,7 +108,7 @@ public sealed partial class TransportBar : UserControl
         set
         {
             _isPlaying = value;
-            PlayPauseIcon.Glyph = _isPlaying ? "\uE769" : "\uE768";
+            PlayPauseIcon.IsPlaying = _isPlaying;
             PlayPauseBtn.SetValue(ToolTipService.ToolTipProperty, _isPlaying ? L.T("暂停 (Space)") : L.T("播放 (Space)"));
         }
     }
@@ -282,14 +282,26 @@ public sealed partial class TransportBar : UserControl
 
     private void PrevBtn_Click(object sender, RoutedEventArgs e) => PrevClicked?.Invoke(this, EventArgs.Empty);
     private void NextBtn_Click(object sender, RoutedEventArgs e) => NextClicked?.Invoke(this, EventArgs.Empty);
-    private void ShuffleBtn_Click(object sender, RoutedEventArgs e) => ShuffleClicked?.Invoke(this, EventArgs.Empty);
-    private void RepeatBtn_Click(object sender, RoutedEventArgs e) => RepeatClicked?.Invoke(this, EventArgs.Empty);
+    private void ShuffleBtn_Click(object sender, RoutedEventArgs e)
+    {
+        ShuffleClicked?.Invoke(this, EventArgs.Empty);
+        UiAnimations.SlideIn(ShuffleIcon);          // 图标已换成新模式的：从左侧滑入
+    }
+
+    private void RepeatBtn_Click(object sender, RoutedEventArgs e)
+    {
+        RepeatClicked?.Invoke(this, EventArgs.Empty);
+        UiAnimations.Spin(RepeatIcon);              // 循环图标转一圈
+    }
     private void RateBtn_Click(object sender, RoutedEventArgs e) => RateClicked?.Invoke(this, EventArgs.Empty);
     private void EqBtn_Click(object sender, RoutedEventArgs e) => EqualizerClicked?.Invoke(this, EventArgs.Empty);
 
     private void FavoriteBtn_Click(object sender, RoutedEventArgs e)
     {
         SetFavorite(!_isFavorite);
+        // 收藏：红心从小弹到略大再落回；取消收藏：轻微收缩一下
+        if (_isFavorite) UiAnimations.Bounce(FavoriteIcon);
+        else UiAnimations.Bounce(FavoriteIcon, 1f, 0.82f, 260);
         FavoriteClicked?.Invoke(this, EventArgs.Empty);
     }
 

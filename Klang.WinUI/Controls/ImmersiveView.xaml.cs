@@ -52,9 +52,13 @@ public sealed partial class ImmersiveView : UserControl
 
     public bool IsOpen => Visibility == Visibility.Visible;
 
+    /// <summary>封面所在的元素：进入 / 退出沉浸模式时，封面在它和主界面封面之间做连贯转场。</summary>
+    public UIElement CoverTarget => CoverFrame;
+
     public void Open()
     {
         Visibility = Visibility.Visible;
+        UiAnimations.FadeIn(RootGrid, 320);   // 背景淡入，封面由连贯转场“飞”过来
         Fluid.Start();
         Fluid.SetCover(_cover);
         WakeDock();

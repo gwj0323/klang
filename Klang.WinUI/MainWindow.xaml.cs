@@ -99,6 +99,7 @@ public sealed partial class MainWindow : Window
         {
             BottomTransportBar.UpdateProgress(current, total);
             TryPlanMix(current, total);
+            TryPrefetchNext(current, total);
             if (ImmersiveLayer.IsOpen) ImmersiveLayer.UpdateProgress(current, total);
             StageLyricsControl.UpdatePlaybackTime(current + _lyricOffset); ImmersiveLayer.UpdateTime(current + _lyricOffset);
             _media.UpdateTimeline(current, total);
@@ -173,7 +174,14 @@ public sealed partial class MainWindow : Window
         // 3. 绑定左侧曲库选中与点击事件
         LeftNavPane.TrackSelected += (s, track) =>
         {
+            // 点列表里的歌：缩略图“飞”到主界面的大封面位置（主封面可见、且确实换了一首时才做）
+            bool fly = track != _currentTrack && !_stageNarrow && !ImmersiveLayer.IsOpen
+                && StageCoverCard.Visibility == Visibility.Visible
+                && LeftNavPane.PrepareCoverAnimation(track, "listCover");
+            StageCoverCard.SkipNextCrossfade = fly;
             PlayTrack(track);
+            StageCoverCard.SkipNextCrossfade = false;
+            if (fly) StartCoverAnimation("listCover", StageCoverCard.CoverTarget);
         };
 
         GalleryLayer.CloseRequested += (s, e) => CloseGallery();
@@ -384,6 +392,13 @@ public sealed partial class MainWindow : Window
     {
         State.PlayMode = _playMode;
         StateService.Instance.RequestSave();
+
+        // 播放模式变了：之前按旧模式预先选好的“下一首”作废（已经排好混音的除外），之后按新模式重新选并预缓冲
+        if (_mixNext == null)
+        {
+            _preChosenNext = null;
+            _prefetchFromId = null;
+        }
     }
 
     private void SaveWindowAndAudioState()
@@ -471,6 +486,7 @@ public sealed partial class MainWindow : Window
         }
 
         if (!_adoptingMix) { _mixNext = null; _preChosenNext = null; }
+        _prefetchFromId = null;   // 新的一首：允许再次为它的下一首预缓冲
         if (_currentTrack != null) _currentTrack.IsCurrent = false;
         _currentTrack = track;
         track.IsCurrent = true;
@@ -741,6 +757,37 @@ public sealed partial class MainWindow : Window
         _nextByRoam = byRoam;
         PlayTrack(next);
         if (reason != null) BottomTransportBar.UpdateLyricSnippet(L.T("漫游 · ") + reason);
+    }
+
+    // ---------------- 云端曲目预缓冲 ----------------
+
+    private string? _prefetchFromId;
+
+    /// <summary>
+    /// 当前这首快放完时（剩余 60 秒以内），提前确定下一首；如果它是还没缓存的云端曲目，就在后台开始下载，
+    /// 切过去时不用再等“正在获取云端音源”。每首歌只触发一次。
+    /// </summary>
+    private void TryPrefetchNext(double current, double total)
+    {
+        var cur = _currentTrack;
+        if (cur == null || total <= 0 || _playMode == "loop_single" || _prefetchFromId == cur.Id) return;
+        if (!AudioEngineService.Instance.IsPlaying) return;
+        if (total - current > 60) return;
+
+        _prefetchFromId = cur.Id;
+        try
+        {
+            // 和自动混音共用“预先选好的下一首”，保证预缓冲的就是之后真正播放的那一首（随机 / 漫游模式下尤其重要）
+            var next = _preChosenNext;
+            if (next == null)
+            {
+                next = PickNextTrack(out var reason, out var byRoam);
+                if (next != null) { _preChosenNext = next; _preChosenReason = reason; _preChosenByRoam = byRoam; }
+            }
+            if (next == null || next == cur || !next.IsOnline) return;
+            Services.Netease.NeteaseService.Instance.Prefetch(next);
+        }
+        catch { }
     }
 
     // ---------------- 节拍对齐的自动混音 ----------------
@@ -1328,8 +1375,39 @@ public sealed partial class MainWindow : Window
         if (ImmersiveLayer.IsOpen) CloseImmersive(); else OpenImmersive();
     }
 
+    // ---------------- 封面的连贯转场 ----------------
+
+    private static Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationService CoverAnimations =>
+        Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationService.GetForCurrentView();
+
+    /// <summary>主界面的大封面此刻是否可见（窄窗口下它是隐藏的，没有封面的歌也不做转场）。</summary>
+    private bool StageCoverVisible =>
+        !_stageNarrow && StageCoverCard.Visibility == Visibility.Visible && !string.IsNullOrEmpty(_currentTrack?.CoverPath);
+
+    private bool PrepareCoverAnimation(string key, UIElement source)
+    {
+        try { CoverAnimations.PrepareToAnimate(key, source); return true; }
+        catch { return false; }
+    }
+
+    /// <summary>把之前拍好快照的封面“飞”到目标元素；目标还没排好版或启动失败就取消，按普通方式显示。</summary>
+    private void StartCoverAnimation(string key, UIElement target)
+    {
+        try
+        {
+            var anim = CoverAnimations.GetAnimation(key);
+            if (anim == null) return;
+            anim.Configuration = new Microsoft.UI.Xaml.Media.Animation.BasicConnectedAnimationConfiguration();
+            if (!anim.TryStart(target)) anim.Cancel();
+        }
+        catch { }
+    }
+
     private void OpenImmersive()
     {
+        // 进入沉浸模式：主界面的封面放大移动到沉浸界面的封面位置
+        bool fly = !ImmersiveLayer.IsOpen && StageCoverVisible && PrepareCoverAnimation("toImmersive", StageCoverCard.CoverTarget);
+
         ImmersiveLayer.LyricFontSize = Math.Min(StageLyricsControl.LyricFontSize + 6, 40);
         ImmersiveLayer.SubMode = State.LyricSubMode;
         ImmersiveLayer.Open();
@@ -1339,16 +1417,24 @@ public sealed partial class MainWindow : Window
             EnterFullscreen();
             _immersiveSetFullscreen = true;
         }
+
+        // 等沉浸界面（以及全屏后的新尺寸）排好版再起飞，否则目标位置还是旧的
+        if (fly) DispatcherQueue.SafeEnqueue(() => StartCoverAnimation("toImmersive", ImmersiveLayer.CoverTarget));
     }
 
     private void CloseImmersive()
     {
+        // 退出：沉浸界面的封面缩回主界面的封面位置
+        bool fly = ImmersiveLayer.IsOpen && StageCoverVisible && PrepareCoverAnimation("fromImmersive", ImmersiveLayer.CoverTarget);
+
         ImmersiveLayer.Close();
         if (_immersiveSetFullscreen)
         {
             ExitFullscreen();
             _immersiveSetFullscreen = false;
         }
+
+        if (fly) DispatcherQueue.SafeEnqueue(() => StartCoverAnimation("fromImmersive", StageCoverCard.CoverTarget));
     }
 
     // 自绘标题栏的窗口全屏时，系统仍会在最上面画 1 像素的窗口边框（浅色主题下是白线）。

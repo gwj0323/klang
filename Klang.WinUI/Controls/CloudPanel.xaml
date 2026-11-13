@@ -253,6 +253,9 @@
                 </ListView.ItemTemplate>
             </ListView>
 
+            <!-- 加载中：骨架屏 -->
+            <local:SkeletonList x:Name="Skeleton" Visibility="Collapsed" />
+
             <!-- 加载 / 空结果提示 -->
             <StackPanel
                 x:Name="BusyPanel"

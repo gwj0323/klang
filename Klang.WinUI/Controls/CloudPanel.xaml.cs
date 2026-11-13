@@ -319,6 +319,18 @@ public sealed partial class CloudPanel : UserControl
 
     private void ShowBusy(string text, bool spinning = false)
     {
+        // 加载中且列表还是空的：显示骨架屏；列表里已有内容（刷新）时仍用转圈，避免盖住内容
+        bool listEmpty = _inTracksMode ? _tracks.Count == 0 : _entries.Count == 0;
+        if (spinning && listEmpty)
+        {
+            // 首页模式下列表上方还有账号信息那一行，骨架屏往下让出位置
+            Skeleton.Margin = new Thickness(0, _inTracksMode ? 0 : 52, 0, 0);
+            Skeleton.Visibility = Visibility.Visible;
+            BusyRing.IsActive = false;
+            BusyPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        Skeleton.Visibility = Visibility.Collapsed;
         BusyText.Text = text;
         BusyRing.IsActive = spinning;
         BusyPanel.Visibility = Visibility.Visible;
@@ -326,6 +338,7 @@ public sealed partial class CloudPanel : UserControl
 
     private void HideBusy()
     {
+        Skeleton.Visibility = Visibility.Collapsed;
         BusyRing.IsActive = false;
         BusyPanel.Visibility = Visibility.Collapsed;
     }

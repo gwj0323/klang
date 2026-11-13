@@ -24,8 +24,12 @@
                 ColumnSpacing="12"
                 ContextRequested="TrackItem_ContextRequested"
                 Opacity="{x:Bind RowOpacity, Mode=OneWay}"
+                PointerCanceled="TrackRow_PointerReleased"
+                PointerCaptureLost="TrackRow_PointerReleased"
                 PointerEntered="TrackRow_PointerEntered"
                 PointerExited="TrackRow_PointerExited"
+                PointerPressed="TrackRow_PointerPressed"
+                PointerReleased="TrackRow_PointerReleased"
                 ToolTipService.ToolTip="{x:Bind RowToolTip, Mode=OneWay}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="40" />
@@ -47,7 +51,14 @@
                             FontSize="16"
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                             Glyph="&#xE8D6;" />
-                        <Image Source="{x:Bind CoverThumb, Mode=OneWay}" Stretch="UniformToFill" />
+                        <!-- 缩略图加载完成后淡入 -->
+                        <Image
+                            ImageOpened="TrackThumb_ImageOpened"
+                            Source="{x:Bind CoverThumb, Mode=OneWay}"
+                            Stretch="UniformToFill" />
+                        <!-- 正在播放的行：随音乐跳动的小频谱 -->
+                        <local:NowPlayingBars Visibility="{x:Bind IsCurrent, Mode=OneWay}" />
+                        <!-- 悬停时的播放图标（必须是最后一个子元素，代码按位置取它） -->
                         <Grid
                             x:Name="HoverPlay"
                             Background="#8C000000"
