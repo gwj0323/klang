@@ -89,8 +89,8 @@ public class AppState
     public string BackdropMaterial { get; set; } = "mica"; // mica | acrylic（旧版本的 solid 按 mica 处理）
     public bool SidebarCollapsed { get; set; }
     public int LyricFontSize { get; set; } = 22;
-    public bool ShowVinylDisc { get; set; } = true;        // 播放时封面后面滑出旋转的黑胶唱片
-    public bool WaveformSeekBar { get; set; } = true;      // 底栏进度条显示振幅波形（关 = 标准滑块）
+    public bool ShowVinylDisc { get; set; } = false;        // 播放时封面后面滑出旋转的黑胶唱片
+    public bool WaveformSeekBar { get; set; } = false;      // 底栏进度条显示振幅波形（关 = 标准滑块）
     public bool LyricDepthBlur { get; set; } = true;      // 歌词景深模糊（离当前句越远越模糊）
     public bool LyricWordMotion { get; set; } = true;      // 逐字歌词：唱到的字上移、长音辉光
     public bool LyricZoomEmphasis { get; set; } = true;   // 歌词“放大强调”（当前句放大、远处缩小）；Win2D 逐帧按真实字号绘制，放大也锐利

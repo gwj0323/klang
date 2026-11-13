@@ -14,6 +14,7 @@
 
             <!-- 1. 黑胶唱片 + 艺术封套联动舞台 (280x280 核心区域) -->
             <Grid
+                x:Name="StageBox"
                 Width="320"
                 Height="270"
                 HorizontalAlignment="Center">

@@ -80,7 +80,7 @@ public sealed partial class VinylCoverCard : UserControl
         for (int i = 0; i < NUM_BARS; i++) ApplyBar(i, 0.04f, 0.04f);
 
         Loaded += (s, e) => ApplySpectrumBrush();
-        Loaded += (s, e) => { VinylDiscSettingChanged -= OnVinylDiscSettingChanged; VinylDiscSettingChanged += OnVinylDiscSettingChanged; };
+        Loaded += (s, e) => { VinylDiscSettingChanged -= OnVinylDiscSettingChanged; VinylDiscSettingChanged += OnVinylDiscSettingChanged; ApplyDiscLayout(animate: false); };
         Unloaded += (s, e) => VinylDiscSettingChanged -= OnVinylDiscSettingChanged;
         ActualThemeChanged += (s, e) => ApplySpectrumBrush();
     }
@@ -183,7 +183,7 @@ public sealed partial class VinylCoverCard : UserControl
             ds.DrawCircle(c, R - 3.2f, Windows.UI.Color.FromArgb(120, 0, 0, 0), 2.4f);
 
             // 封套投在唱片上的阴影：唱片滑出到位后，封套右边缘正好在盘面的这个位置
-            float edge = (float)(JacketCard.Width - VinylDisc.Margin.Left) - DiscSlide;
+            float edge = (float)(JacketWithDisc - VinylDisc.Margin.Left) - DiscSlide;
             using var shadow = new Microsoft.Graphics.Canvas.Brushes.CanvasLinearGradientBrush(sender, Windows.UI.Color.FromArgb(150, 0, 0, 0), Windows.UI.Color.FromArgb(0, 0, 0, 0))
             {
                 StartPoint = new Vector2(edge, 0), EndPoint = new Vector2(edge + 34f, 0)
@@ -197,7 +197,38 @@ public sealed partial class VinylCoverCard : UserControl
     public static void NotifyVinylDiscSettingChanged() => VinylDiscSettingChanged?.Invoke();
 
     private void OnVinylDiscSettingChanged() =>
-        DispatcherQueue.SafeEnqueue(() => SlideDisc(_isPlaying && Services.StateService.Instance.State.ShowVinylDisc));
+        DispatcherQueue.SafeEnqueue(() =>
+        {
+            ApplyDiscLayout(animate: true);
+            SlideDisc(_isPlaying && Services.StateService.Instance.State.ShowVinylDisc);
+        });
+
+    private const double JacketWithDisc = 260, JacketAlone = 300;
+
+    /// <summary>
+    /// 关闭黑胶唱片后，封面右侧原本留给唱片的空间就空着了：把封面放大到 300（和下方文字、频谱同宽），
+    /// 布局更饱满；打开时恢复 260，给唱片留出位置。
+    /// </summary>
+    private void ApplyDiscLayout(bool animate)
+    {
+        bool disc = Services.StateService.Instance.State.ShowVinylDisc;
+        double size = disc ? JacketWithDisc : JacketAlone;
+        if (Math.Abs(JacketCard.Width - size) < 0.5) return;
+        double from = JacketCard.Width;
+
+        JacketCard.Width = JacketCard.Height = size;
+        JacketCard.CornerRadius = new CornerRadius(disc ? 14 : 16);
+        StageBox.Height = disc ? 270 : size;
+        _jacketVisual.CenterPoint = new Vector3((float)size / 2f, (float)size / 2f, 0f);
+        DiscCanvas.Invalidate();   // 封套投影的位置跟封面宽度有关
+
+        if (animate)
+        {
+            // 尺寸已经一步到位，用一次缩放把视觉上的变化补成平滑过渡
+            var ease = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0f), new Vector2(0f, 1f));
+            _jacketVisual.StartAnimation("Scale", Scale3((float)(from / size), 1f, 420, ease));
+        }
+    }
 
     private void SlideDisc(bool show)
     {
@@ -432,7 +463,9 @@ public sealed partial class VinylCoverCard : UserControl
 
     private string? _lastTrackId;
     private string? _lastCoverPath;
-    private int _swapSeq;
+    // 文字滚动和封面交叉淡入各用一个序号。以前共用一个：云端歌曲先显示、封面下载完又更新一次，
+    // 第二次更新把序号加了一，正在进行的文字滚动以为“又换了歌”，淡出之后就不再淡入，标题和歌手一直是透明的
+    private int _metaSeq, _coverSeq;
 
     private ScalarKeyFrameAnimation Scalar(float from, float to, int ms, CompositionEasingFunction ease)
     {
@@ -475,10 +508,10 @@ public sealed partial class VinylCoverCard : UserControl
             oldV.StartAnimation("Opacity", Scalar(1f, 0f, ms, ease));
             oldV.StartAnimation("Scale", Scale3(1f, 1.06f, ms, ease));
             batch.End();
-            int seq = _swapSeq;
+            int seq = ++_coverSeq;
             batch.Completed += (s, e) =>
             {
-                if (seq != _swapSeq) return;
+                if (seq != _coverSeq) return;   // 期间又开始了新的交叉淡入，旧封面层交给它
                 OldCoverImage.Visibility = Visibility.Collapsed;
                 OldCoverImage.Source = null;
             };
@@ -498,7 +531,7 @@ public sealed partial class VinylCoverCard : UserControl
     {
         var easeOut = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(1f, 1f));
         var easeIn = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 1f), new Vector2(0.3f, 1f));
-        int seq = _swapSeq;
+        int seq = ++_metaSeq;
 
         var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
         _metaVisual.StartAnimation("Opacity", Scalar(_metaVisual.Opacity, 0f, 150, easeOut));
@@ -506,7 +539,7 @@ public sealed partial class VinylCoverCard : UserControl
         batch.End();
         batch.Completed += (s, e) =>
         {
-            if (seq != _swapSeq) return;   // 期间又换了歌：交给最新那次
+            if (seq != _metaSeq) return;   // 期间又换了歌：交给最新那次滚动
             swap();
             _metaVisual.StartAnimation("Opacity", Scalar(0f, 1f, 420, easeIn));
             _metaVisual.StartAnimation("Translation.Y", Scalar(10f, 0f, 460, easeIn));
@@ -529,7 +562,6 @@ public sealed partial class VinylCoverCard : UserControl
         bool coverChanged = cover != _lastCoverPath;
         _lastTrackId = id;
         _lastCoverPath = cover;
-        _swapSeq++;
 
         // ---- 文字：换歌时滚动替换；同一首歌（比如补全了信息）直接替换 ----
         void SwapMeta()
