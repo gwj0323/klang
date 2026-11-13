@@ -168,6 +168,8 @@ pyinstaller Klang.spec --noconfirm
 | [ComputeSharp](https://github.com/Sergio0694/ComputeSharp) | MIT | GPU 计算（动态背景） |
 | [AutoEq](https://github.com/jaakkopasanen/AutoEq) | MIT | 耳机频响补偿数据 |
 | [LRCLIB](https://lrclib.net) | — | 歌词数据来源（开放接口） |
+| [Open-Meteo](https://open-meteo.com) | CC BY 4.0（数据） | 沉浸背景的天气效果（可选，默认关闭） |
+| [Codrops RainEffect](https://github.com/codrops/RainEffect)（Lucas Bebber） | [Codrops 许可](https://tympanus.net/codrops/licensing/) | 沉浸背景的雨水效果：参考其水珠模拟算法（水珠贴图为本项目程序生成） |
 
 ### PyQt6 版
 

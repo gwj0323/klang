@@ -165,6 +165,68 @@
                         </Grid>
                     </Border>
 
+                    <TextBlock Style="{StaticResource GroupTitle}" Text="沉浸背景氛围" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="随时段变化" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按当前时间调整背景的色温、亮度和流动速度：深夜更暗、更慢，傍晚偏暖。只使用本机时间，不联网。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="AmbientTodSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="AmbientTodSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <StackPanel Spacing="10">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock FontWeight="Medium" Text="天气效果" />
+                                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按所在城市的天气，在背景上叠加很淡的效果：下雨时玻璃蒙上一层雾气、布满水珠，不时有水珠滑落并擦出一道水路，下雪时有稀疏的雪花，阴天降低饱和度。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch
+                                    x:Name="AmbientWeatherSwitch"
+                                    Grid.Column="1"
+                                    OffContent="关"
+                                    OnContent="开"
+                                    Toggled="AmbientWeatherSwitch_Toggled" />
+                            </Grid>
+                            <StackPanel x:Name="WeatherPanel" Spacing="8" Visibility="Collapsed">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="CityBox" PreviewKeyDown="CityBox_KeyDown" PlaceholderText="输入城市名称，如 北京、Copenhagen" />
+                                    <Button x:Name="CitySearchBtn" Grid.Column="1" Click="CitySearchBtn_Click" Content="查找" />
+                                </Grid>
+                                <ComboBox
+                                    x:Name="CityResults"
+                                    HorizontalAlignment="Stretch"
+                                    PlaceholderText="选择城市"
+                                    SelectionChanged="CityResults_SelectionChanged"
+                                    Visibility="Collapsed" />
+                                <TextBlock x:Name="WeatherStatusText" FontSize="12" TextWrapping="Wrap" />
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="数据来自 Open-Meteo。查找城市时会发送输入的城市名称；之后每 30 分钟发送一次该城市的经纬度（保留两位小数，约 1 公里精度）。不发送账号、设备或播放信息。关闭后不再联网。"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <TextBlock Style="{StaticResource GroupTitle}" Text="歌词" />
                     <Border Style="{StaticResource SettingCard}">
                         <Grid ColumnSpacing="12">

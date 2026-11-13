@@ -91,6 +91,11 @@ public class AppState
     public int LyricFontSize { get; set; } = 22;
     public bool ShowVinylDisc { get; set; } = false;        // 播放时封面后面滑出旋转的黑胶唱片
     public bool WaveformSeekBar { get; set; } = false;      // 底栏进度条显示振幅波形（关 = 标准滑块）
+    public bool AmbientTimeOfDay { get; set; } = false;     // 沉浸背景随时段变化（深夜更暗更慢、傍晚偏暖），只用本机时间
+    public bool AmbientWeather { get; set; } = false;       // 沉浸背景叠加天气效果（雨痕 / 雪 / 阴天），需要联网
+    public string WeatherCity { get; set; } = "";           // 显示用的城市名
+    public double? WeatherLat { get; set; }
+    public double? WeatherLon { get; set; }
     public bool LyricDepthBlur { get; set; } = true;      // 歌词景深模糊（离当前句越远越模糊）
     public bool LyricWordMotion { get; set; } = true;      // 逐字歌词：唱到的字上移、长音辉光
     public bool LyricZoomEmphasis { get; set; } = true;   // 歌词“放大强调”（当前句放大、远处缩小）；Win2D 逐帧按真实字号绘制，放大也锐利

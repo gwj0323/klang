@@ -62,6 +62,106 @@ public sealed class FluidBackground : UserControl
     private readonly object _gLock = new();
     private TimeSpan _gLast;
 
+    // ---- 氛围（时段 / 天气）：每帧向目标值平滑靠近，时段或天气变化时约 4 秒过渡 ----
+    private float _aWarm, _aBright = 1f, _aSpeed = 1f, _aSat = 1f, _aRain, _aSnow, _aOver;
+    private float _flowTime, _clockTime;
+    private bool _ambInit;
+
+    private void StepAmbience(float dt)
+    {
+        var a = Services.AmbienceService.Current;
+        if (!_ambInit)
+        {
+            _ambInit = true;
+            (_aWarm, _aBright, _aSpeed, _aSat, _aRain, _aSnow, _aOver) =
+                (a.Warmth, a.Brightness, a.Speed, a.Saturation, a.Rain, a.Snow, a.Overcast);
+        }
+        else
+        {
+            float k = 1f - MathF.Exp(-dt / 1.4f);
+            _aWarm += (a.Warmth - _aWarm) * k;
+            _aBright += (a.Brightness - _aBright) * k;
+            _aSpeed += (a.Speed - _aSpeed) * k;
+            _aSat += (a.Saturation - _aSat) * k;
+            _aRain += (a.Rain - _aRain) * k;
+            _aSnow += (a.Snow - _aSnow) * k;
+            _aOver += (a.Overcast - _aOver) * k;
+        }
+        _flowTime += dt * _aSpeed;   // 流动速度随时段变化：时间按倍数推进，画面不会跳
+        _clockTime = (_clockTime + dt) % 1200f;   // 只用于雨雪的运动；回绕避免着色器里的浮点精度随运行时间下降
+    }
+
+    // ---- 雨水（只在 GPU 路径使用）：CPU 跑水珠物理，GPU 画雾珠层和水面 ----
+    private readonly RainSimulation _rain = new();
+    private ReadWriteTexture2D<Rgba32, float4>? _gDrizzle;
+    private ReadOnlyBuffer<float4>? _gRects, _gStamps, _gErases;
+    private ReadOnlyBuffer<float>? _gDepth;
+    private ReadOnlyBuffer<int>? _gTiles;
+    private ReadOnlyTexture2D<Rgba32, float4>? _gDropAlpha, _gDropColor;
+    private volatile float _aspect = 16f / 9f;   // 界面线程写，渲染线程读
+
+    private bool _rainActive;
+
+    private void InitRainResources()
+    {
+        _gRects = _device!.AllocateReadOnlyBuffer<float4>(RainSimulation.MaxDrops);
+        _gDepth = _device.AllocateReadOnlyBuffer<float>(RainSimulation.MaxDrops);
+        _gTiles = _device.AllocateReadOnlyBuffer<int>(_rain.Tiles.Length);
+        _gStamps = _device.AllocateReadOnlyBuffer<float4>(RainSimulation.MaxStamps);
+        _gErases = _device.AllocateReadOnlyBuffer<float4>(RainSimulation.MaxErases);
+        _gDrizzle = _device.AllocateReadWriteTexture2D<Rgba32, float4>(4, 4);
+        var (alpha, color) = RainDropTextures.Create();   // 程序生成的水珠形状 / 折射贴图
+        _gDropAlpha = _device.AllocateReadOnlyTexture2D<Rgba32, float4>(alpha, RainDropTextures.Size, RainDropTextures.Size);
+        _gDropColor = _device.AllocateReadOnlyTexture2D<Rgba32, float4>(color, RainDropTextures.Size, RainDropTextures.Size);
+    }
+
+    /// <summary>渲染线程：推进雨水模拟，在 GPU 上更新雾珠层，上传这一帧的大水珠。没在下雨且玻璃已干时什么都不做。</summary>
+    private void StepRain(float dt)
+    {
+        if (_gRects == null) return;
+        if (_aRain < 0.02f && !_rainActive) return;
+
+        _rain.Step(dt, _aRain, _aspect);
+
+        // 雾珠层尺寸跟随屏幕宽高比（高固定 1080 模拟像素）
+        if (_gDrizzle!.Width != _rain.MapW || _gDrizzle.Height != (int)RainSimulation.SimH)
+        {
+            var old = _gDrizzle;
+            _gDrizzle = _device!.AllocateReadWriteTexture2D<Rgba32, float4>(_rain.MapW, (int)RainSimulation.SimH);
+            _ = Task.Delay(3000).ContinueWith(_ => old.Dispose());
+        }
+
+        if (_rain.CleaningFrames > 0)
+            _device!.For(_gDrizzle.Width, _gDrizzle.Height, new RainFadeShader(_gDrizzle, MathF.Pow(0.95f, Math.Min(dt * 60f, 2f))));
+        if (_rain.EraseCount > 0)
+        {
+            _gErases!.CopyFrom(Cast(_rain.Erases.AsSpan(0, _rain.EraseCount)));
+            _device!.For(48, 64, _rain.EraseCount, new RainEraseShader(_gDrizzle, _gErases));
+        }
+        if (_rain.StampCount > 0)
+        {
+            _gStamps!.CopyFrom(Cast(_rain.Stamps.AsSpan(0, _rain.StampCount)));
+            _device!.For(16, 24, _rain.StampCount, new RainStampShader(_gDrizzle, _gStamps, _gDropAlpha!, _gDropColor!));
+        }
+
+        _gRects.CopyFrom(Cast(_rain.DropRects));
+        _gDepth!.CopyFrom(_rain.DropDepth);
+        _gTiles!.CopyFrom(_rain.Tiles);
+        _rainActive = !_rain.IsIdle;
+    }
+
+    private static ReadOnlySpan<float4> Cast(ReadOnlySpan<ComputeSharp.Float4> s) =>
+        System.Runtime.InteropServices.MemoryMarshal.Cast<ComputeSharp.Float4, float4>(s);
+    // 下雨时水珠要有清晰的边缘，改用全分辨率渲染；不下雨时回到半分辨率省 GPU
+    private DispatcherQueueTimer? _resTimer;
+
+    private void UpdateResolution()
+    {
+        if (_gpu == null) return;
+        double want = Services.AmbienceService.Current.Rain > 0.01f ? 1.0 : 0.5;
+        if (Math.Abs(_gpu.ResolutionScale - want) > 0.01) _gpu.ResolutionScale = want;
+    }
+
     /// <summary>是否正在用 GPU 渲染。</summary>
     public bool IsGpu => _gpu != null;
 
@@ -77,6 +177,7 @@ public sealed class FluidBackground : UserControl
             ResolutionScale = 0.5,   // 背景本来就是模糊的，半分辨率渲染再由合成器放大，省一半 GPU
             IsPaused = true
         };
+        InitRainResources();
         _gpu.ShaderRunner = new ShaderRunner<FluidShader>(CreateShader);
         Content = _gpu;
     }
@@ -92,6 +193,8 @@ public sealed class FluidBackground : UserControl
         _energy += (_targetEnergy - _energy) * (1f - MathF.Pow(1f - 0.18f, k));
         _targetEnergy *= MathF.Pow(0.94f, k);
         if (_mix < 1f) _mix = MathF.Min(1f, _mix + dt / 1.2f);
+        StepAmbience(dt);
+        StepRain(dt);
 
         ReadOnlyTexture2D<Rgba32, float4> cur, prev;
         float has, mixv;
@@ -103,8 +206,10 @@ public sealed class FluidBackground : UserControl
             mixv = _gPrev != null ? _mix : 1f;
         }
         return new FluidShader(
-            (float)elapsed.TotalSeconds, _energy, mixv, has, prev, cur,
-            F3(DefaultPalette[0]), F3(DefaultPalette[1]), F3(DefaultPalette[2]), F3(DefaultPalette[3]), F3(BaseColor));
+            _flowTime, _energy, mixv, has, prev, cur,
+            F3(DefaultPalette[0]), F3(DefaultPalette[1]), F3(DefaultPalette[2]), F3(DefaultPalette[3]), F3(BaseColor),
+            _clockTime, new float4(_aWarm, _aBright, _aSat, 0f), new float4(_rainActive ? MathF.Max(_aRain, 0.006f) : 0f, _aSnow, _aOver, 0f),
+            _gDrizzle!, _gRects!, _gDepth!, _gTiles!, _rain.TilesX, _gDropAlpha!, _gDropColor!);
     }
 
     private ReadOnlyTexture2D<Rgba32, float4> UploadTexture(float[] field)
@@ -147,14 +252,30 @@ public sealed class FluidBackground : UserControl
         _timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
         _timer.Interval = TimeSpan.FromMilliseconds(33);
         _timer.Tick += (s, e) => Frame();
-        SizeChanged += (s, e) => EnsureBitmap();
+        SizeChanged += (s, e) =>
+        {
+            EnsureBitmap();
+            if (e.NewSize.Height > 1) _aspect = (float)(e.NewSize.Width / e.NewSize.Height);
+        };
     }
 
     public void Start()
     {
         if (_running) return;
         _running = true;
-        if (_gpu != null) { _gpu.IsPaused = false; return; }
+        if (_gpu != null)
+        {
+            UpdateResolution();
+            if (_resTimer == null)
+            {
+                _resTimer = DispatcherQueue.CreateTimer();
+                _resTimer.Interval = TimeSpan.FromSeconds(3);
+                _resTimer.Tick += (s, e) => UpdateResolution();
+            }
+            _resTimer.Start();
+            _gpu.IsPaused = false;
+            return;
+        }
         _clock.Restart();
         _lastTicks = 0;
         EnsureBitmap();
@@ -164,6 +285,7 @@ public sealed class FluidBackground : UserControl
     public void Stop()
     {
         _running = false;
+        _resTimer?.Stop();
         if (_gpu != null) _gpu.IsPaused = true;
         _timer.Stop();
     }
@@ -458,7 +580,8 @@ public sealed class FluidBackground : UserControl
         _lastTicks = ticks;
         dt = Math.Clamp(dt, 0.001f, 0.05f);
 
-        _time += dt;
+        StepAmbience(dt);
+        _time = _flowTime;
         float k = dt * 60f;
         _energy += (_targetEnergy - _energy) * (1f - MathF.Pow(1f - 0.18f, k));
         _targetEnergy *= MathF.Pow(0.94f, k);
@@ -662,6 +785,13 @@ public sealed class FluidBackground : UserControl
 
                 float boost = 1f + e * 0.08f;
                 r *= boost; g *= boost; b *= boost;
+
+                // 氛围（CPU 路径分辨率太低，不画雨雪，只做色调和阴天）
+                float sat = _aSat * (1f - _aOver * 0.55f);
+                float l2 = r * 0.299f + g * 0.587f + b * 0.114f;
+                r = MathF.Max(l2 + (r - l2) * sat, 0f); g = MathF.Max(l2 + (g - l2) * sat, 0f); b = MathF.Max(l2 + (b - l2) * sat, 0f);
+                float bri = _aBright * (1f - _aOver * 0.08f);
+                r *= (1f + 0.20f * _aWarm) * bri; g *= (1f + 0.04f * _aWarm) * bri; b *= (1f - 0.22f * _aWarm) * bri;
 
                 // 很弱的边缘收暗
                 float vx = (uvx - 0.5f), vy = (uvy - 0.5f) * 1.2f;

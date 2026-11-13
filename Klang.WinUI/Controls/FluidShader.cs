@@ -20,8 +20,66 @@ internal readonly partial struct FluidShader(
     float3 color2,
     float3 color3,
     float3 color4,
-    float3 colorBase) : IComputeShader<float4>
+    float3 colorBase,
+    float clock,                                 // 真实时间（秒）：雨雪按它运动，不受时段的流动速度影响
+    float4 tone,                                 // x = 色温（正暖负冷），y = 亮度，z = 饱和度
+    float4 weather,                              // x = 雨，y = 雪，z = 阴天
+    // ---- 雨水（Codrops RainEffect 的水面图，见 RainSimulation）----
+    ReadWriteTexture2D<Rgba32, float4> rainDrizzle,   // 雾珠层（模拟像素，屏幕高 1080）
+    ReadOnlyBuffer<float4> rainRects,                // 大水珠贴图位置：左上 x、y，宽、高（模拟像素）
+    ReadOnlyBuffer<float> rainDepth,                 // 大水珠厚度
+    ReadOnlyBuffer<int> rainTiles,                   // 按 108 像素分块：每块 [数量, 索引...]（按绘制顺序）
+    int rainTilesX,
+    ReadOnlyTexture2D<Rgba32, float4> dropAlpha,     // 水珠形状（RainDropTextures 生成）
+    ReadOnlyTexture2D<Rgba32, float4> dropColor) : IComputeShader<float4>   // 水珠折射方向
 {
+    /// <summary>水面图在模拟像素 sp 处的值：雾珠层打底，再按绘制顺序叠上本块里的大水珠。</summary>
+    private float4 WaterAt(float2 sp)
+    {
+        int2 mp = new int2(Hlsl.Clamp((int)sp.X, 0, rainDrizzle.Width - 1), Hlsl.Clamp((int)sp.Y, 0, rainDrizzle.Height - 1));
+        float4 water = rainDrizzle[mp];
+        int tx = Hlsl.Clamp((int)(sp.X / RainTileSize), 0, rainTilesX - 1);
+        int ty = Hlsl.Clamp((int)(sp.Y / RainTileSize), 0, RainTilesY - 1);
+        int b = (ty * rainTilesX + tx) * RainTileStride;
+        int cnt = rainTiles[b];
+        for (int i = 0; i < cnt; i++)
+        {
+            int idx = rainTiles[b + 1 + i];
+            float4 rc = rainRects[idx];
+            float2 du = (sp - rc.XY) / rc.ZW;
+            if (du.X < 0.0f || du.Y < 0.0f || du.X > 1.0f || du.Y > 1.0f) continue;
+            float sa = dropAlpha.Sample(du).W;
+            if (sa <= 0.0f) continue;
+            float3 sc = dropColor.Sample(du).XYZ;
+            sc.Z = 1.0f - (1.0f - sc.Z) * (1.0f - rainDepth[idx]);       // 原版用“滤色”把厚度叠进蓝色通道
+            float oa = sa + water.W * (1.0f - sa);
+            float3 rgb = (sc * sa + water.XYZ * water.W * (1.0f - sa)) / Hlsl.Max(oa, 1e-5f);
+            water = new float4(rgb, oa);
+        }
+        return water;
+    }
+
+    private const float RainSimH = 1080.0f;
+    private const int RainTileSize = 108;
+    private const int RainTilesY = 10;
+    private const int RainTileStride = 64;
+    private float Hash1(float n) => Hlsl.Frac(Hlsl.Sin(n * 12.9898f) * 43758.5453f);
+
+    private float Hash21(float2 p) => Hlsl.Frac(Hlsl.Sin(Hlsl.Dot(p, new float2(12.9898f, 78.233f))) * 43758.5453f);
+
+    /// <summary>一层飘落的雪：稀疏的柔边圆点，随时间下落并左右轻摆。</summary>
+    private float Snow(float2 q, float t, float scale, float speed, float seed, float density)
+    {
+        float2 st = q * scale + new float2(Hlsl.Sin(t * 0.21f + seed) * 0.5f, t * speed * scale);
+        float2 id = Hlsl.Floor(st);
+        float h = Hash21(id + seed);
+        if (h > density) return 0.0f;
+        float2 f = Hlsl.Frac(st) - 0.5f;
+        float2 pos = (new float2(Hash21(id + seed + 3.1f), Hash21(id + seed + 5.7f)) - 0.5f) * 0.6f;
+        pos.X += Hlsl.Sin(t * 0.7f + h * 40.0f) * 0.12f;
+        float r = 0.05f + 0.06f * Hash21(id + seed + 9.2f);
+        return Hlsl.SmoothStep(r, r * 0.15f, Hlsl.Length(f - pos));
+    }
 
     private float2 Hash(float2 p)
     {
@@ -62,14 +120,9 @@ internal readonly partial struct FluidShader(
         return 1.0f - Hlsl.SmoothStep(r0, r1, Hlsl.Length(p - center));
     }
 
-    public float4 Execute()
+    /// <summary>流体背景在 p 处的颜色（封面五层叠加 + 噪声扰动 + 提饱和 / 压亮度）。下雨时透过水珠要在另一个位置再取一次。</summary>
+    private float3 Scene(float2 p, float t)
     {
-        float2 res = new float2(DispatchSize.X, DispatchSize.Y);
-        float aspect = res.X / Hlsl.Max(1.0f, res.Y);
-        float2 uv = new float2((ThreadIds.X + 0.5f) / res.X, 1.0f - (ThreadIds.Y + 0.5f) / res.Y);
-        float2 p = (uv - 0.5f) * new float2(aspect, 1.0f);
-        float t = time;
-
         // 两级流体扰动：大尺度慢涌 + 小尺度快涌，让颜色边界像液体一样翻卷
         float2 warp = new float2(
             Noise(p * 1.2f + new float2(t * 0.12f, t * 0.12f)),
@@ -147,6 +200,68 @@ internal readonly partial struct FluidShader(
 
         // 随低频能量轻微提亮
         col *= 1.0f + energy * 0.08f;
+
+        return col;
+    }
+
+    public float4 Execute()
+    {
+        float2 res = new float2(DispatchSize.X, DispatchSize.Y);
+        float aspect = res.X / Hlsl.Max(1.0f, res.Y);
+        float2 uv = new float2((ThreadIds.X + 0.5f) / res.X, 1.0f - (ThreadIds.Y + 0.5f) / res.Y);
+        float2 p = (uv - 0.5f) * new float2(aspect, 1.0f);
+        float t = time;
+
+        float2 q = new float2(uv.X * aspect, uv.Y);
+
+        // ---- 雨：水面图（雾珠层 + 按顺序叠上去的大水珠），每个像素：R/G = 折射方向，B = 厚度，A = 水量 ----
+        float4 water = new float4(0.0f, 0.0f, 0.0f, 0.0f);
+        float2 sp = new float2(uv.X * aspect, 1.0f - uv.Y) * RainSimH;   // 模拟像素，y 向下
+        if (weather.X > 0.001f) water = WaterAt(sp);
+        float3 col = Scene(p, t);
+
+        // 原版水面着色：水量 ×10 −3 截成硬边；折射 = (G, R) 偏离 0.5 的方向 × (128 + 厚度 × 384) 像素，取到的景色亮 4%
+        float rainA = 0.0f;
+        if (water.W > 0.0f)
+        {
+            rainA = Hlsl.Saturate(water.W * 10.0f - 3.0f);
+            if (rainA > 0.0f)
+            {
+                float2 refr = (new float2(water.Y, water.X) - 0.5f) * 2.0f;
+                float2 offPx = refr * (128.0f + water.Z * 384.0f);
+                float2 pr = p + new float2(offPx.X, -offPx.Y) / RainSimH;    // 着色器 p 的 y 向上
+                float3 fg = Scene(pr, t) * 1.04f;   // 透明的水：只是折射，看到的景色稍亮一点
+                // 水珠边缘折射角很大，光线偏折得厉害，轮廓看起来略暗（真实水珠的样子，不是加了颜色）
+                float rim = Hlsl.SmoothStep(0.40f, 0.90f, Hlsl.Length(refr));
+                fg *= 1.0f - rim * 0.45f;
+                col = Hlsl.Lerp(col, fg, rainA);
+            }
+        }
+
+        // 氛围：饱和度（阴天再降低）、色温、亮度
+        float sat = tone.Z * (1.0f - weather.Z * 0.55f);
+        float l2 = Hlsl.Dot(col, new float3(0.299f, 0.587f, 0.114f));
+        col = Hlsl.Max(Hlsl.Lerp(new float3(l2, l2, l2), col, sat), new float3(0.0f, 0.0f, 0.0f));
+        col *= new float3(1.0f + 0.20f * tone.X, 1.0f + 0.04f * tone.X, 1.0f - 0.22f * tone.X);
+        col *= tone.Y * (1.0f - weather.Z * 0.08f);
+        col = Hlsl.Lerp(col, new float3(l2 * 0.95f, l2 * 0.98f, l2 * 1.05f), weather.Z * 0.15f);
+
+        // 雨天的玻璃：没有水的地方蒙着一层淡淡的雾（越往上越浓）；水珠和擦过的水路里是清楚的景色
+        if (weather.X > 0.001f)
+        {
+            float fog = weather.X * (0.28f + 0.30f * Hlsl.SmoothStep(0.15f, 1.0f, uv.Y));
+            float lf = Hlsl.Dot(col, new float3(0.299f, 0.587f, 0.114f));
+            float3 fogCol = new float3(lf, lf, lf) * 1.12f + new float3(0.045f, 0.055f, 0.075f);
+            col = Hlsl.Lerp(col, fogCol, fog * (1.0f - rainA));
+        }
+        // 雪：三层不同大小和速度，近大远小
+        if (weather.Y > 0.001f)
+        {
+            float flake = Snow(q, clock, 9.0f, 0.040f, 1.0f, 0.13f) * 0.55f;
+            flake = Hlsl.Max(flake, Snow(q, clock, 14.0f, 0.028f, 7.0f, 0.15f) * 0.35f);
+            flake = Hlsl.Max(flake, Snow(q, clock, 5.0f, 0.060f, 13.0f, 0.07f) * 0.70f);
+            col = Hlsl.Lerp(col, new float3(0.90f, 0.93f, 0.97f), flake * weather.Y * 0.5f);
+        }
 
         // 很弱的边缘收暗
         float vig = Hlsl.SmoothStep(1.35f, 0.35f, Hlsl.Length((uv - 0.5f) * new float2(1.0f, 1.2f)));

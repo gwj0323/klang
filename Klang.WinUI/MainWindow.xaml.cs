@@ -312,6 +312,8 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        WeatherService.Instance.Apply();   // 只有开启了“天气效果”并设置了城市才会联网
+
         this.Closed += (s, e) =>
         {
             SaveWindowAndAudioState();

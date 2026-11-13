@@ -47,6 +47,13 @@ public sealed partial class SettingsDialog : ContentDialog
         LyricBlurSwitch.IsOn = State.LyricDepthBlur;
         WaveformSwitch.IsOn = State.WaveformSeekBar;
         VinylDiscSwitch.IsOn = State.ShowVinylDisc;
+        AmbientTodSwitch.IsOn = State.AmbientTimeOfDay;
+        AmbientWeatherSwitch.IsOn = State.AmbientWeather;
+        WeatherPanel.Visibility = State.AmbientWeather ? Visibility.Visible : Visibility.Collapsed;
+        CityBox.Text = State.WeatherCity;
+        UpdateWeatherStatus();
+        WeatherService.Instance.Updated += OnWeatherUpdated;
+        Closed += (s, e) => WeatherService.Instance.Updated -= OnWeatherUpdated;
         LyricWordMotionSwitch.IsOn = State.LyricWordMotion;
         AutoMetaSwitch.IsOn = State.AutoFetchMetadata;
         SelectByTag(CacheLimitBox, State.NeteaseCacheLimitMb.ToString(), "2048");
@@ -110,6 +117,83 @@ public sealed partial class SettingsDialog : ContentDialog
         StateService.Instance.RequestSave();
         Controls.VinylCoverCard.NotifyVinylDiscSettingChanged();
     }
+
+    #region 沉浸背景氛围
+
+    private void AmbientTodSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.AmbientTimeOfDay = AmbientTodSwitch.IsOn;
+        StateService.Instance.RequestSave();
+    }
+
+    private void AmbientWeatherSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.AmbientWeather = AmbientWeatherSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        WeatherPanel.Visibility = AmbientWeatherSwitch.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        WeatherService.Instance.Apply();
+        UpdateWeatherStatus();
+    }
+
+    private void CityBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; CitySearchBtn_Click(sender, e); }
+    }
+
+    private async void CitySearchBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var name = CityBox.Text.Trim();
+        if (name.Length == 0) return;
+        CitySearchBtn.IsEnabled = false;
+        WeatherStatusText.Text = L.T("正在查找…");
+        try
+        {
+            var places = await WeatherService.SearchAsync(name);
+            CityResults.ItemsSource = places;
+            CityResults.Visibility = places.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+            if (places.Count == 0) WeatherStatusText.Text = L.T("未找到这个城市，请换一种写法");
+            else CityResults.SelectedIndex = 0;   // 触发保存；同名城市可在下拉里改选
+        }
+        catch (Exception ex)
+        {
+            WeatherStatusText.Text = L.T("查找失败：") + ex.Message;
+        }
+        finally
+        {
+            CitySearchBtn.IsEnabled = true;
+        }
+    }
+
+    private void CityResults_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CityResults.SelectedItem is not WeatherService.Place place) return;
+        State.WeatherCity = place.ToString();
+        State.WeatherLat = Math.Round(place.Lat, 2);
+        State.WeatherLon = Math.Round(place.Lon, 2);
+        StateService.Instance.RequestSave();
+        CityBox.Text = place.Name;
+        WeatherService.Instance.Apply();
+        UpdateWeatherStatus();
+    }
+
+    private void OnWeatherUpdated() => DispatcherQueue.SafeEnqueue(UpdateWeatherStatus);
+
+    private void UpdateWeatherStatus()
+    {
+        if (string.IsNullOrEmpty(State.WeatherCity) || State.WeatherLat == null)
+        {
+            WeatherStatusText.Text = L.T("尚未设置城市");
+            return;
+        }
+        var w = WeatherService.Instance.Latest;
+        WeatherStatusText.Text = w == null
+            ? L.F("{0} · 正在获取天气…", State.WeatherCity)
+            : L.F("{0} · {1} · 云量 {2}% · 更新于 {3}", State.WeatherCity, WeatherService.Describe(w.Code), w.CloudCover, w.FetchedAt.ToString("HH:mm"));
+    }
+
+    #endregion
 
     private void WaveformSwitch_Toggled(object sender, RoutedEventArgs e)
     {
