@@ -1398,9 +1398,51 @@ public sealed partial class MainWindow : Window
             var anim = CoverAnimations.GetAnimation(key);
             if (anim == null) return;
             anim.Configuration = new Microsoft.UI.Xaml.Media.Animation.BasicConnectedAnimationConfiguration();
+            ApplyCoverMotionCurves(anim, target);
             if (!anim.TryStart(target)) anim.Cancel();
         }
         catch { }
+    }
+
+    private const int CoverFlightMs = 460;
+
+    /// <summary>
+    /// 封面飞行的运动曲线：横向、纵向、缩放各用一条不同的缓动，而不是默认的匀速直线。
+    /// 横向起步快、很早就接近终点；纵向先慢后快再缓停 —— 两者合起来是一条弧线；
+    /// 缩放略微冲过头再收回，落定时有一点弹性。任何一步不被支持就退回默认动画。
+    /// </summary>
+    private static void ApplyCoverMotionCurves(Microsoft.UI.Xaml.Media.Animation.ConnectedAnimation anim, UIElement target)
+    {
+        try
+        {
+            var c = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(target).Compositor;
+            var dur = TimeSpan.FromMilliseconds(CoverFlightMs);
+
+            var easeX = c.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.16f, 0.9f), new System.Numerics.Vector2(0.2f, 1f));
+            var easeY = c.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.55f, 0f), new System.Numerics.Vector2(0.15f, 1f));
+            var easeScale = c.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.3f, 0.2f), new System.Numerics.Vector2(0.2f, 1.18f));
+
+            var x = c.CreateScalarKeyFrameAnimation();
+            x.Duration = dur;
+            x.InsertExpressionKeyFrame(0f, "StartingValue");
+            x.InsertExpressionKeyFrame(1f, "FinalValue", easeX);
+
+            var y = c.CreateScalarKeyFrameAnimation();
+            y.Duration = dur;
+            y.InsertExpressionKeyFrame(0f, "StartingValue");
+            y.InsertExpressionKeyFrame(1f, "FinalValue", easeY);
+
+            // 缩放分量要用标量动画（系统分别套到 Scale.x / Scale.y 上），用二维向量会被拒绝
+            var s = c.CreateScalarKeyFrameAnimation();
+            s.Duration = dur;
+            s.InsertExpressionKeyFrame(0f, "StartingValue");
+            s.InsertExpressionKeyFrame(1f, "FinalValue", easeScale);
+
+            anim.SetAnimationComponent(Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationComponent.OffsetX, x);
+            anim.SetAnimationComponent(Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationComponent.OffsetY, y);
+            anim.SetAnimationComponent(Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationComponent.Scale, s);
+        }
+        catch (Exception ex) { App.LogError("Cover motion curves", ex.Message); }
     }
 
     private void OpenImmersive()
