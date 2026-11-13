@@ -34,6 +34,7 @@ public sealed partial class SettingsDialog : ContentDialog
         SelectByTag(BackdropComboBox, State.BackdropMaterial, "mica");
         SelectByTag(LatencyComboBox, State.WasapiLatencyMs.ToString(), "50");
         SelectByTag(AutoMixComboBox, State.AutoMix, "roam");
+        SelectByTag(AutoMixLengthComboBox, State.AutoMixLength, "normal");
         // 输出设备列表
         DeviceComboBox.Items.Add(new ComboBoxItem { Content = L.T("系统默认"), Tag = "default" });
         foreach (var d in AudioEngineService.GetOutputDevices())
@@ -45,6 +46,7 @@ public sealed partial class SettingsDialog : ContentDialog
         LyricZoomSwitch.IsOn = State.LyricZoomEmphasis;
         LyricBlurSwitch.IsOn = State.LyricDepthBlur;
         WaveformSwitch.IsOn = State.WaveformSeekBar;
+        VinylDiscSwitch.IsOn = State.ShowVinylDisc;
         LyricWordMotionSwitch.IsOn = State.LyricWordMotion;
         AutoMetaSwitch.IsOn = State.AutoFetchMetadata;
         SelectByTag(CacheLimitBox, State.NeteaseCacheLimitMb.ToString(), "2048");
@@ -99,6 +101,14 @@ public sealed partial class SettingsDialog : ContentDialog
         State.LyricZoomEmphasis = LyricZoomSwitch.IsOn;
         StateService.Instance.RequestSave();
         Controls.LyricsStageControl.NotifyEmphasisChanged();
+    }
+
+    private void VinylDiscSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        State.ShowVinylDisc = VinylDiscSwitch.IsOn;
+        StateService.Instance.RequestSave();
+        Controls.VinylCoverCard.NotifyVinylDiscSettingChanged();
     }
 
     private void WaveformSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -251,6 +261,13 @@ public sealed partial class SettingsDialog : ContentDialog
         AudioEngineService.Instance.LatencyMs = ms;
         StateService.Instance.RequestSave();
         AudioEngineService.Instance.ReopenOutput();
+    }
+
+    private void AutoMixLengthComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || TagOf(AutoMixLengthComboBox) is not string len) return;
+        State.AutoMixLength = len;
+        StateService.Instance.RequestSave();
     }
 
     private void AutoMixComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

@@ -26,6 +26,7 @@ public sealed class CrossfadeSampleProvider : ISampleProvider
     {
         _primary = primary;
         WaveFormat = primary.WaveFormat;
+        InitLowpass();
     }
 
     public MixState State { get { lock (_lock) return _state; } }
@@ -34,7 +35,7 @@ public sealed class CrossfadeSampleProvider : ISampleProvider
     public double Progress { get { lock (_lock) return _fadeFrames > 0 ? Math.Clamp((double)_fadePos / _fadeFrames, 0, 1) : 0; } }
 
     /// <summary>安排一次混音：再过 framesUntilStart 帧开始，持续 fadeFrames 帧。</summary>
-    public bool Schedule(ISampleProvider next, long framesUntilStart, long fadeFrames)
+    public bool Schedule(ISampleProvider next, long framesUntilStart, long fadeFrames, bool bassSwap = false)
     {
         if (next.WaveFormat.SampleRate != WaveFormat.SampleRate || next.WaveFormat.Channels != WaveFormat.Channels) return false;
         lock (_lock)
@@ -44,6 +45,8 @@ public sealed class CrossfadeSampleProvider : ISampleProvider
             _framesUntilStart = Math.Max(0, framesUntilStart);
             _fadeFrames = Math.Max(1, fadeFrames);
             _fadePos = 0;
+            _bassSwap = bassSwap;
+            Array.Clear(_lpA); Array.Clear(_lpB); Array.Clear(_lpA2); Array.Clear(_lpB2);
             _state = MixState.Scheduled;
             return true;
         }
@@ -58,6 +61,35 @@ public sealed class CrossfadeSampleProvider : ISampleProvider
             _next = null; _state = MixState.None;
             return true;
         }
+    }
+
+    // ---- 低频交接 ----
+    // 两首歌的鼓和贝斯同时响会发浑。开启后，淡入淡出期间把每一路拆成低频（约 200 Hz 以下）和其余部分：
+    // 其余部分照常等功率交叉；低频则在中段很短的一段里从旧歌“交给”新歌 —— 任何时刻基本只有一首歌的低音。
+    // 高频 = 原信号 − 低频，所以两部分加起来严格等于原信号，淡入淡出的两端和不开启时完全一样。
+    private bool _bassSwap;
+    private readonly double[] _lpA = new double[8], _lpB = new double[8];   // 每声道 4 个状态（x1 x2 y1 y2）
+    // 第二级：“原信号 − 低频”里还残留一部分低频（滤波器有相位差，减不干净），
+    // 对这部分再滤一次并按低频增益扣掉，交接前后另一首歌的低音才真正被压下去
+    private readonly double[] _lpA2 = new double[8], _lpB2 = new double[8];
+    private double _b0, _b1, _b2, _a1, _a2;
+
+    private void InitLowpass()
+    {
+        double w0 = 2 * Math.PI * 200.0 / WaveFormat.SampleRate;
+        double cos = Math.Cos(w0), alpha = Math.Sin(w0) / (2 * Math.Sqrt(0.5));   // Q = 0.707（巴特沃斯）
+        double a0 = 1 + alpha;
+        _b0 = (1 - cos) / 2 / a0; _b1 = (1 - cos) / a0; _b2 = _b0;
+        _a1 = -2 * cos / a0; _a2 = (1 - alpha) / a0;
+    }
+
+    private double Lowpass(double[] st, int c, double x)
+    {
+        int o = c * 4;
+        double y = _b0 * x + _b1 * st[o] + _b2 * st[o + 1] - _a1 * st[o + 2] - _a2 * st[o + 3];
+        st[o + 1] = st[o]; st[o] = x;
+        st[o + 3] = st[o + 2]; st[o + 2] = y;
+        return y;
     }
 
     public int Read(float[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
@@ -107,10 +139,31 @@ public sealed class CrossfadeSampleProvider : ISampleProvider
             {
                 double t = (double)(pos0 + f) / _fadeFrames;
                 float gOut = (float)Math.Cos(t * Math.PI / 2), gIn = (float)Math.Sin(t * Math.PI / 2);
-                for (int c = 0; c < ch; c++)
+                if (!_bassSwap || ch > 2)
                 {
-                    int i = f * ch + c;
-                    buffer[total + i] = _bufA[i] * gOut + _bufB[i] * gIn;
+                    for (int c = 0; c < ch; c++)
+                    {
+                        int i = f * ch + c;
+                        buffer[total + i] = _bufA[i] * gOut + _bufB[i] * gIn;
+                    }
+                }
+                else
+                {
+                    // 低频在 35% ~ 65% 这一段里完成交接
+                    double u = Math.Clamp((t - 0.35) / 0.30, 0, 1);
+                    u = u * u * (3 - 2 * u);
+                    float bOut = (float)Math.Cos(u * Math.PI / 2), bIn = (float)Math.Sin(u * Math.PI / 2);
+                    for (int c = 0; c < ch; c++)
+                    {
+                        int i = f * ch + c;
+                        float a = _bufA[i], b = _bufB[i];
+                        float lowA = (float)Lowpass(_lpA, c, a), lowB = (float)Lowpass(_lpB, c, b);
+                        float resA = a - lowA, resB = b - lowB;
+                        float highA = resA - (1f - bOut) * (float)Lowpass(_lpA2, c, resA);
+                        float highB = resB - (1f - bIn) * (float)Lowpass(_lpB2, c, resB);
+                        // 低频增益为 1 时 high + low 严格等于原信号，所以淡入淡出的两端和不开启时逐位相同
+                        buffer[total + i] = highA * gOut + highB * gIn + lowA * bOut + lowB * bIn;
+                    }
                 }
             }
             total += samples;

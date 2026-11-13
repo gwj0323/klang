@@ -174,7 +174,11 @@ public class AudioEngineService : IDisposable
     /// 持续 fadeSec（当前曲目时间轴上的秒数）；下一首按 rateRatio 变速，让两首的速度对上。
     /// 不满足条件（格式不支持、时间太近、CUE 分轨等）返回 false，调用方就按正常方式切歌。
     /// </summary>
-    public bool TryScheduleMix(string nextPath, double nextStartSec, double startAtSec, double fadeSec, double rateRatio)
+    /// <param name="bassSwap">淡入淡出期间做低频交接（节拍对齐的混音用）。</param>
+    /// <param name="skipLeadingSilence">下一首从它开头第一个有声音的位置放起（普通交叉淡入淡出用，nextStartSec 被忽略）。</param>
+    /// <param name="nextGainDb">下一首的回放增益：混音过程中总增益从当前这首平滑过渡到它，不再在中途跳变。</param>
+    public bool TryScheduleMix(string nextPath, double nextStartSec, double startAtSec, double fadeSec, double rateRatio,
+        bool bassSwap = false, bool skipLeadingSilence = false, double? nextGainDb = null, double? nextPeak = null)
     {
         var x = _xfade; var reader = _audioFileReader; var st = _stretch;
         if (x == null || reader == null || st == null || MixBusy || _segStart > 0 || _segEnd > 0) return false;
@@ -189,6 +193,7 @@ public class AudioEngineService : IDisposable
         try
         {
             nextReader = new MediaFoundationReader(nextPath);
+            if (skipLeadingSilence) nextStartSec = FindLeadingSound(nextReader);
             nextReader.CurrentTime = TimeSpan.FromSeconds(Math.Max(0, nextStartSec));
             ISampleProvider sp = nextReader.ToSampleProvider();
             if (sp.WaveFormat.Channels > 2) { nextReader.Dispose(); return false; }
@@ -198,10 +203,13 @@ public class AudioEngineService : IDisposable
 
             long until = (long)(untilSec / curRate * R);
             long fade = (long)(fadeSec / curRate * R);
-            if (!x.Schedule(nst, until, fade)) { nextReader.Dispose(); return false; }
+            if (!x.Schedule(nst, until, fade, bassSwap)) { nextReader.Dispose(); return false; }
 
             _pendingNextReader = nextReader; _pendingNextStretch = nst; _pendingNextPath = nextPath;
             _mixAdopted = false;
+            _mixGainFrom = _dspProvider?.TrackGain ?? 1f;
+            _mixGainTo = GainFor(nextGainDb, nextPeak);
+            _mixGainRamp = true;
             return true;
         }
         catch
@@ -211,6 +219,37 @@ public class AudioEngineService : IDisposable
         }
     }
 
+    // 回放增益：混音时两首歌的增益可能不同。以前在界面切到下一首的那一刻直接换增益，听起来是一次音量跳变；
+    // 现在整段淡入淡出期间，总增益跟着进度从这一首的值平滑过渡到下一首的值。
+    private float _mixGainFrom = 1f, _mixGainTo = 1f;
+    private bool _mixGainRamp;
+
+    /// <summary>下一首开头第一个有声音的位置（秒）：最多找前 20 秒，阈值约 −50 dB；找不到返回 0。</summary>
+    private static double FindLeadingSound(WaveStream reader)
+    {
+        try
+        {
+            reader.CurrentTime = TimeSpan.Zero;
+            var sp = reader.ToSampleProvider();
+            int sr = sp.WaveFormat.SampleRate, ch = sp.WaveFormat.Channels;
+            var buf = new float[4096 * ch];
+            long frames = 0, limit = (long)sr * 20;
+            while (frames < limit)
+            {
+                int n = sp.Read(buf.AsSpan());
+                if (n <= 0) break;
+                for (int i = 0; i < n; i++)
+                {
+                    if (Math.Abs(buf[i]) > 0.003f)
+                        return Math.Max(0, (frames + i / ch) / (double)sr - 0.03);   // 往前留 30 毫秒，不切掉起音
+                }
+                frames += n / ch;
+            }
+        }
+        catch { }
+        return 0;
+    }
+
     /// <summary>取消还没开始的混音（用户跳转、切歌时）。</summary>
     public void CancelMix()
     {
@@ -218,6 +257,7 @@ public class AudioEngineService : IDisposable
         {
             try { _pendingNextReader?.Dispose(); } catch { }
             _pendingNextReader = null; _pendingNextStretch = null; _pendingNextPath = null;
+            _mixGainRamp = false;
         }
     }
 
@@ -226,7 +266,7 @@ public class AudioEngineService : IDisposable
         try { _pendingNextReader?.Dispose(); } catch { }
         try { _pendingOldReader?.Dispose(); } catch { }
         _pendingNextReader = null; _pendingOldReader = null; _pendingNextStretch = null; _pendingNextPath = null;
-        _mixAdopted = false; _rampOn = false;
+        _mixAdopted = false; _rampOn = false; _mixGainRamp = false;
         _xfade = null;
     }
 
@@ -234,6 +274,23 @@ public class AudioEngineService : IDisposable
     {
         var x = _xfade;
         if (x == null) return;
+
+        // 回放增益随淡入淡出进度过渡（按分贝线性，即增益按几何插值）
+        if (_mixGainRamp && _dspProvider != null)
+        {
+            var gs = x.State;
+            if (gs == CrossfadeSampleProvider.MixState.Fading)
+            {
+                double p = x.Progress; p = p * p * (3 - 2 * p);
+                _dspProvider.TrackGain = (float)(_mixGainFrom * Math.Pow(_mixGainTo / Math.Max(1e-4f, _mixGainFrom), p));
+            }
+            else if (gs == CrossfadeSampleProvider.MixState.None)
+            {
+                // 淡完了：落到下一首的增益上，之后恢复正常的设置方式
+                _dspProvider.TrackGain = _mixAdopted || _pendingNextReader != null ? _mixGainTo : ComputeTrackGain();
+                _mixGainRamp = false;
+            }
+        }
 
         if (_pendingNextReader != null && !_mixAdopted)
         {
@@ -532,15 +589,23 @@ public class AudioEngineService : IDisposable
     {
         _trackGainDb = gainDb;
         _trackPeak = peak;
+        if (_mixGainRamp)
+        {
+            // 混音进行中（界面在淡到一半时切到了下一首）：不直接换增益，只更新过渡的终点
+            _mixGainTo = ComputeTrackGain();
+            return;
+        }
         if (_dspProvider != null) _dspProvider.TrackGain = ComputeTrackGain();
     }
 
-    private float ComputeTrackGain()
+    private float ComputeTrackGain() => GainFor(_trackGainDb, _trackPeak);
+
+    private float GainFor(double? gainDb, double? trackPeak)
     {
-        if (!ReplayGainEnabled || _trackGainDb is not double db) return 1.0f;
+        if (!ReplayGainEnabled || gainDb is not double db) return 1.0f;
         double gain = Math.Pow(10.0, db / 20.0);
         // 防削波：增益后的峰值不超过满刻度
-        if (_trackPeak is double peak && peak > 0) gain = Math.Min(gain, 1.0 / peak);
+        if (trackPeak is double peak && peak > 0) gain = Math.Min(gain, 1.0 / peak);
         return (float)Math.Clamp(gain, 0.05, 4.0);
     }
 

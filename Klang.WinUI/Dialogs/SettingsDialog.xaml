@@ -134,6 +134,25 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="黑胶唱片" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="播放时，封面后方滑出一张旋转的唱片" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="VinylDiscSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="VinylDiscSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
                                 <TextBlock FontWeight="Medium" Text="波形进度条" />
                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="底栏进度条显示当前曲目的振幅波形；关闭后使用标准滑块" TextWrapping="Wrap" />
                             </StackPanel>
@@ -323,8 +342,8 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
-                                <TextBlock FontWeight="Medium" Text="节拍对齐的自动混音" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="临近结束时，在节拍点与下一首交叉淡入淡出。两首速度相差超过 8% 时不混音。" TextWrapping="Wrap" />
+                                <TextBlock FontWeight="Medium" Text="自动混音" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="歌曲临近结束时与下一首交叉淡入淡出。速度相差 8% 以内时对齐节拍并做低频交接；否则做普通的交叉淡入淡出，并跳过首尾的静音。" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox
                                 x:Name="AutoMixComboBox"
@@ -334,6 +353,27 @@
                                 <ComboBoxItem Content="关闭" Tag="off" />
                                 <ComboBoxItem Content="仅漫游模式" Tag="roam" />
                                 <ComboBoxItem Content="所有播放模式" Tag="all" />
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="混音时长" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="对齐节拍时取最接近的整小节（4 / 8 / 16 / 32 拍）；两首调性不相容时自动减半。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox
+                                x:Name="AutoMixLengthComboBox"
+                                Grid.Column="1"
+                                Width="150"
+                                SelectionChanged="AutoMixLengthComboBox_SelectionChanged">
+                                <ComboBoxItem Content="短（约 4 秒）" Tag="short" />
+                                <ComboBoxItem Content="标准（约 8 秒）" Tag="normal" />
+                                <ComboBoxItem Content="长（约 12 秒）" Tag="long" />
                             </ComboBox>
                         </Grid>
                     </Border>

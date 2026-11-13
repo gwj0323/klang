@@ -22,6 +22,7 @@ public sealed partial class VinylCoverCard : UserControl
     // 所有会持续或频繁更新的动画都放在合成层（跑在合成线程，跟显示器刷新率走），界面线程只做必要的逻辑：
     // 唱片自转 / 滑出、封面切换过渡用合成动画；频谱每帧只改合成层的缩放 / 位移，不触发布局。
     private readonly Visual _discVisual;
+    private readonly Visual _labelVisual;   // 唱片中心的贴纸：只有它旋转
     private readonly Visual _jacketVisual;
     private readonly Visual _metaVisual;
     private readonly Compositor _compositor;
@@ -51,7 +52,12 @@ public sealed partial class VinylCoverCard : UserControl
         ElementCompositionPreview.GetElementVisual(SpectrumCanvas).Opacity = 0f;   // 未播放时不显示频谱
         ElementCompositionPreview.SetIsTranslationEnabled(VinylDisc, true);
         ElementCompositionPreview.SetIsTranslationEnabled(MetaInfoPanel, true);
-        _discVisual.CenterPoint = new Vector3(120f, 120f, 0f);   // 以圆心自转，绝不偏心
+        // 唱片一直留在界面树里，未播放时只是全透明并藏在封套后面。
+        // 以前未播放时把它设成 Collapsed：启动后第一次播放时，“变为可见”和“开始滑出动画”发生在同一刻，
+        // 动画会被丢掉，结果唱片一直不出现（暂停再播放一次才出来）。
+        _discVisual.Opacity = 0f;
+        _labelVisual = ElementCompositionPreview.GetElementVisual(DiscLabel);
+        _labelVisual.CenterPoint = new Vector3(48f, 48f, 0f);    // 贴纸以自己的圆心自转
         _jacketVisual.CenterPoint = new Vector3(130f, 130f, 0f);
 
         // 频谱：柱子固定高度，用合成层的 Scale.Y 表示高度，峰值点用 Translation.Y 定位
@@ -74,6 +80,8 @@ public sealed partial class VinylCoverCard : UserControl
         for (int i = 0; i < NUM_BARS; i++) ApplyBar(i, 0.04f, 0.04f);
 
         Loaded += (s, e) => ApplySpectrumBrush();
+        Loaded += (s, e) => { VinylDiscSettingChanged -= OnVinylDiscSettingChanged; VinylDiscSettingChanged += OnVinylDiscSettingChanged; };
+        Unloaded += (s, e) => VinylDiscSettingChanged -= OnVinylDiscSettingChanged;
         ActualThemeChanged += (s, e) => ApplySpectrumBrush();
     }
 
@@ -100,35 +108,113 @@ public sealed partial class VinylCoverCard : UserControl
             _spin.Duration = TimeSpan.FromSeconds(12);
             _spin.IterationBehavior = AnimationIterationBehavior.Forever;
         }
-        _discVisual.StartAnimation("RotationAngleInDegrees", _spin);
+        _labelVisual.StartAnimation("RotationAngleInDegrees", _spin);
     }
 
-    private void StopSpin() => _discVisual.StopAnimation("RotationAngleInDegrees");
+    private void StopSpin() => _labelVisual.StopAnimation("RotationAngleInDegrees");
+
+    /// <summary>播放时唱片从封套后面滑出的距离：要露出一部分中心贴纸（封面）才看得出它在转。</summary>
+    private const float DiscSlide = 110f;
+
+    // ---------------- 盘面绘制（静止层） ----------------
+
+    private void DiscCanvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
+    {
+        var ds = args.DrawingSession;
+        float w = (float)sender.ActualWidth, h = (float)sender.ActualHeight;
+        if (w < 10 || h < 10) return;
+        var c = new Vector2(w / 2f, h / 2f);
+        float R = Math.Min(w, h) / 2f - 0.5f;
+        static Windows.UI.Color A(byte a, byte v) => Windows.UI.Color.FromArgb(a, v, v, v);
+
+        using var disc = Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreateCircle(sender, c, R);
+        using (ds.CreateLayer(1f, disc))
+        {
+            // 底色：中心略亮，边缘更深
+            using (var bg = new Microsoft.Graphics.Canvas.Brushes.CanvasRadialGradientBrush(sender, A(255, 34), A(255, 12)) { Center = c, RadiusX = R, RadiusY = R })
+                ds.FillCircle(c, R, bg);
+
+            // 细密的纹路：深浅按固定的伪随机序列变化，看起来不像尺子画的；三处留出曲目之间的空白带
+            float label = 48f, grooveStart = label + 9f, grooveEnd = R - 5f;
+            float[] gaps = { grooveStart + (grooveEnd - grooveStart) * 0.30f, grooveStart + (grooveEnd - grooveStart) * 0.56f, grooveStart + (grooveEnd - grooveStart) * 0.80f };
+            uint seed = 12345;
+            for (float r = grooveStart; r < grooveEnd; r += 1.35f)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                bool inGap = false;
+                foreach (var g in gaps) if (Math.Abs(r - g) < 1.8f) inGap = true;
+                if (inGap) continue;
+                byte a = (byte)(10 + (seed >> 24) % 22);
+                ds.DrawCircle(c, r, A(a, 255), 0.6f);
+                ds.DrawCircle(c, r + 0.65f, Windows.UI.Color.FromArgb((byte)(a + 30), 0, 0, 0), 0.6f);
+            }
+            foreach (var g in gaps) ds.DrawCircle(c, g, A(16, 255), 2.4f);
+
+            // 固定方向的高光：左上和右下各一道扇形反光，另有两道很弱的次级反光
+            using (var ring = Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreateCircle(sender, c, grooveEnd + 3f)
+                       .CombineWith(Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreateCircle(sender, c, label + 3f), Matrix3x2.Identity, Microsoft.Graphics.Canvas.Geometry.CanvasGeometryCombine.Exclude))
+            using (ds.CreateLayer(1f, ring))
+            {
+                const float step = 1.5f;
+                for (float deg = 0; deg < 360; deg += step)
+                {
+                    static float Lobe(float d, float center, float width)
+                    {
+                        float x = Math.Abs(d - center) % 360f; if (x > 180f) x = 360f - x;
+                        return MathF.Exp(-(x / width) * (x / width));
+                    }
+                    float v = 58f * (Lobe(deg, 225f, 15f) + Lobe(deg, 45f, 15f)) + 14f * (Lobe(deg, 135f, 24f) + Lobe(deg, 315f, 24f));
+                    if (v < 1f) continue;
+                    float a0 = deg * MathF.PI / 180f, a1 = (deg + step + 0.2f) * MathF.PI / 180f;
+                    var d0 = new Vector2(MathF.Cos(a0), MathF.Sin(a0)); var d1 = new Vector2(MathF.Cos(a1), MathF.Sin(a1));
+                    using var pb = new Microsoft.Graphics.Canvas.Geometry.CanvasPathBuilder(sender);
+                    pb.BeginFigure(c);
+                    pb.AddLine(c + d0 * (R + 2f));
+                    pb.AddLine(c + d1 * (R + 2f));
+                    pb.EndFigure(Microsoft.Graphics.Canvas.Geometry.CanvasFigureLoop.Closed);
+                    using var wedge = Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreatePath(pb);
+                    ds.FillGeometry(wedge, A((byte)Math.Min(255f, v), 255));
+                }
+            }
+
+            // 贴纸外侧的光滑区和盘缘
+            ds.DrawCircle(c, label + 4.5f, A(20, 255), 7f);
+            ds.DrawCircle(c, R - 1.2f, A(46, 255), 1.2f);
+            ds.DrawCircle(c, R - 3.2f, Windows.UI.Color.FromArgb(120, 0, 0, 0), 2.4f);
+
+            // 封套投在唱片上的阴影：唱片滑出到位后，封套右边缘正好在盘面的这个位置
+            float edge = (float)(JacketCard.Width - VinylDisc.Margin.Left) - DiscSlide;
+            using var shadow = new Microsoft.Graphics.Canvas.Brushes.CanvasLinearGradientBrush(sender, Windows.UI.Color.FromArgb(150, 0, 0, 0), Windows.UI.Color.FromArgb(0, 0, 0, 0))
+            {
+                StartPoint = new Vector2(edge, 0), EndPoint = new Vector2(edge + 34f, 0)
+            };
+            ds.FillRectangle(edge - 4f, 0, 40f, h, shadow);
+        }
+    }
+
+    /// <summary>设置里切换“黑胶唱片”后，所有封面卡片立即按新设置显示或收起唱片。</summary>
+    public static event Action? VinylDiscSettingChanged;
+    public static void NotifyVinylDiscSettingChanged() => VinylDiscSettingChanged?.Invoke();
+
+    private void OnVinylDiscSettingChanged() =>
+        DispatcherQueue.SafeEnqueue(() => SlideDisc(_isPlaying && Services.StateService.Instance.State.ShowVinylDisc));
 
     private void SlideDisc(bool show)
     {
         var ease = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 1f), new Vector2(0.3f, 1f));
         var dur = TimeSpan.FromMilliseconds(520);
 
-        if (show) VinylDisc.Visibility = Visibility.Visible;
-
         var x = _compositor.CreateScalarKeyFrameAnimation();
         x.InsertExpressionKeyFrame(0f, "this.StartingValue");
-        x.InsertKeyFrame(1f, show ? 48f : 0f, ease);
+        x.InsertKeyFrame(1f, show ? DiscSlide : 0f, ease);
         x.Duration = dur;
         var op = _compositor.CreateScalarKeyFrameAnimation();
         op.InsertExpressionKeyFrame(0f, "this.StartingValue");
         op.InsertKeyFrame(1f, show ? 1f : 0f, ease);
         op.Duration = TimeSpan.FromMilliseconds(360);
 
-        var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
         _discVisual.StartAnimation("Translation.X", x);
         _discVisual.StartAnimation("Opacity", op);
-        batch.End();
-        batch.Completed += (s, e) =>
-        {
-            if (!_isPlaying && !show) VinylDisc.Visibility = Visibility.Collapsed;
-        };
     }
 
     #endregion
@@ -249,7 +335,7 @@ public sealed partial class VinylCoverCard : UserControl
             for (int i = 0; i < NUM_BARS; i++) _targets[i] = 0.04f;
         }
 
-        SlideDisc(isPlaying);
+        SlideDisc(isPlaying && Services.StateService.Instance.State.ShowVinylDisc);
 
         // 频谱只在播放时出现：暂停 / 没有曲目时淡出隐藏
         var specVisual = ElementCompositionPreview.GetElementVisual(SpectrumCanvas);
@@ -484,6 +570,19 @@ public sealed partial class VinylCoverCard : UserControl
         {
             CoverImage.Visibility = Visibility.Collapsed;
             FallbackPanel.Visibility = Visibility.Visible;
+        }
+
+        // 唱片中心的贴纸跟着换成这张封面
+        if (hasCover && CoverImage.Source != null)
+        {
+            DiscLabelBrush.ImageSource = CoverImage.Source;
+            DiscLabelCover.Visibility = Visibility.Visible;
+            DiscLabelIcon.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            DiscLabelCover.Visibility = Visibility.Collapsed;
+            DiscLabelIcon.Visibility = Visibility.Visible;
         }
 
         bool skip = SkipNextCrossfade;

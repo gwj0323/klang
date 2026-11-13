@@ -522,7 +522,8 @@ public sealed partial class MainWindow : Window
         _playSeq++;
         if (track.IsOnline)
         {
-            _ = PlayOnlineAsync(track, autoPlay);
+            // 混音接管过来的云端曲目：引擎已经在播了，这里只补歌词、封面等，不能再停掉重播
+            _ = PlayOnlineAsync(track, autoPlay, adopted: _adoptingMix);
             return;
         }
 
@@ -615,7 +616,7 @@ public sealed partial class MainWindow : Window
     private static bool IsNeteaseLoggedIn() => Services.Netease.NeteaseService.Instance.IsLoggedIn;
 
     /// <summary>云端曲目：取直链并下载缓存后播放，同时异步加载歌词。后点的曲目会取消先前的请求。</summary>
-    private async System.Threading.Tasks.Task PlayOnlineAsync(TrackItem track, bool autoPlay)
+    private async System.Threading.Tasks.Task PlayOnlineAsync(TrackItem track, bool autoPlay, bool adopted = false)
     {
         _onlineCts?.Cancel();
         _onlineStatus = "";
@@ -627,10 +628,13 @@ public sealed partial class MainWindow : Window
 
         // 歌词与音源并行获取（淡出旧曲的同时就开始请求）
         var lyricTask = netease.GetLyricsAsync(track.NeteaseId, ct);
-        BottomTransportBar.UpdateLyricSnippet(autoPlay ? L.T("正在获取云端音源…") : L.T("云端曲目"));
+        if (!adopted)
+        {
+            BottomTransportBar.UpdateLyricSnippet(autoPlay ? L.T("正在获取云端音源…") : L.T("云端曲目"));
 
-        await AudioEngineService.Instance.FadeOutAndStopAsync();
-        if (ct.IsCancellationRequested || seq != _playSeq) return;
+            await AudioEngineService.Instance.FadeOutAndStopAsync();
+            if (ct.IsCancellationRequested || seq != _playSeq) return;
+        }
 
         try
         {
@@ -647,9 +651,9 @@ public sealed partial class MainWindow : Window
             else
             {
                 RefreshTrackCover(track);
-                if (autoPlay && seq == _playSeq) AudioEngineService.Instance.Play(track.FilePath);
+                if (!adopted && autoPlay && seq == _playSeq) AudioEngineService.Instance.Play(track.FilePath);
                 _ = LoadWaveformAsync(track);   // 云端音源缓存到本地后才有波形
-                BottomTransportBar.UpdateLyricSnippet(track.FormatBadge);
+                if (!adopted) BottomTransportBar.UpdateLyricSnippet(track.FormatBadge);
             }
 
             // 歌词与音源是否可用无关，都照常显示
@@ -794,6 +798,7 @@ public sealed partial class MainWindow : Window
 
 
     private TrackItem? _mixNext;
+    private MixPlan? _mixPlan;
     private string? _plannedFromId;
     private bool _adoptingMix;
     private bool _planning;
@@ -805,7 +810,9 @@ public sealed partial class MainWindow : Window
         if (mode == "off" || _planning || _currentTrack == null || _playMode == "loop_single") return;
         if (mode == "roam" && _playMode != "roam") return;
         var a = _currentTrack;
-        if (a.IsOnline || a.IsCueTrack || a.Bpm <= 0 || _plannedFromId == a.Id) return;
+        if (a.IsCueTrack || _plannedFromId == a.Id) return;
+        // 云端曲目播放的是缓存到本地的文件，同样可以混；还没有本地文件就不混
+        if (string.IsNullOrEmpty(a.FilePath) || !System.IO.File.Exists(a.FilePath)) return;
         var engine = AudioEngineService.Instance;
         if (!engine.IsPlaying || engine.MixBusy) return;
         double remaining = total - current;
@@ -822,20 +829,49 @@ public sealed partial class MainWindow : Window
                 next = PickNextTrack(out var reason, out var byRoam);
                 if (next != null) { _preChosenNext = next; _preChosenReason = reason; _preChosenByRoam = byRoam; }
             }
-            if (next == null || next == a || next.IsOnline || next.IsCueTrack || next.IsMissing) return;
+            if (next == null || next == a || next.IsCueTrack || next.IsMissing) return;
 
-            // 下一首还没分析过：现在补一下（解码一首歌一般不到 1 秒）
-            if (!next.RhythmDone)
+            // 下一首是云端曲目：要等预缓冲把它下载到本地。还没下完就先不算“已规划”，稍后再试；
+            // 剩余时间不多了还没好，就放弃混音，照常切歌
+            if (next.IsOnline)
             {
-                var res = await System.Threading.Tasks.Task.Run(() => { try { return RhythmAnalysisService.Analyze(next.FilePath, next.Duration); } catch { return null; } });
-                RhythmAnalysisService.Apply(next, res);
+                var netease = Services.Netease.NeteaseService.Instance;
+                if (!netease.IsCached(next))
+                {
+                    netease.Prefetch(next);
+                    if (remaining > 12) _plannedFromId = null;
+                    return;
+                }
+                if (string.IsNullOrEmpty(next.FilePath) || !System.IO.File.Exists(next.FilePath))
+                    await netease.ResolveAsync(next, System.Threading.CancellationToken.None);   // 已缓存：只是把本地路径写到曲目上
+            }
+            if (string.IsNullOrEmpty(next.FilePath) || !System.IO.File.Exists(next.FilePath)) return;
+
+            // 还没分析过节拍的（云端曲目、刚导入的歌）：现在补一下（解码一首歌一般不到 1 秒）
+            foreach (var t in new[] { a, next })
+            {
+                if (t.RhythmDone) continue;
+                var res = await System.Threading.Tasks.Task.Run(() => { try { return RhythmAnalysisService.Analyze(t.FilePath, t.Duration); } catch { return null; } });
+                RhythmAnalysisService.Apply(t, res);
             }
             if (_currentTrack != a || !engine.IsPlaying) return;
 
-            var plan = MixPlanner.Plan(a, next, engine.CurrentTime, engine.TotalDuration);
-            if (plan == null) return;
-            if (engine.TryScheduleMix(next.FilePath, plan.NextStart, plan.StartAt, plan.FadeSec, plan.RateRatio))
-                _mixNext = next;
+            // 先试对拍混音；对不上（速度差太多、没有稳定节拍）就退回普通的交叉淡入淡出
+            string len = State.AutoMixLength;
+            var plan = MixPlanner.Plan(a, next, engine.CurrentTime, engine.TotalDuration, len);
+            bool ok;
+            if (plan != null)
+            {
+                ok = engine.TryScheduleMix(next.FilePath, plan.NextStart, plan.StartAt, plan.FadeSec, plan.RateRatio,
+                    bassSwap: true, skipLeadingSilence: false, nextGainDb: next.ReplayGainDb, nextPeak: next.ReplayPeak);
+            }
+            else
+            {
+                plan = MixPlanner.PlanPlain(a, engine.CurrentTime, engine.TotalDuration, len);
+                ok = plan != null && engine.TryScheduleMix(next.FilePath, 0, plan.StartAt, plan.FadeSec, 1.0,
+                    bassSwap: false, skipLeadingSilence: true, nextGainDb: next.ReplayGainDb, nextPeak: next.ReplayPeak);
+            }
+            if (ok) { _mixNext = next; _mixPlan = plan; }
         }
         catch { }
         finally { _planning = false; }
@@ -853,7 +889,10 @@ public sealed partial class MainWindow : Window
         _adoptingMix = true;
         try { PlayTrack(next); }
         finally { _adoptingMix = false; }
-        string mixText = L.F("节拍混音 · {0:0} BPM", next.Bpm) + (string.IsNullOrEmpty(next.Camelot) ? "" : " · " + next.Camelot);
+        var mp = _mixPlan; _mixPlan = null;
+        string mixText = mp != null && !mp.BeatMatched
+            ? L.T("交叉淡入淡出")
+            : L.F("节拍混音 · {0:0} BPM", next.Bpm) + (string.IsNullOrEmpty(next.Camelot) ? "" : " · " + next.Camelot);
         BottomTransportBar.UpdateLyricSnippet(reason != null ? L.T("漫游 · ") + reason + "  ·  " + mixText : mixText);
     }
 

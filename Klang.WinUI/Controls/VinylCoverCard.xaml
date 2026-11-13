@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml"
     UseLayoutRounding="True"
     mc:Ignorable="d">
 
@@ -17,53 +18,52 @@
                 Height="270"
                 HorizontalAlignment="Center">
 
-                <!-- [底层] 真实黑胶唱片 (Vinyl LP Disc)：
-                     1. RenderTransformOrigin="0.5,0.5" 确保以圆心为自转轴心，绝不产生偏心乱转！
-                     2. RotateTransform 位于 TranslateTransform 之前，确保原地匀速自转后再向右平移！
-                     3. 未播放时绝对隐藏在封套后方，播放时丝滑滑出 48px -->
-                <Border
+                <!-- [底层] 黑胶唱片。结构：
+                     · VinylDisc 整体负责滑出 / 收回和淡入淡出，本身不旋转；
+                     · DiscCanvas 画盘面（底色、细密纹路、曲目间隔、固定方向的高光、封套投下的阴影）——
+                       真实唱片的反光位置由光源决定，不随唱片转动，所以这一层是静止的；
+                     · DiscLabel 是中心贴纸（用专辑封面），只有它在转。 -->
+                <Grid
                     x:Name="VinylDisc"
                     Width="240"
                     Height="240"
                     Margin="10,0,0,0"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
-                    Background="#16171A"
-                    BorderBrush="#25272B"
-                    BorderThickness="1"
-                    CornerRadius="120"
-                    Opacity="0"
-                    Visibility="Collapsed">
+                    IsHitTestVisible="False">
 
-                    <!-- 黑胶唱片同心微凹槽与中心转轴 -->
-                    <Grid>
-                        <!-- 外圈同心微凹槽环 -->
-                        <Border Width="212" Height="212" BorderBrush="#30333A" BorderThickness="1" CornerRadius="106" Opacity="0.35" />
-                        <Border Width="182" Height="182" BorderBrush="#30333A" BorderThickness="1" CornerRadius="91" Opacity="0.30" />
-                        <Border Width="152" Height="152" BorderBrush="#30333A" BorderThickness="1" CornerRadius="76" Opacity="0.25" />
-                        <Border Width="122" Height="122" BorderBrush="#30333A" BorderThickness="1" CornerRadius="61" Opacity="0.20" />
+                    <canvas:CanvasControl x:Name="DiscCanvas" Draw="DiscCanvas_Draw" />
 
-                        <!-- 黑胶中心彩胶贴纸 (Label) -->
-                        <Border
-                            Width="84"
-                            Height="84"
-                            Background="{ThemeResource AccentFillColorDefaultBrush}"
-                            BorderBrush="#111113"
-                            BorderThickness="2"
-                            CornerRadius="42">
-                            <Grid>
-                                <FontIcon FontSize="16" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" Glyph="&#xEC4F;" />
-                                <!-- 中心转轴孔 (Spindle Hole) -->
-                                <Border
-                                    Width="12"
-                                    Height="12"
-                                    Background="#111113"
-                                    CornerRadius="6" />
-                            </Grid>
-                        </Border>
+                    <Grid
+                        x:Name="DiscLabel"
+                        Width="96"
+                        Height="96"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                        <!-- 没有封面时的贴纸：强调色 -->
+                        <Ellipse Fill="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <FontIcon
+                            x:Name="DiscLabelIcon"
+                            Margin="0,0,0,44"
+                            FontSize="13"
+                            Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                            Glyph="&#xEC4F;" />
+                        <!-- 专辑封面裁成圆形作贴纸 -->
+                        <Ellipse x:Name="DiscLabelCover" Visibility="Collapsed">
+                            <Ellipse.Fill>
+                                <ImageBrush x:Name="DiscLabelBrush" Stretch="UniformToFill" />
+                            </Ellipse.Fill>
+                        </Ellipse>
+                        <!-- 贴纸边缘的压痕与中心轴孔 -->
+                        <Ellipse Stroke="#66000000" StrokeThickness="1.5" />
+                        <Ellipse
+                            Width="10"
+                            Height="10"
+                            Fill="#0B0B0D"
+                            Stroke="#40FFFFFF"
+                            StrokeThickness="0.8" />
                     </Grid>
-                </Border>
-
+                </Grid>
                 <!-- [顶层] 唱片封套 (Jacket Card)：实心遮蔽底色，彻底杜绝底层黑胶透光穿帮 -->
                 <Border
                     x:Name="JacketCard"

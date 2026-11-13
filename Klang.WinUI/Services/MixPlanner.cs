@@ -9,7 +9,11 @@ public sealed record MixPlan(
     double FadeSec,        // 淡入淡出持续多久（当前这首的时间轴上）
     double NextStart,      // 下一首从它的哪个拍点开始放（秒）
     double RateRatio,      // 下一首相对当前播放速度的变速比，让两首的速度一致
-    int Beats);
+    int Beats,             // 混了几拍；0 = 不对拍的普通交叉淡入淡出
+    bool KeyClash = false) // 两首调性不相容，已经把混音缩短
+{
+    public bool BeatMatched => Beats > 0;
+}
 
 /// <summary>
 /// 决定“在哪个拍点开始混、混多久、下一首要不要变速”。
@@ -21,7 +25,32 @@ public static class MixPlanner
 {
     public const double MaxTempoChange = 0.08;
 
-    public static MixPlan? Plan(TrackItem a, TrackItem b, double nowSec, double durationA)
+    /// <summary>混音时长档位对应的目标秒数：对拍混音 / 普通交叉淡入淡出。</summary>
+    private static (double Beat, double Plain) TargetSeconds(string? length) => length switch
+    {
+        "short" => (4.5, 4.0),
+        "long" => (13.0, 11.0),
+        _ => (8.0, 7.0)
+    };
+
+    /// <summary>
+    /// 两首歌没法对拍（速度差太多、其中一首没有稳定节拍）时的退路：普通的等功率交叉淡入淡出。
+    /// 从当前这首“真正有声音的结尾”往前留出一段开始淡出，下一首由引擎从它第一个有声音的位置放起，
+    /// 所以结尾和开头的静音都不会被播出来。
+    /// </summary>
+    public static MixPlan? PlanPlain(TrackItem a, double nowSec, double durationA, string? length)
+    {
+        double fade = TargetSeconds(length).Plain;
+        double end = a.MixEnd > 0 ? Math.Min(a.MixEnd, durationA) : durationA;
+        // 歌太短时把淡入淡出压短，至少留 2.5 秒
+        fade = Math.Min(fade, Math.Max(2.5, durationA * 0.15));
+        double start = end - 0.3 - fade;
+        if (start < nowSec + 2.5) return null;
+        if (start + fade > durationA - 0.1) return null;
+        return new MixPlan(start, fade, 0, 1.0, 0);
+    }
+
+    public static MixPlan? Plan(TrackItem a, TrackItem b, double nowSec, double durationA, string? length = null)
     {
         if (a.Bpm <= 0 || b.Bpm <= 0) return null;
 
@@ -36,10 +65,18 @@ public static class MixPlanner
         if (bestRatio <= 0) return null;
 
         double beat = 60.0 / a.Bpm;
-        int beats = 8;
-        double fade = beats * beat;
-        if (fade > 12) { beats = 4; fade = beats * beat; }
-        else if (fade < 5) { beats = 16; fade = Math.Min(12, beats * beat); }
+        // 按档位的目标时长，取最接近的 4 / 8 / 16 / 32 拍（整小节，听起来才不突兀）
+        double target = TargetSeconds(length).Beat;
+        int beats = 8; double bestDiff = double.MaxValue;
+        foreach (int n in new[] { 4, 8, 16, 32 })
+        {
+            double diff = Math.Abs(n * beat - target);
+            if (diff < bestDiff) { bestDiff = diff; beats = n; }
+        }
+        // 调性不相容：两首歌的和声同时响的时间越短越好，缩到一半（至少 4 拍）
+        bool clash = !string.IsNullOrEmpty(a.Camelot) && !string.IsNullOrEmpty(b.Camelot) && !KeysCompatible(a.Camelot, b.Camelot);
+        if (clash && beats > 4) beats /= 2;
+        double fade = Math.Clamp(beats * beat, 2.0, 18.0);
 
         double end = a.MixEnd > 0 ? Math.Min(a.MixEnd, durationA) : durationA;
         // 最后一个能放完整段淡入淡出的拍点
@@ -49,7 +86,7 @@ public static class MixPlanner
         if (start < nowSec + 2.5) return null;        // 来不及准备了（或者这首太短）
         if (start + fade > durationA - 0.2) return null;
 
-        return new MixPlan(start, fade, Math.Max(0, b.FirstBeat), bestRatio, beats);
+        return new MixPlan(start, fade, Math.Max(0, b.FirstBeat), bestRatio, beats, clash);
     }
 
     /// <summary>两首歌“衔接得顺不顺”的先验分（给漫游模式选下一首时加一点权重）：速度接近、调性相容。</summary>
