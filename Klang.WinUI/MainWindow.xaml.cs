@@ -315,6 +315,7 @@ public sealed partial class MainWindow : Window
         this.Closed += (s, e) =>
         {
             SaveWindowAndAudioState();
+            LibraryService.Instance.FlushPendingSave();
             StateService.Instance.Flush();
             _media.Dispose();
             _desktopLyricWindow?.Close();

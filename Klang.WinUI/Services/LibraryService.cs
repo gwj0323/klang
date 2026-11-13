@@ -148,9 +148,40 @@ public class LibraryService
         };
     }
 
-    /// <summary>把当前曲库写入状态并请求落盘。</summary>
+    private bool _saveQueued;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveTimer;
+
+    /// <summary>
+    /// 请求保存曲库（界面线程调用）。1.5 秒内的多次请求合并成一次：
+    /// 导入大量歌曲后，三个后台分析服务每处理几首就要求保存一次，每次都要把整个曲库重新转换一遍，
+    /// 曲库上万首时会把界面线程占满。
+    /// </summary>
     public void SaveLibrary()
     {
+        var dq = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (dq == null) { SaveLibraryNow(); return; }
+        if (_saveQueued) return;
+        _saveQueued = true;
+        if (_saveTimer == null)
+        {
+            _saveTimer = dq.CreateTimer();
+            _saveTimer.IsRepeating = false;
+            _saveTimer.Interval = TimeSpan.FromMilliseconds(1500);
+            _saveTimer.Tick += (s, e) => SaveLibraryNow();
+        }
+        _saveTimer.Start();
+    }
+
+    /// <summary>立即把曲库写入状态（退出前调用，确保合并中的保存不丢）。</summary>
+    public void FlushPendingSave()
+    {
+        if (_saveQueued) SaveLibraryNow();
+    }
+
+    private void SaveLibraryNow()
+    {
+        _saveQueued = false;
+        _saveTimer?.Stop();
         var list = new List<SavedTrack>(Tracks.Count + _unavailable.Count);
         foreach (var t in Tracks)
         {
@@ -232,11 +263,85 @@ public class LibraryService
         CrashReporter.Note("导入文件夹：" + folderPath);
         var byId = new Dictionary<string, TrackItem>();
         foreach (var t in Tracks) byId[t.Id] = t;
-        var scanned = await ScanFolderAsync(folderPath, byId);
 
         var known = new HashSet<string>(byId.Keys);
         var added = new List<TrackItem>();
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        // 边扫描边并入曲库：以前要等整个文件夹扫完才一次性加入并保存，
+        // 几万首要好几分钟，期间界面上什么都没有，中途关掉或崩溃就全部白扫
+        var sink = new System.Collections.Concurrent.ConcurrentQueue<TrackItem>();
+        var progress = new ScanCounter();
+        var scanTask = ScanFolderAsync(folderPath, byId, sink, progress);
+        var sinceSave = System.Diagnostics.Stopwatch.StartNew();
+        bool folderRemembered = false;
+        IsScanning = true;
+        try
+        {
+            while (true)
+            {
+                bool finished = await Task.WhenAny(scanTask, Task.Delay(400)) == scanTask;
+                var batch = new List<TrackItem>();
+                while (sink.TryDequeue(out var t)) batch.Add(t);
+                if (batch.Count > 0)
+                {
+                    int before = added.Count;
+                    MergeScanned(batch, byId, known, added, now);
+                    if (!folderRemembered) { RememberFolder(folderPath); folderRemembered = true; }
+                    if (added.Count > before) TracksMerged?.Invoke(added.GetRange(before, added.Count - before));
+                    if (sinceSave.ElapsedMilliseconds > 5000) { Reindex(); SaveLibraryNow(); sinceSave.Restart(); }
+                }
+                ScanProgress?.Invoke(new ScanStatus(folderPath, progress.Done, progress.Total, added.Count, false));
+                if (finished) break;
+            }
+            await scanTask;
+        }
+        finally
+        {
+            IsScanning = false;
+            ScanProgress?.Invoke(new ScanStatus(folderPath, progress.Done, progress.Total, added.Count, true));
+        }
+
+        RememberFolder(folderPath);
+        Reindex();
+        SaveLibraryNow();
+        RestartWatching();
+        AudioFeatureService.Instance.Enqueue(added);
+        QualityAnalysisService.Instance.Enqueue(added);
+        RhythmAnalysisService.Instance.Enqueue(added);
+        CrashReporter.Note($"导入完成：{folderPath}，新增 {added.Count} 首");
+        return added;
+    }
+
+    private void RememberFolder(string folderPath)
+    {
+        if (!State.WatchedFolders.Contains(folderPath, StringComparer.OrdinalIgnoreCase))
+            State.WatchedFolders.Add(folderPath);
+    }
+
+    /// <summary>扫描进度（后台线程写，界面线程读）。</summary>
+    public sealed class ScanCounter
+    {
+        private int _done, _total;
+        public int Done => Volatile.Read(ref _done);
+        public int Total => Volatile.Read(ref _total);
+        internal void SetTotal(int n) => Volatile.Write(ref _total, n);
+        internal void Step() => Interlocked.Increment(ref _done);
+    }
+
+    public sealed record ScanStatus(string Folder, int Done, int Total, int Added, bool Finished);
+
+    /// <summary>扫描进度（界面线程触发）：Total 为 0 表示还在列文件。</summary>
+    public event Action<ScanStatus>? ScanProgress;
+
+    /// <summary>扫描过程中新并入曲库的一批曲目（界面线程触发）。</summary>
+    public event Action<List<TrackItem>>? TracksMerged;
+
+    public bool IsScanning { get; private set; }
+
+    private void MergeScanned(List<TrackItem> scanned, Dictionary<string, TrackItem> byId, HashSet<string> known,
+        List<TrackItem> added, long now)
+    {
         foreach (var t in scanned)
         {
             if (byId.TryGetValue(t.Id, out var existing))
@@ -267,19 +372,6 @@ public class LibraryService
             Tracks.Add(t);
             added.Add(t);
         }
-
-        if (!State.WatchedFolders.Contains(folderPath, StringComparer.OrdinalIgnoreCase))
-        {
-            State.WatchedFolders.Add(folderPath);
-        }
-
-        Reindex();
-        SaveLibrary();
-        RestartWatching();
-        AudioFeatureService.Instance.Enqueue(added);
-        QualityAnalysisService.Instance.Enqueue(added);
-        RhythmAnalysisService.Instance.Enqueue(added);
-        return added;
     }
 
     /// <summary>重新扫描所有已添加的文件夹，补入新文件。返回新增数量。</summary>
@@ -811,23 +903,37 @@ public class LibraryService
         catch { return false; }
     }
 
-    public async Task<List<TrackItem>> ScanFolderAsync(string folderPath, IReadOnlyDictionary<string, TrackItem>? knownById = null)
+    public async Task<List<TrackItem>> ScanFolderAsync(string folderPath, IReadOnlyDictionary<string, TrackItem>? knownById = null,
+        System.Collections.Concurrent.ConcurrentQueue<TrackItem>? sink = null, ScanCounter? progress = null)
     {
         return await Task.Run(() =>
         {
             var tracks = new List<TrackItem>();
+            void Emit(TrackItem t) { tracks.Add(t); sink?.Enqueue(t); }
             if (!Directory.Exists(folderPath)) return tracks;
 
             try
             {
-                var allFiles = Directory.EnumerateFiles(folderPath, "*.*", SearchOption.AllDirectories)
+                // 跳过没有权限的子文件夹：以前选整个磁盘（如 E:\）时，碰到 “System Volume Information”
+                // 就整个扫描抛异常，结果一首都没导入，看起来像“导入失败”
+                var options = new EnumerationOptions
+                {
+                    RecurseSubdirectories = true,
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.System,
+                };
+                var allFiles = Directory.EnumerateFiles(folderPath, "*", options)
+                    .Where(f => SupportedExtensions.Contains(Path.GetExtension(f))
+                                || f.EndsWith(".cue", StringComparison.OrdinalIgnoreCase))
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .ToList();
+                progress?.SetTotal(allFiles.Count);
 
                 // 1. CUE 分轨：被 CUE 引用的整轨音频不再作为单曲出现
                 var cueAudio = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var cue in allFiles.Where(f => f.EndsWith(".cue", StringComparison.OrdinalIgnoreCase)))
                 {
+                    progress?.Step();
                     try
                     {
                         var sheet = CueParser.Parse(cue);
@@ -849,7 +955,7 @@ public class LibraryService
                         var cueTracks = BuildCueTracks(sheet);
                         if (cueTracks.Count == 0) continue;
                         cueAudio.Add(sheet.AudioFilePath);
-                        tracks.AddRange(cueTracks);
+                        foreach (var ct in cueTracks) Emit(ct);
                     }
                     catch (Exception ex)
                     {
@@ -858,8 +964,10 @@ public class LibraryService
                 }
 
                 // 2. 普通音频文件
-                foreach (var file in allFiles.Where(f => SupportedExtensions.Contains(Path.GetExtension(f)) && !IsJunkFile(f)))
+                foreach (var file in allFiles.Where(f => SupportedExtensions.Contains(Path.GetExtension(f))))
                 {
+                    progress?.Step();
+                    if (IsJunkFile(file)) continue;
                     if (cueAudio.Contains(Path.GetFullPath(file))) continue;
                     try
                     {
@@ -870,7 +978,7 @@ public class LibraryService
                             continue;   // 没变过：不读标签
                         }
                         var track = ParseTrack(file);
-                        if (track != null) tracks.Add(track);
+                        if (track != null) Emit(track);
                     }
                     catch (Exception ex)
                     {
@@ -880,7 +988,7 @@ public class LibraryService
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Scan folder error: {ex.Message}");
+                App.LogError("Scan folder", folderPath + " → " + ex.Message);
             }
 
             return tracks;

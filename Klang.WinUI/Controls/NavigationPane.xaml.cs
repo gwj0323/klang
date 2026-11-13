@@ -135,6 +135,9 @@ public sealed partial class NavigationPane : UserControl
         AlbumsGridView.ItemsSource = _albumEntries;
         UpdateEmptyState();
 
+        LibraryService.Instance.ScanProgress += OnScanProgress;
+        LibraryService.Instance.TracksMerged += OnTracksMerged;
+
         // 切换语言后重建列表区的文字（“共 N 首”、空状态提示这些是代码拼出来的）
         L.LanguageChanged += () => DispatcherQueue.SafeEnqueue(RefreshView);
 
@@ -244,11 +247,11 @@ public sealed partial class NavigationPane : UserControl
             string? folder = FolderPickerHelper.PickFolder(hwnd);
             if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
             {
-                AddFolderBtn.IsEnabled = false;
                 bool wasEmpty = LibraryService.Instance.Tracks.Count == 0;
+                if (LibraryService.Instance.IsScanning)
+                    TrackCountText.Text = L.T("等待当前扫描完成…");
 
                 var added = await LibraryService.Instance.AddFolderAsync(folder);
-                AddFolderBtn.IsEnabled = true;
                 MetadataService.Instance.Enqueue(added);
 
                 RefreshView();
@@ -568,12 +571,69 @@ public sealed partial class NavigationPane : UserControl
             EmptyText.Text = L.T("歌单为空\n在歌曲上右键，选择“添加到歌单”");
             EmptyImportBtn.Visibility = Visibility.Collapsed;
         }
+        else if (LibraryService.Instance.IsScanning)
+        {
+            EmptyText.Text = L.T("正在扫描音乐…\n找到的歌曲会陆续出现在这里");
+            EmptyImportBtn.Visibility = Visibility.Collapsed;
+        }
         else
         {
             EmptyText.Text = L.T("曲库暂无音乐");
             EmptyImportBtn.Visibility = Visibility.Visible;
         }
+        if (_scan != null) ShowScanStatus(_scan);
     }
+
+    #region 扫描进度
+
+    private LibraryService.ScanStatus? _scan;
+    private DateTime _lastScanRefresh;
+
+    private void OnScanProgress(LibraryService.ScanStatus st)
+    {
+        if (st.Finished)
+        {
+            _scan = null;
+            ScanBar.Visibility = Visibility.Collapsed;
+            AddFolderBtn.IsEnabled = true;
+            RefreshView();   // 恢复“共 N 首”和空状态
+            return;
+        }
+        bool first = _scan == null;
+        _scan = st;
+        ScanBar.Visibility = Visibility.Visible;
+        AddFolderBtn.IsEnabled = false;
+        if (first) UpdateEmptyState();
+        ShowScanStatus(st);
+    }
+
+    private void ShowScanStatus(LibraryService.ScanStatus st)
+    {
+        if (st.Total <= 0)
+        {
+            ScanBar.IsIndeterminate = true;
+            TrackCountText.Text = L.T("正在查找音乐文件…");
+        }
+        else
+        {
+            ScanBar.IsIndeterminate = false;
+            ScanBar.Maximum = st.Total;
+            ScanBar.Value = st.Done;
+            // 文字要短：工具栏一行还放着“添加”和“整理”
+            TrackCountText.Text = L.F("扫描中 {0}/{1}", st.Done, st.Total);
+        }
+    }
+
+    /// <summary>扫描中途并入的歌曲：每 2 秒刷新一次列表，让用户看到进展（每批都刷新会拖慢界面）。</summary>
+    private void OnTracksMerged(List<TrackItem> batch)
+    {
+        if (_currentTab is "netease" or "playlists" or "albums") return;
+        if ((DateTime.UtcNow - _lastScanRefresh).TotalSeconds < 2 && DisplayTracks.Count > 0) return;
+        _lastScanRefresh = DateTime.UtcNow;
+        RefreshView();
+    }
+
+    #endregion
 
     #endregion
 

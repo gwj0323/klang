@@ -141,7 +141,11 @@ public class AppState
     public List<SavedTrack> Tracks { get; set; } = new();
 }
 
-[JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
+// 不缩进：曲库大时缩进版要大好几倍（声学特征的每个数都占一行），序列化和写盘都更慢。
+// 允许 NaN / Infinity：分析异常文件可能算出这类值，System.Text.Json 默认会直接拒绝序列化，
+// 整个状态就再也存不下来了（下次打开曲库是空的）
+[JsonSourceGenerationOptions(WriteIndented = false, PropertyNameCaseInsensitive = true,
+    NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals)]
 [JsonSerializable(typeof(AppState))]
 internal partial class AppStateJsonContext : JsonSerializerContext
 {
@@ -157,9 +161,13 @@ public class StateService
     public static StateService Instance => _instance.Value;
 
     private readonly string _path;
-    private readonly object _lock = new();
+    private readonly object _lock = new();        // 只保护“未保存”标记，持有时间极短
+    private readonly object _flushLock = new();   // 同一时间只有一次写盘
     private readonly Timer _debounce;
     private bool _dirty;
+    private long _dirtySince;                     // 第一次标记“未保存”的时间（毫秒）
+    private const int SaveDelayMs = 500;
+    private const int MaxSaveDelayMs = 3000;      // 改动持续不断时（如导入、后台分析）最多等这么久就写一次
 
     public AppState State { get; private set; } = new();
 
@@ -211,18 +219,25 @@ public class StateService
     {
         lock (_lock)
         {
-            _dirty = true;
-            _debounce.Change(500, Timeout.Infinite);
+            long now = Environment.TickCount64;
+            if (!_dirty) { _dirty = true; _dirtySince = now; }
+            // 以前每次都把计时器往后推 500ms：改动一直不停时就一直不写盘，中途崩溃会丢掉全部改动
+            long waited = now - _dirtySince;
+            _debounce.Change(waited >= MaxSaveDelayMs ? 0 : Math.Min(SaveDelayMs, MaxSaveDelayMs - waited), Timeout.Infinite);
         }
     }
 
     /// <summary>立即写盘（退出时调用）。</summary>
     public void Flush()
     {
-        lock (_lock)
+        // 序列化和写盘不再占着 _lock：曲库大时要几百毫秒，界面线程调用 RequestSave 会被卡住
+        lock (_flushLock)
         {
-            if (!_dirty) return;
-            _dirty = false;
+            lock (_lock)
+            {
+                if (!_dirty) return;
+                _dirty = false;
+            }
 
             string json;
             try
@@ -233,8 +248,11 @@ public class StateService
             {
                 // 序列化在计时器线程上进行，界面线程正好在改列表时会失败（大量导入时尤其常见）。
                 // 以前直接放弃，这一轮的改动就丢了；现在保留“未保存”标记，稍后重试
-                _dirty = true;
-                _debounce.Change(800, Timeout.Infinite);
+                lock (_lock)
+                {
+                    if (!_dirty) { _dirty = true; _dirtySince = Environment.TickCount64; }
+                    _debounce.Change(800, Timeout.Infinite);
+                }
                 App.LogError("Save state (will retry)", ex.Message);
                 return;
             }
@@ -252,8 +270,19 @@ public class StateService
                     File.Move(tmp, _path, true);
                     return;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    if (attempt == 2)
+                    {
+                        // 三次都写不进去（文件被占用、磁盘满）：保留“未保存”，稍后再试，不要悄悄丢掉
+                        App.LogError("Write state (will retry)", ex.Message);
+                        lock (_lock)
+                        {
+                            if (!_dirty) { _dirty = true; _dirtySince = Environment.TickCount64; }
+                            _debounce.Change(2000, Timeout.Infinite);
+                        }
+                        return;
+                    }
                     Thread.Sleep(200);
                 }
             }

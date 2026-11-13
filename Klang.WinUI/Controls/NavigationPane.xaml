@@ -184,6 +184,16 @@
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="共 0 首" />
 
+                <!-- 扫描进度：贴在工具栏底部的细进度条 -->
+                <ProgressBar
+                    x:Name="ScanBar"
+                    Grid.ColumnSpan="5"
+                    Margin="0,0,0,-2"
+                    VerticalAlignment="Bottom"
+                    Canvas.ZIndex="1"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed" />
+
                 <!-- 添加本地文件夹按钮 -->
                 <Button AutomationProperties.Name="添加本地音乐文件夹"
                     x:Name="AddFolderBtn"
