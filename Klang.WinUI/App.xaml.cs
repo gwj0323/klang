@@ -20,13 +20,16 @@ public partial class App : Application
             Directory.CreateDirectory(Path.GetDirectoryName(ErrorLogPath)!);
             var fi = new FileInfo(ErrorLogPath);
             if (fi.Exists && fi.Length > 1024 * 1024) fi.Delete();   // 最多保留 1 MB
-            File.AppendAllText(ErrorLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {kind}: {detail}\n\n");
+            File.AppendAllText(ErrorLogPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] v{Services.CrashReporter.AppVersion} {kind}: {detail}\n\n");
         }
         catch { }
+        Services.CrashReporter.Note("错误：" + kind);
     }
 
     public App()
     {
+        Services.CrashReporter.Start();
         InitializeComponent();
 
         // 界面线程上未处理的异常：记录下来并拦截，保持程序运行

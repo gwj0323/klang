@@ -143,6 +143,7 @@ public class AudioEngineService : IDisposable
     public void ReopenOutput()
     {
         if (_audioFileReader == null || string.IsNullOrEmpty(_filePath)) return;
+        CrashReporter.Note($"重开音频输出（设备 {StateService.Instance.State.SelectedDeviceId}，独占 {StateService.Instance.State.WasapiExclusive}）");
         string path = _filePath;
         double start = _segStart, end = _segEnd, pos = CurrentTime;
         bool wasPlaying = IsPlaying;

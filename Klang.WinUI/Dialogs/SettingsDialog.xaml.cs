@@ -216,6 +216,31 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private void ReleasePageBtn_Click(object sender, RoutedEventArgs e) => OpenTrusted(_update?.PageUrl);
 
+    private void OpenErrorLogBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var path = App.ErrorLogPath;
+        try
+        {
+            if (!File.Exists(path))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, L.T("暂无错误记录。") + Environment.NewLine);
+            }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch { }
+    }
+
+    private void OpenDataFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(App.ErrorLogPath)!;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
+        }
+        catch { }
+    }
+
     #endregion
 
     private static void SelectByTag(ComboBox box, string tag, string fallback)

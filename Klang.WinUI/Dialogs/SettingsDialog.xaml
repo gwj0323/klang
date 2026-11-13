@@ -622,6 +622,10 @@
                                 Padding="0"
                                 Content="反馈问题"
                                 NavigateUri="https://github.com/gwj0323/klang/issues" />
+                            <StackPanel Margin="0,4,0,0" Orientation="Horizontal" Spacing="8">
+                                <Button Click="OpenErrorLogBtn_Click" Content="打开错误日志" />
+                                <Button Click="OpenDataFolderBtn_Click" Content="打开数据文件夹" />
+                            </StackPanel>
                             <TextBlock
                                 x:Name="StatePathText"
                                 Margin="0,4,0,0"

@@ -319,6 +319,7 @@ public sealed partial class MainWindow : Window
             _media.Dispose();
             _desktopLyricWindow?.Close();
             _miniPlayerWindow?.Close();
+            CrashReporter.Stop();   // 放在最后：退出过程中崩溃也算异常结束，下次启动会报告
         };
     }
 
@@ -463,6 +464,9 @@ public sealed partial class MainWindow : Window
 
     private void PlayTrack(TrackItem track, bool autoPlay = true)
     {
+        CrashReporter.Note($"{(autoPlay ? "播放" : "载入")}：{track.Artist} - {track.Title}" +
+            (track.IsOnline ? "（网易云）" : $"（{System.IO.Path.GetExtension(track.FilePath)} {track.SampleRate}Hz/{track.BitDepth}bit）") +
+            (_adoptingMix ? " 混音接入" : ""));
         // 文件已经丢了：不开始播放，提示一下（启动时恢复上次曲目只显示，不拦）
         if (autoPlay && track.IsMissing && !track.IsOnline)
         {
@@ -880,6 +884,7 @@ public sealed partial class MainWindow : Window
     /// <summary>引擎已经淡到一半：界面切到新歌，但不要再让引擎重新开始播放。</summary>
     private void OnMixAdopted(string path)
     {
+        CrashReporter.Note("自动混音切到下一首");
         var next = _mixNext; _mixNext = null;
         if (next == null || next.FilePath != path) return;
         _endedNaturally = true;                 // 对漫游模型来说，上一首是完整听完的
@@ -1486,6 +1491,7 @@ public sealed partial class MainWindow : Window
 
     private void OpenImmersive()
     {
+        CrashReporter.Note("打开沉浸界面");
         // 进入沉浸模式：主界面的封面放大移动到沉浸界面的封面位置
         bool fly = !ImmersiveLayer.IsOpen && StageCoverVisible && PrepareCoverAnimation("toImmersive", StageCoverCard.CoverTarget);
 
@@ -1505,6 +1511,7 @@ public sealed partial class MainWindow : Window
 
     private void CloseImmersive()
     {
+        CrashReporter.Note("关闭沉浸界面");
         // 退出：沉浸界面的封面缩回主界面的封面位置
         bool fly = ImmersiveLayer.IsOpen && StageCoverVisible && PrepareCoverAnimation("fromImmersive", ImmersiveLayer.CoverTarget);
 

@@ -229,6 +229,7 @@ public class LibraryService
 
     private async Task<List<TrackItem>> AddFolderCoreAsync(string folderPath)
     {
+        CrashReporter.Note("导入文件夹：" + folderPath);
         var byId = new Dictionary<string, TrackItem>();
         foreach (var t in Tracks) byId[t.Id] = t;
         var scanned = await ScanFolderAsync(folderPath, byId);
