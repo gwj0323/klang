@@ -5,7 +5,7 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Klang_WinUI</RootNamespace>
     <!-- 版本号：“关于”页显示它，检查更新时拿它和 GitHub 上最新的 WinUI 发布比较。发新版时在这里改 -->
-    <Version>2.7.1</Version>
+    <Version>2.7.2</Version>
     <IncludeSourceRevisionInVersion>false</IncludeSourceRevisionInVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon Condition="Exists('Assets\AppIcon.ico')">Assets\AppIcon.ico</ApplicationIcon>
