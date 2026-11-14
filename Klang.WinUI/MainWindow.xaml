@@ -184,6 +184,12 @@
                     x:Name="LeftNavPane"
                     Margin="56,0,0,0"
                     HorizontalAlignment="Left" />
+                <controls:SodaPanel
+                    x:Name="SodaHome"
+                    Width="286"
+                    Margin="56,0,0,0"
+                    HorizontalAlignment="Left"
+                    Visibility="Collapsed" />
 
                 <!-- 竖排图标栏：展开和收起时都在，收起后只剩它 -->
                 <StackPanel
@@ -206,6 +212,9 @@
                     </Button>
                     <Button x:Name="RailCloud" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="云端" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="netease" ToolTipService.ToolTip="云端">
                         <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE753;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="云端" Visibility="Collapsed" /></StackPanel>
+                    </Button>
+                    <Button x:Name="RailSoda" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="汽水音乐" Click="RailTab_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" Tag="soda" ToolTipService.ToolTip="汽水音乐">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE8D6;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="汽水音乐" Visibility="Collapsed" /></StackPanel>
                     </Button>
                     <Rectangle Height="1" Margin="4,6,4,6" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                     <Button Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="搜索" Click="RailSearch_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="搜索 (Ctrl+F)">

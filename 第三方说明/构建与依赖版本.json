@@ -1,15 +1,15 @@
 {
   "date": "2026-11-14",
-  "baselineCommit": "866d77ee8bed2d6c0a458089370ee74d350f94a7",
-  "variant": "taskbar",
+  "baselineCommit": "1b3b5be58abcec7ef37a34c8d310cbc30950edd9",
+  "variant": "taskbar-soda",
   "build": {
     "sdk": "10.0.404",
     "configuration": "Debug",
     "platform": "x64",
     "errors": 0,
-    "warnings": 11
+    "warnings": 17
   },
-  "note": "Resolved dependency versions from the successful source build; runtime binaries are not included.",
+  "note": "Resolved dependencies for the contribution branch rebased on upstream 2.7.3; no runtime binaries or user data are committed.",
   "packages": [
     {
       "id": "ComputeSharp/3.2.0",
@@ -99,5 +99,14 @@
       "id": "TagLibSharp/2.3.0",
       "type": "package"
     }
-  ]
+  ],
+  "upstreamVersion": "2.7.3",
+  "featureBranch": "feat/taskbar-soda",
+  "releaseBuild": {
+    "configuration": "Release",
+    "platform": "x64",
+    "publishReadyToRun": false,
+    "errors": 0,
+    "warnings": 17
+  }
 }

@@ -59,7 +59,8 @@ public sealed partial class MainWindow : Window
         UiAnimations.AttachFade(ImmersiveLayer, 0f);
         UiAnimations.AttachFade(SidebarRail, 0f);
         UiAnimations.AttachFade(LeftNavPane, 0f);
-        LeftNavPane.TabChanged += (s, tab) => UpdateRail(tab);
+        LeftNavPane.TabChanged += (s, tab) => { SetSodaView(false); UpdateRail(tab); };
+        InitializeSoda();
         UpdateRail("all");
         ((FrameworkElement)Content).ActualThemeChanged += (s, e) => UpdateRail(_railTab);
         StageLyricsControl.CalibrationPicked += StageLyricsControl_CalibrationPicked;
@@ -322,6 +323,7 @@ public sealed partial class MainWindow : Window
 
         this.Closed += (s, e) =>
         {
+            CloseSoda();
             SaveWindowAndAudioState();
             LibraryService.Instance.FlushPendingSave();
             StateService.Instance.Flush();
@@ -477,8 +479,10 @@ public sealed partial class MainWindow : Window
     private void PlayTrack(TrackItem track, bool autoPlay = true)
     {
         CrashReporter.Note($"{(autoPlay ? "播放" : "载入")}：{track.Artist} - {track.Title}" +
-            (track.IsOnline ? "（网易云）" : $"（{System.IO.Path.GetExtension(track.FilePath)} {track.SampleRate}Hz/{track.BitDepth}bit）") +
+            (track.SodaId.Length > 0 ? "（汽水音乐）" : track.IsOnline ? "（网易云）" : $"（{System.IO.Path.GetExtension(track.FilePath)} {track.SampleRate}Hz/{track.BitDepth}bit）") +
             (_adoptingMix ? " 混音接入" : ""));
+        _onlineCts?.Cancel();
+        if (track.SodaId.Length == 0) ResetSodaChannel();
         // 文件已经丢了：不开始播放，提示一下（启动时恢复上次曲目只显示，不拦）
         if (autoPlay && track.IsMissing && !track.IsOnline)
         {
@@ -506,6 +510,7 @@ public sealed partial class MainWindow : Window
         if (_currentTrack != null) _currentTrack.IsCurrent = false;
         _currentTrack = track;
         track.IsCurrent = true;
+        if (HasSodaFeed) _sodaFeed?.MarkPlayed(track);
 
         StageCoverCard.UpdateTrack(track);
         UpdateNarrowHeader(track);
@@ -519,6 +524,7 @@ public sealed partial class MainWindow : Window
         BottomTransportBar.UpdateProgress(0, track.Duration);
         _ = LoadWaveformAsync(track);
         LeftNavPane.SetCurrentTrack(track);
+        SodaHome.SetCurrentTrack(track);
         GalleryLayer.SetCurrent(track);
         _media.UpdateTrack(track);
         _media.SetPlaybackState(autoPlay, true);
@@ -527,6 +533,7 @@ public sealed partial class MainWindow : Window
         _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
         _desktopLyricWindow?.UpdateTrack(track);
         _miniPlayerWindow?.UpdateTrack(track);
+
         _taskbarPlayerWindow?.UpdateTrack(track);
 
         if (!track.IsOnline && !track.IsCueTrack) _ = FillLocalMetaAsync(track);
@@ -630,8 +637,6 @@ public sealed partial class MainWindow : Window
     private System.Threading.CancellationTokenSource? _onlineCts;
     private string _onlineStatus = "";
 
-    private static bool IsNeteaseLoggedIn() => Services.Netease.NeteaseService.Instance.IsLoggedIn;
-
     /// <summary>云端曲目：取直链并下载缓存后播放，同时异步加载歌词。后点的曲目会取消先前的请求。</summary>
     private async System.Threading.Tasks.Task PlayOnlineAsync(TrackItem track, bool autoPlay, bool adopted = false)
     {
@@ -639,12 +644,11 @@ public sealed partial class MainWindow : Window
         _onlineStatus = "";
         var cts = _onlineCts = new System.Threading.CancellationTokenSource();
         var ct = cts.Token;
-        var netease = Services.Netease.NeteaseService.Instance;
 
         int seq = _playSeq;
 
         // 歌词与音源并行获取（淡出旧曲的同时就开始请求）
-        var lyricTask = netease.GetLyricsAsync(track.NeteaseId, ct);
+        var lyricTask = OnlineMusicService.GetLyricsAsync(track, ct);
         if (!adopted)
         {
             BottomTransportBar.UpdateLyricSnippet(autoPlay ? L.T("正在获取云端音源…") : L.T("云端曲目"));
@@ -655,14 +659,14 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            bool ok = await netease.ResolveAsync(track, ct);
+            bool ok = await OnlineMusicService.ResolveAsync(track, ct);
             if (ct.IsCancellationRequested || _currentTrack != track) return;
 
             if (!ok)
             {
-                _onlineStatus = IsNeteaseLoggedIn()
+                _onlineStatus = OnlineMusicService.IsLoggedIn(track)
                     ? L.T("无法获取音源（可能为会员专享或无版权）")
-                    : L.T("无法获取音源（可能需要先登录网易云）");
+                    : track.SodaId.Length > 0 ? L.T("请先登录汽水音乐") : L.T("无法获取音源（可能需要先登录网易云）");
                 BottomTransportBar.UpdateLyricSnippet(_onlineStatus);
             }
             else
@@ -698,15 +702,24 @@ public sealed partial class MainWindow : Window
         StageCoverCard.UpdateTrack(track);
         BottomTransportBar.UpdateTrackState(track.Title, track.Artist, track.CoverPath);
         if (_onlineStatus.Length > 0) BottomTransportBar.UpdateLyricSnippet(_onlineStatus);
+        BottomTransportBar.SetFavorite(track.IsFavorite);
         if (ImmersiveLayer.IsOpen) ImmersiveLayer.SetTrack(track);
         _media.UpdateTrack(track);
         _miniPlayerWindow?.UpdateTrack(track);
         _taskbarPlayerWindow?.UpdateTrack(track);
+        _taskbarPlayerWindow?.UpdateFavorite();
     }
 
     private void TogglePlayPause()
     {
         var engine = AudioEngineService.Instance;
+        if (_sodaChoosing || _sodaAdvancing)
+        {
+            CancelPendingSodaPlayback();
+            engine.Pause();
+            SodaHome.SetPlaybackStatus(L.T("已暂停"));
+            return;
+        }
         if (_currentTrack != null && !engine.HasSource)
         {
             // 恢复的曲目 / 播放已结束：从头开始播放
@@ -733,6 +746,12 @@ public sealed partial class MainWindow : Window
         reason = null; byRoam = false;
         var tracks = LeftNavPane.Queue;
         if (tracks.Count == 0) return null;
+
+        if (HasSodaFeed)
+        {
+            int index = _currentTrack == null ? -1 : tracks.IndexOf(_currentTrack);
+            return index + 1 < tracks.Count ? tracks[index + 1] : null;
+        }
 
         int nextIdx = 0;
         if (_currentTrack != null)
@@ -767,6 +786,7 @@ public sealed partial class MainWindow : Window
 
     private void PlayNext()
     {
+        if (TryPlaySodaNext()) return;
         TrackItem? next; string? reason; bool byRoam;
         if (_preChosenNext != null)
         {
@@ -791,6 +811,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void TryPrefetchNext(double current, double total)
     {
+        if (HasSodaFeed) { if (total - current <= 60) _ = WarmSodaQueueAsync(); return; }
         var cur = _currentTrack;
         if (cur == null || total <= 0 || _playMode == "loop_single" || _prefetchFromId == cur.Id) return;
         if (!AudioEngineService.Instance.IsPlaying) return;
@@ -807,7 +828,7 @@ public sealed partial class MainWindow : Window
                 if (next != null) { _preChosenNext = next; _preChosenReason = reason; _preChosenByRoam = byRoam; }
             }
             if (next == null || next == cur || !next.IsOnline) return;
-            Services.Netease.NeteaseService.Instance.Prefetch(next);
+            OnlineMusicService.Prefetch(next);
         }
         catch { }
     }
@@ -825,7 +846,7 @@ public sealed partial class MainWindow : Window
     private async void TryPlanMix(double current, double total)
     {
         var mode = State.AutoMix;
-        if (mode == "off" || _planning || _currentTrack == null || _playMode == "loop_single") return;
+        if (mode == "off" || _planning || _sodaChoosing || _sodaAdvancing || _currentTrack == null || _playMode == "loop_single") return;
         if (mode == "roam" && _playMode != "roam") return;
         var a = _currentTrack;
         if (a.IsCueTrack || _plannedFromId == a.Id) return;
@@ -853,15 +874,14 @@ public sealed partial class MainWindow : Window
             // 剩余时间不多了还没好，就放弃混音，照常切歌
             if (next.IsOnline)
             {
-                var netease = Services.Netease.NeteaseService.Instance;
-                if (!netease.IsCached(next))
+                if (!OnlineMusicService.IsCached(next))
                 {
-                    netease.Prefetch(next);
+                    OnlineMusicService.Prefetch(next);
                     if (remaining > 12) _plannedFromId = null;
                     return;
                 }
                 if (string.IsNullOrEmpty(next.FilePath) || !System.IO.File.Exists(next.FilePath))
-                    await netease.ResolveAsync(next, System.Threading.CancellationToken.None);   // 已缓存：只是把本地路径写到曲目上
+                    await OnlineMusicService.ResolveAsync(next, System.Threading.CancellationToken.None);
             }
             if (string.IsNullOrEmpty(next.FilePath) || !System.IO.File.Exists(next.FilePath)) return;
 
@@ -917,6 +937,7 @@ public sealed partial class MainWindow : Window
 
     private void PlayPrev()
     {
+        if (_sodaChoosing || _sodaAdvancing) CancelPendingSodaPlayback();
         var tracks = LeftNavPane.Queue;
         if (tracks.Count == 0) return;
 
@@ -926,11 +947,12 @@ public sealed partial class MainWindow : Window
             int currentIdx = tracks.IndexOf(_currentTrack);
             if (currentIdx >= 0)
             {
-                prevIdx = (currentIdx - 1 + tracks.Count) % tracks.Count;
+                prevIdx = HasSodaFeed ? Math.Max(0, currentIdx - 1) : (currentIdx - 1 + tracks.Count) % tracks.Count;
             }
         }
 
         PlayTrack(tracks[prevIdx]);
+        if (HasSodaFeed) _sodaFeed?.MarkPlayed(tracks[prevIdx]);
     }
 
     private void ToggleFavorite(TrackItem track, bool fromTransport = false)
@@ -938,7 +960,7 @@ public sealed partial class MainWindow : Window
         if (track.IsOnline)
         {
             BottomTransportBar.UpdateLyricSnippet(L.T("云端曲目暂不支持“喜欢”"));
-            BottomTransportBar.SetFavorite(false);
+            BottomTransportBar.SetFavorite(track.IsFavorite);
             return;
         }
         track.IsFavorite = !track.IsFavorite;
@@ -948,8 +970,8 @@ public sealed partial class MainWindow : Window
         }
         LibraryService.Instance.SaveLibrary();
 
-        if (track == _currentTrack) _taskbarPlayerWindow?.UpdateFavorite();
         // “喜欢”页里取消喜欢后该曲目应立即从列表消失
+        if (track == _currentTrack) _taskbarPlayerWindow?.UpdateFavorite();
         if (LeftNavPane.CurrentTab == "fav") LeftNavPane.RefreshView();
     }
 
@@ -1008,6 +1030,7 @@ public sealed partial class MainWindow : Window
         }
         if (ctrl && key == VirtualKey.F)
         {
+            SetSodaView(false);
             if (!_isSidebarOpen) SetSidebarOpen(true);
             LeftNavPane.FocusSearch();
             e.Handled = true;
@@ -1172,7 +1195,8 @@ public sealed partial class MainWindow : Window
 
     private void ShowSidebarPart(bool full)
     {
-        LeftNavPane.Visibility = full ? Visibility.Visible : Visibility.Collapsed;
+        LeftNavPane.Visibility = full && !_sodaViewVisible ? Visibility.Visible : Visibility.Collapsed;
+        SodaHome.Visibility = full && _sodaViewVisible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>竖排图标栏：高亮当前分页。</summary>
@@ -1185,7 +1209,7 @@ public sealed partial class MainWindow : Window
         var accent = ThemeService.AccentText(root);
         var normal = ThemeService.Brush(root, "TextFillColorPrimaryBrush");
         var selBg = ThemeService.Brush(root, "SubtleFillColorSecondaryBrush");
-        foreach (var (btn, tag) in new[] { (RailAll, "all"), (RailFav, "fav"), (RailAlbums, "albums"), (RailPlaylists, "playlists"), (RailCloud, "netease") })
+        foreach (var (btn, tag) in new[] { (RailAll, "all"), (RailFav, "fav"), (RailAlbums, "albums"), (RailPlaylists, "playlists"), (RailCloud, "netease"), (RailSoda, "soda") })
         {
             bool sel = tag == tab;
             btn.Background = sel ? selBg : null;
@@ -1197,6 +1221,14 @@ public sealed partial class MainWindow : Window
     {
         if (sender is Button { Tag: string tag })
         {
+            if (tag == "soda")
+            {
+                SetSodaView(true);
+                if (!_isSidebarOpen) SetSidebarOpen(true);
+                UpdateRail("soda");
+                return;
+            }
+            SetSodaView(false);
             SetSidebarOpen(true);
             LeftNavPane.SelectTab(tag);
         }
@@ -1204,11 +1236,15 @@ public sealed partial class MainWindow : Window
 
     private void RailSearch_Click(object sender, RoutedEventArgs e)
     {
+        SetSodaView(false);
         SetSidebarOpen(true);
         DispatcherQueue.SafeEnqueue(() => LeftNavPane.FocusSearch());
     }
 
-    private void SidebarToggleBtn_Click(object sender, RoutedEventArgs e) => SetSidebarOpen(!_isSidebarOpen);
+    private void SidebarToggleBtn_Click(object sender, RoutedEventArgs e)
+    {
+        SetSidebarOpen(!_isSidebarOpen);
+    }
 
     private void DesktopLyricBtn_Click(object sender, RoutedEventArgs e) => ToggleDesktopLyric();
 
