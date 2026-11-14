@@ -69,6 +69,23 @@
                     <TextBlock FontSize="20" FontWeight="SemiBold" Text="外观" />
 
                     <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="任务栏播放条" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="在任务栏上显示封面、歌词与播放控制。拖动左侧把手可调整位置，Ctrl+B 切换。"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="TaskbarPlayerSwitch" Grid.Column="1"
+                                          OffContent="关" OnContent="开" Toggled="TaskbarPlayerSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />

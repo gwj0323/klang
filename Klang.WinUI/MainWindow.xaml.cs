@@ -30,6 +30,7 @@ public sealed partial class MainWindow : Window
     private readonly MediaControlService _media = new();
     private DesktopLyricWindow? _desktopLyricWindow;
     private MiniPlayerWindow? _miniPlayerWindow;
+    private TaskbarPlayerWindow? _taskbarPlayerWindow;
     private bool _isDesktopLyricVisible = false;
 
     private static AppState State => StateService.Instance.State;
@@ -106,6 +107,9 @@ public sealed partial class MainWindow : Window
 
             // 同步底栏单句微缩歌词
             int activeIdx = LyricsService.Instance.FindActiveIndex(StageLyricsControl.Lyrics, current + _lyricOffset);
+            _taskbarPlayerWindow?.UpdateLyric(activeIdx >= 0 && activeIdx < StageLyricsControl.Lyrics.Count
+                && StageLyricsControl.Lyrics[activeIdx].EndTime < 9000
+                ? StageLyricsControl.Lyrics[activeIdx].Text : null);
             if (GalleryLayer.Visibility == Visibility.Visible)
             {
                 var gl = StageLyricsControl.Lyrics;
@@ -149,6 +153,7 @@ public sealed partial class MainWindow : Window
             ImmersiveLayer.SetPlaying(isPlaying);
             GalleryLayer.SetIsPlaying(isPlaying);
             StageCoverCard.SetPlaying(isPlaying);
+            _taskbarPlayerWindow?.UpdatePlayState(isPlaying);
             _media.SetPlaybackState(isPlaying, _currentTrack != null);
         };
 
@@ -200,6 +205,7 @@ public sealed partial class MainWindow : Window
         LeftNavPane.TrackRemoved += (s, track) =>
         {
             if (_currentTrack == track) { track.IsCurrent = false; _currentTrack = null; }
+            _taskbarPlayerWindow?.UpdateTrack(_currentTrack);
         };
 
         LeftNavPane.ViewStateChanged += (s, e) =>
@@ -322,8 +328,11 @@ public sealed partial class MainWindow : Window
             _media.Dispose();
             _desktopLyricWindow?.Close();
             _miniPlayerWindow?.Close();
+            _taskbarPlayerWindow?.Close();
             CrashReporter.Stop();   // 放在最后：退出过程中崩溃也算异常结束，下次启动会报告
         };
+
+        if (State.TaskbarPlayerEnabled) SetTaskbarPlayerEnabled(true);
     }
 
     #region 启动恢复与状态保存
@@ -518,6 +527,7 @@ public sealed partial class MainWindow : Window
         _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
         _desktopLyricWindow?.UpdateTrack(track);
         _miniPlayerWindow?.UpdateTrack(track);
+        _taskbarPlayerWindow?.UpdateTrack(track);
 
         if (!track.IsOnline && !track.IsCueTrack) _ = FillLocalMetaAsync(track);
 
@@ -691,6 +701,7 @@ public sealed partial class MainWindow : Window
         if (ImmersiveLayer.IsOpen) ImmersiveLayer.SetTrack(track);
         _media.UpdateTrack(track);
         _miniPlayerWindow?.UpdateTrack(track);
+        _taskbarPlayerWindow?.UpdateTrack(track);
     }
 
     private void TogglePlayPause()
@@ -937,6 +948,7 @@ public sealed partial class MainWindow : Window
         }
         LibraryService.Instance.SaveLibrary();
 
+        if (track == _currentTrack) _taskbarPlayerWindow?.UpdateFavorite();
         // “喜欢”页里取消喜欢后该曲目应立即从列表消失
         if (LeftNavPane.CurrentTab == "fav") LeftNavPane.RefreshView();
     }
@@ -1009,6 +1021,7 @@ public sealed partial class MainWindow : Window
         {
             switch (key)
             {
+                case VirtualKey.B: SetTaskbarPlayerEnabled(!State.TaskbarPlayerEnabled); e.Handled = true; return;
                 case VirtualKey.M: ToggleMiniPlayer(); e.Handled = true; return;
                 case VirtualKey.D: ToggleDesktopLyric(); e.Handled = true; return;
                 case VirtualKey.T: CycleSubMode(); e.Handled = true; return;
@@ -1235,6 +1248,36 @@ public sealed partial class MainWindow : Window
     }
 
     private void MiniPlayerBtn_Click(object sender, RoutedEventArgs e) => ToggleMiniPlayer();
+
+    private void TaskbarPlayerItem_Click(object sender, RoutedEventArgs e) =>
+        SetTaskbarPlayerEnabled(TaskbarPlayerItem.IsChecked);
+
+    private void SetTaskbarPlayerEnabled(bool enabled)
+    {
+        if (enabled && _taskbarPlayerWindow == null)
+        {
+            _taskbarPlayerWindow = new TaskbarPlayerWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
+            _taskbarPlayerWindow.PrevRequested += (s, e) => PlayPrev();
+            _taskbarPlayerWindow.NextRequested += (s, e) => PlayNext();
+            _taskbarPlayerWindow.PlayPauseRequested += (s, e) => TogglePlayPause();
+            _taskbarPlayerWindow.FavoriteRequested += (s, e) =>
+            {
+                if (_currentTrack != null) ToggleFavorite(_currentTrack);
+            };
+            _taskbarPlayerWindow.RestoreRequested += (s, e) =>
+            {
+                AppWindow.Show();
+                Activate();
+            };
+            _taskbarPlayerWindow.DismissRequested += (s, e) => SetTaskbarPlayerEnabled(false);
+        }
+        State.TaskbarPlayerEnabled = enabled;
+        TaskbarPlayerItem.IsChecked = enabled;
+        StateService.Instance.RequestSave();
+        _taskbarPlayerWindow?.UpdateTrack(_currentTrack);
+        _taskbarPlayerWindow?.UpdatePlayState(AudioEngineService.Instance.IsPlaying);
+        _taskbarPlayerWindow?.SetEnabled(enabled);
+    }
 
     private void ToggleMiniPlayer()
     {
@@ -1584,6 +1627,7 @@ public sealed partial class MainWindow : Window
             };
 
             dialog.BackdropChanged += ApplyBackdrop;
+            dialog.TaskbarPlayerChanged += SetTaskbarPlayerEnabled;
             dialog.ThemeChanged += theme =>
             {
                 ThemeService.Apply(this, theme);

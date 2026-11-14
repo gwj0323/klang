@@ -1,6 +1,10 @@
 {
   "name": "English",
   "strings": {
+    "任务栏播放条": "Taskbar player",
+    "关闭任务栏播放条": "Close taskbar player",
+    "拖动以调整任务栏位置": "Drag to reposition on the taskbar",
+    "在任务栏上显示封面、歌词与播放控制。拖动左侧把手可调整位置，Ctrl+B 切换。": "Show artwork, lyrics and playback controls on the taskbar. Drag the left handle to reposition; toggle with Ctrl+B.",
     "切歌过渡": "Track transitions",
     "自动混音": "Auto mix",
     "歌曲临近结束时与下一首交叉淡入淡出。速度相差 8% 以内时对齐节拍并做低频交接；否则做普通的交叉淡入淡出，并跳过首尾的静音。": "Crossfades into the next song near the end. Within 8% tempo difference the beats are aligned and the bass is swapped; otherwise a plain crossfade is used and silence at either end is skipped.",

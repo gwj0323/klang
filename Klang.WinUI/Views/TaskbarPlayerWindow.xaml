@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Klang_WinUI.Views.TaskbarPlayerWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="任务栏播放条">
+    <!-- 外观对齐汽水音乐的任务栏播控：静止时背景完全透明，只有封面/文字/按钮浮在任务栏上；
+         鼠标悬停才出现 4% 白底 + 4% 描边，拖动手柄和关闭按钮同时淡入（100ms）。总宽 388 DIP、高 40 DIP。 -->
+    <Grid x:Name="Root" Background="Transparent" RequestedTheme="Dark"
+          PointerEntered="Root_PointerEntered" PointerExited="Root_PointerExited">
+        <Grid.Resources>
+            <SolidColorBrush x:Key="TaskbarIconBrush" Color="#B3FFFFFF" />
+            <SolidColorBrush x:Key="TaskbarIconHoverBrush" Color="White" />
+            <SolidColorBrush x:Key="TaskbarMutedBrush" Color="#80FFFFFF" />
+            <SolidColorBrush x:Key="TaskbarLyricBrush" Color="#E6FFFFFF" />
+            <SolidColorBrush x:Key="TaskbarPlaybackBrush" Color="#12FFFFFF" />
+            <SolidColorBrush x:Key="TaskbarPlaybackHoverBrush" Color="#1FFFFFFF" />
+            <Style x:Key="TaskbarButtonStyle" TargetType="Button">
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource TaskbarIconBrush}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="ButtonRoot" Background="{TemplateBinding Background}"
+                                  CornerRadius="{TemplateBinding CornerRadius}">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"><VisualState.Setters><Setter Target="ButtonRoot.Opacity" Value="1" /></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="ButtonRoot.Opacity" Value="1" /></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="ButtonRoot.Opacity" Value="0.65" /></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="ButtonRoot.Opacity" Value="0.4" /></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Grid.Resources>
+
+        <Grid x:Name="NormalLayout" Width="388" Height="40">
+            <!-- 任务栏快照当背景：静止时看起来就是透明 -->
+            <Border x:Name="CardBackdrop" CornerRadius="8" IsHitTestVisible="False"
+                    Background="#FF2B2624" />
+            <!-- 悬停：浅浅的白底 + 描边 -->
+            <Border x:Name="CardSurface" CornerRadius="8" IsHitTestVisible="False"
+                    Background="#0AFFFFFF" BorderBrush="#0AFFFFFF" BorderThickness="0.5"
+                    Opacity="0"
+                    PointerPressed="Drag_Pressed" PointerMoved="Drag_Moved"
+                    PointerReleased="Drag_Released" PointerCaptureLost="Drag_CaptureLost" />
+            <!-- 拖动时离开任务栏，换成一块半透明深底，避免把任务栏的像素拖到桌面上 -->
+            <Border x:Name="DragSurface" CornerRadius="8" IsHitTestVisible="False" Visibility="Collapsed"
+                    Background="#D91B1817" BorderBrush="#33FFFFFF" BorderThickness="1" />
+            <Grid x:Name="DragHandle" Width="22" HorizontalAlignment="Left" Background="Transparent"
+                  Opacity="0" AutomationProperties.Name="拖动任务栏播放条"
+                  PointerPressed="Drag_Pressed" PointerMoved="Drag_Moved"
+                  PointerReleased="Drag_Released" PointerCaptureLost="Drag_CaptureLost"
+                  ToolTipService.ToolTip="拖动：放到任务栏左/右空白处停靠，拖离任务栏会回到原位">
+                <Border Width="2" Height="16" CornerRadius="1" Background="#1FFFFFFF"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+
+            <Grid x:Name="NormalContent" Padding="22,0,12,0" Background="Transparent"
+                  PointerPressed="Drag_Pressed" PointerMoved="Drag_Moved"
+                  PointerReleased="Drag_Released" PointerCaptureLost="Drag_CaptureLost">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="28" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="128" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="32" />
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" Width="28" Height="28" Padding="0" CornerRadius="4" Style="{StaticResource TaskbarButtonStyle}"
+                        VerticalAlignment="Center" Background="#12FFFFFF" BorderThickness="0"
+                        Click="Restore_Click" AutomationProperties.Name="还原主窗口"
+                        ToolTipService.ToolTip="还原主窗口">
+                    <Grid Width="28" Height="28">
+                        <FontIcon x:Name="CoverFallback" FontSize="12" Glyph="&#xE8D6;" Foreground="#40FFFFFF" />
+                        <!-- 用 ImageBrush 才能让封面跟着圆角一起裁 -->
+                        <Border CornerRadius="4">
+                            <Border.Background>
+                                <ImageBrush x:Name="CoverBrush" Stretch="UniformToFill" />
+                            </Border.Background>
+                        </Border>
+                    </Grid>
+                </Button>
+
+                <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="0">
+                    <TextBlock x:Name="TitleText" Text="暂无播放曲目" FontSize="10" FontWeight="Medium" LineHeight="14"
+                               LineStackingStrategy="BlockLineHeight" Foreground="{StaticResource TaskbarMutedBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="DetailText" Text="Klang" FontSize="11" FontWeight="SemiBold" LineHeight="15"
+                               LineStackingStrategy="BlockLineHeight" Foreground="{StaticResource TaskbarLyricBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Spacing="10">
+                    <Button x:Name="PreviousButton" Width="32" Height="32" Padding="0" Style="{StaticResource TaskbarButtonStyle}"
+                            PointerEntered="Action_Entered" PointerExited="Action_Exited"
+                            Click="Prev_Click" AutomationProperties.Name="上一首" ToolTipService.ToolTip="上一首">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M5,5 L5,19 Q5,20 4,20 Q3,20 3,19 L3,5 Q3,4 4,4 Q5,4 5,5 Z M19,4 Q21,3 21,5 L21,19 Q21,21 19,20 L8,13 Q6.5,12 8,11 Z"
+                                  Fill="{Binding Foreground, ElementName=PreviousButton}" />
+                        </Canvas>
+                    </Button>
+                    <Button x:Name="PlaybackButton" Width="48" Height="32" CornerRadius="16" Tag="play"
+                            Style="{StaticResource TaskbarButtonStyle}" PointerEntered="Action_Entered" PointerExited="Action_Exited"
+                            Background="{StaticResource TaskbarPlaybackBrush}" Click="PlayPause_Click"
+                            AutomationProperties.Name="播放 / 暂停" ToolTipService.ToolTip="播放 / 暂停">
+                        <Canvas Width="24" Height="24">
+                            <Path x:Name="PlayIcon" Data="M7,3 Q5,2 5,4 L5,20 Q5,22 7,21 L20,13 Q21.5,12 20,11 Z" Fill="{Binding Foreground, ElementName=PlaybackButton}" />
+                            <Path x:Name="PauseIcon" Visibility="Collapsed" Data="M5,4 L8,4 Q9,4 9,5 L9,19 Q9,20 8,20 L5,20 Q4,20 4,19 L4,5 Q4,4 5,4 Z M16,4 L19,4 Q20,4 20,5 L20,19 Q20,20 19,20 L16,20 Q15,20 15,19 L15,5 Q15,4 16,4 Z" Fill="{Binding Foreground, ElementName=PlaybackButton}" />
+                        </Canvas>
+                    </Button>
+                    <Button x:Name="NextButton" Width="32" Height="32" Style="{StaticResource TaskbarButtonStyle}"
+                            PointerEntered="Action_Entered" PointerExited="Action_Exited"
+                            Click="Next_Click" AutomationProperties.Name="下一首" ToolTipService.ToolTip="下一首">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M19,5 L19,19 Q19,20 20,20 Q21,20 21,19 L21,5 Q21,4 20,4 Q19,4 19,5 Z M5,4 Q3,3 3,5 L3,19 Q3,21 5,20 L16,13 Q17.5,12 16,11 Z"
+                                  Fill="{Binding Foreground, ElementName=NextButton}" />
+                        </Canvas>
+                    </Button>
+                </StackPanel>
+
+                <Button x:Name="FavoriteButton" Grid.Column="6" Width="32" Height="32" Padding="0"
+                        Style="{StaticResource TaskbarButtonStyle}" PointerEntered="Action_Entered" PointerExited="Action_Exited" Click="Favorite_Click"
+                        AutomationProperties.Name="喜欢" ToolTipService.ToolTip="喜欢">
+                    <Canvas Width="24" Height="24">
+                        <Path x:Name="FavoriteIcon" Data="M12,20 C10,18.5 3,14 3,8.5 C3,3.5 9,2.5 12,6 C15,2.5 21,3.5 21,8.5 C21,14 14,18.5 12,20 Z"
+                              Fill="Transparent" Stroke="{Binding Foreground, ElementName=FavoriteButton}" StrokeThickness="2" StrokeLineJoin="Round" />
+                    </Canvas>
+                </Button>
+            </Grid>
+
+            <Button x:Name="CloseButton" Width="12" Height="12" MinWidth="0" MinHeight="0" Padding="0"
+                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,4,0"
+                    Style="{StaticResource TaskbarButtonStyle}" IsHitTestVisible="False" Opacity="0"
+                    Click="Dismiss_Click" AutomationProperties.Name="关闭任务栏播放条"
+                    ToolTipService.ToolTip="关闭任务栏播放条">
+                <FontIcon FontSize="9" Glyph="&#xE711;" Foreground="#40FFFFFF" />
+            </Button>
+        </Grid>
+
+        <!-- 任务栏空白不足 388 DIP 时缩成的紧凑版：只留封面 + 播放键 -->
+        <Grid x:Name="CompactLayout" Width="108" Height="40" Visibility="Collapsed">
+            <Border x:Name="CompactBackdrop" CornerRadius="8" IsHitTestVisible="False"
+                    Background="#FF2B2624" />
+            <Border x:Name="CompactSurface" CornerRadius="8" IsHitTestVisible="False"
+                    Background="#0AFFFFFF" BorderBrush="#0AFFFFFF" BorderThickness="0.5"
+                    Opacity="0"
+                    PointerPressed="Drag_Pressed" PointerMoved="Drag_Moved"
+                    PointerReleased="Drag_Released" PointerCaptureLost="Drag_CaptureLost" />
+            <Border x:Name="CompactDragSurface" CornerRadius="8" IsHitTestVisible="False" Visibility="Collapsed"
+                    Background="#D91B1817" BorderBrush="#33FFFFFF" BorderThickness="1" />
+            <Grid x:Name="CompactDrag" Width="14" HorizontalAlignment="Left" Background="Transparent"
+                  Opacity="0" AutomationProperties.Name="拖动任务栏播放条"
+                  PointerPressed="Drag_Pressed" PointerMoved="Drag_Moved"
+                  PointerReleased="Drag_Released" PointerCaptureLost="Drag_CaptureLost"
+                  ToolTipService.ToolTip="拖动：放到任务栏左/右空白处停靠，拖离任务栏会回到原位">
+                <Border Width="2" Height="16" CornerRadius="1" Background="#1FFFFFFF"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+            <Grid x:Name="CompactContent" Padding="14,0,12,0" ColumnSpacing="10" Background="Transparent"
+                  PointerPressed="Drag_Pressed" PointerMoved="Drag_Moved"
+                  PointerReleased="Drag_Released" PointerCaptureLost="Drag_CaptureLost">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="28" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Width="28" Height="28" Padding="0" CornerRadius="4" VerticalAlignment="Center" Style="{StaticResource TaskbarButtonStyle}"
+                        Background="#12FFFFFF" BorderThickness="0" Click="Restore_Click"
+                        AutomationProperties.Name="还原主窗口" ToolTipService.ToolTip="还原主窗口">
+                    <Grid Width="28" Height="28">
+                        <FontIcon x:Name="CompactCoverFallback" FontSize="12" Glyph="&#xE8D6;" Foreground="#40FFFFFF" />
+                        <Border CornerRadius="4">
+                            <Border.Background>
+                                <ImageBrush x:Name="CompactCoverBrush" Stretch="UniformToFill" />
+                            </Border.Background>
+                        </Border>
+                    </Grid>
+                </Button>
+                <Button x:Name="CompactPlaybackButton" Grid.Column="1" Width="40" Height="32" CornerRadius="16" Tag="play"
+                        Style="{StaticResource TaskbarButtonStyle}" PointerEntered="Action_Entered" PointerExited="Action_Exited"
+                        HorizontalAlignment="Right" VerticalAlignment="Center" Background="{StaticResource TaskbarPlaybackBrush}" Click="PlayPause_Click"
+                        AutomationProperties.Name="播放 / 暂停" ToolTipService.ToolTip="播放 / 暂停">
+                    <Canvas Width="24" Height="24">
+                        <Path x:Name="CompactPlayIcon" Data="M7,3 Q5,2 5,4 L5,20 Q5,22 7,21 L20,13 Q21.5,12 20,11 Z" Fill="{Binding Foreground, ElementName=CompactPlaybackButton}" />
+                        <Path x:Name="CompactPauseIcon" Visibility="Collapsed" Data="M5,4 L8,4 Q9,4 9,5 L9,19 Q9,20 8,20 L5,20 Q4,20 4,19 L4,5 Q4,4 5,4 Z M16,4 L19,4 Q20,4 20,5 L20,19 Q20,20 19,20 L16,20 Q15,20 15,19 L15,5 Q15,4 16,4 Z" Fill="{Binding Foreground, ElementName=CompactPlaybackButton}" />
+                    </Canvas>
+                </Button>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

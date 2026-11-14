@@ -1,0 +1,74 @@
+[
+  {
+    "package": "microsoft.windows.sdk.buildtools",
+    "version": "10.0.28000.2957",
+    "license": null,
+    "licenseType": null,
+    "licenseUrl": "https://aka.ms/WinSDKLicenseURL",
+    "projectUrl": "https://aka.ms/WinSDKProjectURL",
+    "repositoryUrl": null
+  },
+  {
+    "package": "microsoft.windowsappsdk",
+    "version": "2.6.5",
+    "license": "license.txt",
+    "licenseType": "file",
+    "licenseUrl": "https://aka.ms/deprecateLicenseUrl",
+    "projectUrl": "https://github.com/microsoft/windowsappsdk",
+    "repositoryUrl": null
+  },
+  {
+    "package": "naudio",
+    "version": "3.3.0",
+    "license": "MIT",
+    "licenseType": "expression",
+    "licenseUrl": "https://licenses.nuget.org/MIT",
+    "projectUrl": "https://naudio.github.io/NAudio/",
+    "repositoryUrl": "https://github.com/naudio/NAudio"
+  },
+  {
+    "package": "taglibsharp",
+    "version": "2.3.0",
+    "license": "LGPL-2.1-only",
+    "licenseType": "expression",
+    "licenseUrl": "https://licenses.nuget.org/LGPL-2.1-only",
+    "projectUrl": "https://github.com/mono/taglib-sharp",
+    "repositoryUrl": "https://github.com/mono/taglib-sharp"
+  },
+  {
+    "package": "qrcoder",
+    "version": "1.6.0",
+    "license": "MIT",
+    "licenseType": "expression",
+    "licenseUrl": "https://licenses.nuget.org/MIT",
+    "projectUrl": "https://github.com/codebude/QRCoder/",
+    "repositoryUrl": "https://github.com/codebude/QRCoder.git"
+  },
+  {
+    "package": "microsoft.graphics.win2d",
+    "version": "1.3.2",
+    "license": null,
+    "licenseType": null,
+    "licenseUrl": "http://www.microsoft.com/web/webpi/eula/eula_win2d_10012014.htm",
+    "projectUrl": "http://go.microsoft.com/fwlink/?LinkID=519078",
+    "repositoryUrl": null
+  },
+  {
+    "package": "computesharp.winui",
+    "version": "3.2.0",
+    "license": "MIT",
+    "licenseType": "expression",
+    "licenseUrl": "https://licenses.nuget.org/MIT",
+    "projectUrl": "https://github.com/Sergio0694/ComputeSharp/",
+    "repositoryUrl": "https://github.com/Sergio0694/ComputeSharp/"
+  },
+  {
+    "package": "system.security.cryptography.protecteddata",
+    "version": "9.0.0",
+    "license": "MIT",
+    "licenseType": "expression",
+    "licenseUrl": "https://licenses.nuget.org/MIT",
+    "projectUrl": "https://dot.net/",
+    "repositoryUrl": "https://github.com/dotnet/runtime"
+  }
+]

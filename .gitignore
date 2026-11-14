@@ -48,6 +48,8 @@ scratch/
 !qt6_player/assets/*
 
 # IDE & OS
+**/bin/
+**/obj/
 .vscode/
 .idea/
 *.swp

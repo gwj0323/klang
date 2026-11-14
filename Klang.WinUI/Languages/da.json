@@ -1,6 +1,10 @@
 {
   "name": "Dansk",
   "strings": {
+    "任务栏播放条": "Proceslinjeafspiller",
+    "关闭任务栏播放条": "Luk proceslinjeafspilleren",
+    "拖动以调整任务栏位置": "Træk for at flytte på proceslinjen",
+    "在任务栏上显示封面、歌词与播放控制。拖动左侧把手可调整位置，Ctrl+B 切换。": "Vis omslag, sangtekst og afspilningsknapper på proceslinjen. Træk i venstre håndtag for at flytte; slå til eller fra med Ctrl+B.",
     "切歌过渡": "Overgange mellem numre",
     "自动混音": "Automatisk mix",
     "歌曲临近结束时与下一首交叉淡入淡出。速度相差 8% 以内时对齐节拍并做低频交接；否则做普通的交叉淡入淡出，并跳过首尾的静音。": "Krydsfader til det næste nummer nær slutningen. Ved højst 8 % tempoforskel justeres takten, og bassen skiftes; ellers bruges en almindelig krydsfade, og stilhed i begge ender springes over.",

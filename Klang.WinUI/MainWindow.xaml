@@ -141,6 +141,11 @@
                                 Click="MiniPlayerBtn_Click"
                                 KeyboardAcceleratorTextOverride="Ctrl+M"
                                 Text="迷你窗口" />
+                            <ToggleMenuFlyoutItem
+                                x:Name="TaskbarPlayerItem"
+                                Click="TaskbarPlayerItem_Click"
+                                KeyboardAcceleratorTextOverride="Ctrl+B"
+                                Text="任务栏播放条" />
                             <MenuFlyoutItem
                                 Click="FullscreenBtn_Click"
                                 KeyboardAcceleratorTextOverride="F11"

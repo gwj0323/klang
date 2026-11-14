@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-14",
+  "baselineCommit": "866d77ee8bed2d6c0a458089370ee74d350f94a7",
+  "variant": "taskbar",
+  "build": {
+    "sdk": "10.0.404",
+    "configuration": "Debug",
+    "platform": "x64",
+    "errors": 0,
+    "warnings": 11
+  },
+  "note": "Resolved dependency versions from the successful source build; runtime binaries are not included.",
+  "packages": [
+    {
+      "id": "ComputeSharp/3.2.0",
+      "type": "package"
+    },
+    {
+      "id": "ComputeSharp.Core/3.2.0",
+      "type": "package"
+    },
+    {
+      "id": "ComputeSharp.WinUI/3.2.0",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.Graphics.Win2D/1.3.2",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.Web.WebView2/1.0.3719.77",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.Windows.AI.MachineLearning/2.4.89",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.AI/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Foundation/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.InteractiveExperiences/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.ML/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Search/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Widgets/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.WinUI/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "NAudio/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.Core/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.Midi/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.Wasapi/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.WinMM/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "QRCoder/1.6.0",
+      "type": "package"
+    },
+    {
+      "id": "System.Numerics.Tensors/9.0.0",
+      "type": "package"
+    },
+    {
+      "id": "TagLibSharp/2.3.0",
+      "type": "package"
+    }
+  ]
+}
