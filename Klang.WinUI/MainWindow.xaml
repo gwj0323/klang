@@ -110,7 +110,7 @@
                                 <MenuFlyoutItem Click="LyricCalibrate_Click" Text="校准：点击当前演唱的歌词行" />
                                 <MenuFlyoutItem Click="LyricOffsetReset_Click" Text="重置偏移" />
                             </MenuFlyoutSubItem>
-                            <MenuFlyoutItem Click="LyricOnline_Click" Text="在线搜索歌词（LRCLIB）" />
+                            <MenuFlyoutItem Click="LyricChoose_Click" Text="选择歌词…" />
                             <MenuFlyoutSeparator />
                             <MenuFlyoutItem
                                 Click="PosterBtn_Click"

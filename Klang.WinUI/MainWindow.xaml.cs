@@ -503,7 +503,10 @@ public sealed partial class MainWindow : Window
         // CUE 分轨暂不加载整轨歌词（整轨 .lrc 与分轨时间轴不一致）
         StageLyricsControl.CalibrationMode = false;
         LoadLyricOffset(track);
-        StageLyricsControl.LoadLyrics(track.IsCueTrack || track.IsOnline ? null : track.FilePath);
+        if (LyricsService.ReadChosen(track.Id) is { } chosen)
+            StageLyricsControl.LoadLyricLines(LyricsService.Instance.ParseLrc(chosen.Lrc, chosen.Trans, chosen.Roma));   // 用户选定的歌词优先
+        else
+            StageLyricsControl.LoadLyrics(track.IsCueTrack || track.IsOnline ? null : track.FilePath);
         SyncImmersive();
         BottomTransportBar.UpdateTrackState(track.Title, track.Artist, track.CoverPath);
         BottomTransportBar.SetFavorite(track.IsFavorite);
@@ -666,7 +669,7 @@ public sealed partial class MainWindow : Window
             // 歌词与音源是否可用无关，都照常显示
             var bundle = await lyricTask;
             if (ct.IsCancellationRequested || _currentTrack != track) return;
-            if (!string.IsNullOrWhiteSpace(bundle.Lrc))
+            if (!string.IsNullOrWhiteSpace(bundle.Lrc) && !LyricsService.HasChosen(track.Id))   // 用户选定过歌词就不覆盖
             {
                 var lines = LyricsService.Instance.ParseLrc(bundle.Lrc, bundle.Trans, bundle.Roma);
                 StageLyricsControl.LoadLyricLines(lines);
@@ -1346,20 +1349,70 @@ public sealed partial class MainWindow : Window
         SetLyricOffset(lineTime - AudioEngineService.Instance.CurrentTime);
     }
 
-    private async void LyricOnline_Click(object sender, RoutedEventArgs e)
+    /// <summary>“选择歌词”：列出本地与在线的候选，让用户自己挑；选定后按曲目记住。</summary>
+    private async void LyricChoose_Click(object sender, RoutedEventArgs e)
     {
         var track = _currentTrack;
-        if (track == null || track.IsOnline || track.IsCueTrack) return;
-        BottomTransportBar.UpdateLyricSnippet(L.T("正在从 LRCLIB 查找歌词…"));
-        string? lrc = await LrclibService.FetchSyncedAsync(track, System.Threading.CancellationToken.None);
-        if (_currentTrack != track) return;
-        if (lrc == null)
+        if (track == null)
         {
-            BottomTransportBar.UpdateLyricSnippet(L.T("LRCLIB 中未找到该歌曲的歌词"));
+            BottomTransportBar.UpdateLyricSnippet(L.T("请先播放歌曲，再选择歌词"));
             return;
         }
-        ApplyOnlineLyrics(lrc);
-        BottomTransportBar.UpdateLyricSnippet(L.T("已从 LRCLIB 获取歌词"));
+        try
+        {
+            var (outcome, set) = await LyricPickerDialog.ShowAsync(Content.XamlRoot, track, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            if (_currentTrack != track) return;
+            switch (outcome)
+            {
+                case LyricPickerDialog.Outcome.Use when set != null:
+                    LyricsService.SaveChosen(track.Id, set);
+                    StageLyricsControl.LoadLyricLines(LyricsService.Instance.ParseLrc(set.Lrc, set.Trans, set.Roma));
+                    SyncImmersive();
+                    _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
+                    BottomTransportBar.UpdateLyricSnippet(L.T("已使用选定的歌词"));
+                    CrashReporter.Note("选择歌词：" + track.Title);
+                    break;
+                case LyricPickerDialog.Outcome.Reset:
+                    LyricsService.ClearChosen(track.Id);
+                    ReloadAutomaticLyrics(track);
+                    BottomTransportBar.UpdateLyricSnippet(L.T("已恢复自动匹配的歌词"));
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            App.LogError("Lyric picker", ex);
+        }
+    }
+
+    /// <summary>撤销用户选定后，按原来的顺序重新取歌词（本地 → 网易云 / LRCLIB）。</summary>
+    private void ReloadAutomaticLyrics(TrackItem track)
+    {
+        if (track.IsOnline)
+        {
+            StageLyricsControl.LoadLyrics(null);
+            _ = ReloadOnlineLyricsAsync(track);
+        }
+        else
+        {
+            StageLyricsControl.LoadLyrics(track.IsCueTrack ? null : track.FilePath);
+            if (!track.IsCueTrack) _ = FillLocalMetaAsync(track);
+        }
+        SyncImmersive();
+        _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
+    }
+
+    private async System.Threading.Tasks.Task ReloadOnlineLyricsAsync(TrackItem track)
+    {
+        try
+        {
+            var b = await Services.Netease.NeteaseService.Instance.GetLyricsAsync(track.NeteaseId);
+            if (_currentTrack != track || string.IsNullOrWhiteSpace(b.Lrc) || LyricsService.HasChosen(track.Id)) return;
+            StageLyricsControl.LoadLyricLines(LyricsService.Instance.ParseLrc(b.Lrc, b.Trans, b.Roma));
+            SyncImmersive();
+            _desktopLyricWindow?.UpdateLyrics(StageLyricsControl.Lyrics);
+        }
+        catch { }
     }
 
     private void ApplyOnlineLyrics(string lrc)

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using WinRT.Interop;
@@ -12,13 +13,9 @@ namespace Klang_WinUI.Views;
 /// <summary>桌面歌词 / 迷你窗口共用的无边框悬浮窗辅助：置顶、DPI 缩放、记住位置、拖动。</summary>
 internal static class WindowHelpers
 {
-    [DllImport("user32.dll")] private static extern bool ReleaseCapture();
-    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
-    private const int WM_NCLBUTTONDOWN = 0xA1;
-    private const int HTCAPTION = 0x2;
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWCP_ROUND = 2;
 
@@ -36,6 +33,7 @@ internal static class WindowHelpers
         try { window.AppWindow.IsShownInSwitchers = false; } catch { }
 
         var hwnd = WindowNative.GetWindowHandle(window);
+        DipSizes.AddOrUpdate(window, new DipSize(widthDip, heightDip));
         double scale = Math.Max(1.0, GetDpiForWindow(hwnd) / 96.0);
         window.AppWindow.Resize(new SizeInt32((int)(widthDip * scale), (int)(heightDip * scale)));
 
@@ -72,21 +70,93 @@ internal static class WindowHelpers
         };
     }
 
-    /// <summary>按住卡片空白处拖动整个窗口；点在按钮 / 滑块上时不拖动。</summary>
+    [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT pt);
+
+    // 每个悬浮窗按 DIP 设定的尺寸：拖到缩放比例不同的显示器后按新比例重新设定
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, object> DipSizes = new();
+
+    private sealed record DipSize(int Width, int Height);
+
+    /// <summary>
+    /// 按住卡片空白处拖动整个窗口；点在按钮 / 滑块上时不拖动。
+    /// 以前用“假装按住标题栏”（WM_NCLBUTTONDOWN + HTCAPTION）交给系统拖动：在 WinUI 3 里窗口要等松手后才跳过去，
+    /// 位移还会按显示缩放比例放大（125% 时多走 25%），右键也能拖，单击卡片会被吞掉。
+    /// 现在自己处理：只认左键，移动超过几个像素才算拖动，按物理光标的位移移动窗口，并保证窗口留在屏幕内。
+    /// </summary>
     public static void EnableDrag(Window window, UIElement dragSurface)
     {
-        var hwnd = WindowNative.GetWindowHandle(window);
+        var aw = window.AppWindow;
+        bool pressed = false, moving = false;
+        POINT start = default;
+        PointInt32 origin = default;
+
         dragSurface.PointerPressed += (s, e) =>
         {
-            if (e.OriginalSource is DependencyObject dep)
-            {
-                for (var cur = dep; cur != null && !ReferenceEquals(cur, dragSurface); cur = VisualTreeHelper.GetParent(cur))
-                {
-                    if (cur is Button || cur is Slider) return;
-                }
-            }
-            ReleaseCapture();
-            SendMessage(hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+            var pt = e.GetCurrentPoint(dragSurface);
+            if (!pt.Properties.IsLeftButtonPressed) return;
+            if (IsInteractive(e.OriginalSource, dragSurface)) return;
+            if (!GetCursorPos(out start)) return;
+            origin = aw.Position;
+            pressed = true;
+            moving = false;
+            dragSurface.CapturePointer(e.Pointer);
         };
+
+        dragSurface.PointerMoved += (s, e) =>
+        {
+            if (!pressed || !GetCursorPos(out var cur)) return;
+            int dx = cur.X - start.X, dy = cur.Y - start.Y;
+            if (!moving && Math.Abs(dx) + Math.Abs(dy) < 4) return;   // 小于 4 像素当作点击
+            moving = true;
+            aw.Move(KeepOnScreen(aw, new PointInt32(origin.X + dx, origin.Y + dy), cur));
+            e.Handled = true;
+        };
+
+        void End(object s, PointerRoutedEventArgs e)
+        {
+            if (!pressed) return;
+            pressed = false;
+            dragSurface.ReleasePointerCapture(e.Pointer);
+            if (moving) FitToDpi(window);
+            moving = false;
+        }
+        dragSurface.PointerReleased += End;
+        dragSurface.PointerCaptureLost += (s, e) => { pressed = false; moving = false; };
+    }
+
+    private static bool IsInteractive(object source, UIElement surface)
+    {
+        if (source is not DependencyObject dep) return false;
+        for (var cur = dep; cur != null && !ReferenceEquals(cur, surface); cur = VisualTreeHelper.GetParent(cur))
+        {
+            if (cur is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase || cur is Slider || cur is TextBox) return true;
+        }
+        return false;
+    }
+
+    /// <summary>窗口至少保留一部分在光标所在显示器的工作区内：横向留 80 像素，顶部不超出（否则抓不回来）。</summary>
+    private static PointInt32 KeepOnScreen(AppWindow aw, PointInt32 pos, POINT cursor)
+    {
+        var area = DisplayArea.GetFromPoint(new PointInt32(cursor.X, cursor.Y), DisplayAreaFallback.Nearest);
+        if (area == null) return pos;
+        var work = area.WorkArea;
+        int w = aw.Size.Width, h = aw.Size.Height;
+        int x = Math.Clamp(pos.X, work.X - w + 80, work.X + work.Width - 80);
+        int y = Math.Clamp(pos.Y, work.Y, Math.Max(work.Y, work.Y + work.Height - Math.Min(h, 48)));
+        return new PointInt32(x, y);
+    }
+
+    /// <summary>拖到缩放比例不同的显示器后，按新比例重新设定窗口尺寸（以窗口中心为准）。</summary>
+    private static void FitToDpi(Window window)
+    {
+        if (!DipSizes.TryGetValue(window, out var o) || o is not DipSize dip) return;
+        var hwnd = WindowNative.GetWindowHandle(window);
+        double scale = Math.Max(1.0, GetDpiForWindow(hwnd) / 96.0);
+        var want = new SizeInt32((int)(dip.Width * scale), (int)(dip.Height * scale));
+        var aw = window.AppWindow;
+        if (Math.Abs(aw.Size.Width - want.Width) <= 2 && Math.Abs(aw.Size.Height - want.Height) <= 2) return;
+        var c = new PointInt32(aw.Position.X + aw.Size.Width / 2, aw.Position.Y + aw.Size.Height / 2);
+        aw.MoveAndResize(new RectInt32(c.X - want.Width / 2, c.Y - want.Height / 2, want.Width, want.Height));
     }
 }

@@ -465,7 +465,7 @@ public sealed partial class NavigationPane : UserControl
                     || (_qualityFilter > 0 && t.QualityTier >= _qualityFilter))
                 && (!_fNoCover || MetadataService.NeedsCover(t))
                 && (!_fNoAlbum || t.Album == "未知专辑" || t.Artist == "未知歌手")
-                && (!_fNoLyrics || (!t.IsOnline && !File.Exists(Path.ChangeExtension(t.FilePath, ".lrc")) && !LrclibService.HasCache(t.Id)))
+                && (!_fNoLyrics || (!t.IsOnline && !File.Exists(Path.ChangeExtension(t.FilePath, ".lrc")) && !LrclibService.HasCache(t.Id) && !LyricsService.HasChosen(t.Id)))
                 && (!_fMissingFile || t.IsMissing)
                 && (!_fFake || t.IsSuspectFake));
         }

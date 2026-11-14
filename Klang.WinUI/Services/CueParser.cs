@@ -125,7 +125,8 @@ public static class CueParser
         return m.Success ? (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value) : s;
     }
 
-    private static string ReadText(string path)
+    /// <summary>读文本文件：UTF-8（含 BOM）优先，不是合法 UTF-8 时按 GB18030 读（老的中文 .cue / .lrc 多是 GBK）。</summary>
+    internal static string ReadText(string path)
     {
         var bytes = File.ReadAllBytes(path);
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)

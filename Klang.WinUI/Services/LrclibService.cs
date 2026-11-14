@@ -104,6 +104,30 @@ public static class LrclibService
         catch { return null; }
     }
 
+    public sealed record Hit(string Title, string Artist, string Album, double Duration, string Synced);
+
+    /// <summary>按关键词搜索，返回所有带时间轴的结果（供用户自己挑选）。</summary>
+    public static async Task<System.Collections.Generic.List<Hit>> SearchAsync(string keyword, CancellationToken ct)
+    {
+        var list = new System.Collections.Generic.List<Hit>();
+        keyword = keyword.Trim();
+        if (keyword.Length == 0) return list;
+        using var resp = await Http.GetAsync("https://lrclib.net/api/search?q=" + Uri.EscapeDataString(keyword), ct);
+        if (!resp.IsSuccessStatusCode) return list;
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return list;
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            var synced = Synced(e);
+            if (synced == null) continue;
+            string S(string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+            double dur = e.TryGetProperty("duration", out var d) && d.ValueKind == JsonValueKind.Number ? d.GetDouble() : 0;
+            list.Add(new Hit(S("trackName"), S("artistName"), S("albumName"), dur, synced));
+            if (list.Count >= 20) break;
+        }
+        return list;
+    }
+
     private static string? Synced(JsonElement e)
     {
         if (e.ValueKind != JsonValueKind.Object) return null;

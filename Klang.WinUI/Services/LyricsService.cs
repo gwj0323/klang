@@ -49,6 +49,94 @@ public class LyricsService
         return (text, words.Count > 0 ? words : null);
     }
 
+    #region 用户选定的歌词
+
+    /// <summary>一份歌词：主歌词（LRC / 增强 LRC），可选的翻译与罗马音。</summary>
+    public sealed record LyricSet(string Lrc, string Trans = "", string Roma = "");
+
+    /// <summary>用户在“选择歌词”里选定的歌词，按曲目 ID 存放，优先于自动匹配（不改动音乐文件夹）。</summary>
+    public static string ChosenDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Klang", "LyricsChosen");
+
+    private static string ChosenPath(string trackId, string suffix) =>
+        Path.Combine(ChosenDir, string.Concat(trackId.Split(Path.GetInvalidFileNameChars())) + suffix);
+
+    public static bool HasChosen(string trackId)
+    {
+        try { return File.Exists(ChosenPath(trackId, ".lrc")); } catch { return false; }
+    }
+
+    public static LyricSet? ReadChosen(string trackId)
+    {
+        try
+        {
+            var p = ChosenPath(trackId, ".lrc");
+            if (!File.Exists(p)) return null;
+            string Read(string suffix) { var f = ChosenPath(trackId, suffix); return File.Exists(f) ? File.ReadAllText(f) : ""; }
+            return new LyricSet(File.ReadAllText(p), Read(".trans.lrc"), Read(".roma.lrc"));
+        }
+        catch { return null; }
+    }
+
+    public static void SaveChosen(string trackId, LyricSet set)
+    {
+        Directory.CreateDirectory(ChosenDir);
+        File.WriteAllText(ChosenPath(trackId, ".lrc"), set.Lrc);
+        foreach (var (suffix, text) in new[] { (".trans.lrc", set.Trans), (".roma.lrc", set.Roma) })
+        {
+            var f = ChosenPath(trackId, suffix);
+            if (string.IsNullOrWhiteSpace(text)) { if (File.Exists(f)) File.Delete(f); }
+            else File.WriteAllText(f, text);
+        }
+    }
+
+    public static void ClearChosen(string trackId)
+    {
+        foreach (var suffix in new[] { ".lrc", ".trans.lrc", ".roma.lrc" })
+        {
+            try { var f = ChosenPath(trackId, suffix); if (File.Exists(f)) File.Delete(f); } catch { }
+        }
+    }
+
+    #endregion
+
+    #region 本地歌词来源
+
+    /// <summary>音频旁边的同名 .lrc（以及 .trans.lrc / .zh.lrc 翻译）。文件编码自动识别（UTF-8 / GBK）。</summary>
+    public static LyricSet? ReadLocalFile(string? audioFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(audioFilePath)) return null;
+        try
+        {
+            string dir = Path.GetDirectoryName(audioFilePath) ?? "";
+            string baseName = Path.GetFileNameWithoutExtension(audioFilePath);
+            string lrc = Path.Combine(dir, $"{baseName}.lrc");
+            if (!File.Exists(lrc)) return null;
+            string trans = Path.Combine(dir, $"{baseName}.trans.lrc");
+            if (!File.Exists(trans)) trans = Path.Combine(dir, $"{baseName}.zh.lrc");
+            return new LyricSet(CueParser.ReadText(lrc), File.Exists(trans) ? CueParser.ReadText(trans) : "");
+        }
+        catch { return null; }
+    }
+
+    /// <summary>音频文件标签里内嵌的歌词（ID3v2 USLT / Vorbis LYRICS 等）。</summary>
+    public static LyricSet? ReadEmbedded(string? audioFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(audioFilePath) || !File.Exists(audioFilePath)) return null;
+        try
+        {
+            using var tagFile = TagLib.File.Create(audioFilePath);
+            string? embedded = tagFile.Tag?.Lyrics;
+            return string.IsNullOrWhiteSpace(embedded) ? null : new LyricSet(embedded);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>这份歌词能不能用：至少有一行带时间轴。</summary>
+    public bool IsSynced(string? lrc) => !string.IsNullOrWhiteSpace(lrc) && ParseRawEntries(lrc).Count > 0;
+
+    #endregion
+
     public List<LyricLine> LoadLyrics(string? audioFilePath)
     {
         if (string.IsNullOrWhiteSpace(audioFilePath) || !File.Exists(audioFilePath))
@@ -56,46 +144,17 @@ public class LyricsService
             return CreateEmptyPlaceholder(L.T("暂无歌词"));
         }
 
-        string dir = Path.GetDirectoryName(audioFilePath) ?? "";
-        string baseName = Path.GetFileNameWithoutExtension(audioFilePath);
-
-        // 1. 尝试同目录下同名 .lrc 文件
-        string localLrcPath = Path.Combine(dir, $"{baseName}.lrc");
-        string localTransPath = Path.Combine(dir, $"{baseName}.trans.lrc");
-        if (!File.Exists(localTransPath))
+        // 1. 同目录下同名 .lrc 文件
+        if (ReadLocalFile(audioFilePath) is { } local)
         {
-            localTransPath = Path.Combine(dir, $"{baseName}.zh.lrc");
+            var parsed = ParseLrc(local.Lrc, local.Trans);
+            if (IsSynced(local.Lrc)) return parsed;
         }
 
-        if (File.Exists(localLrcPath))
+        // 2. 音频文件标签里的内嵌歌词
+        if (ReadEmbedded(audioFilePath) is { } embedded && IsSynced(embedded.Lrc))
         {
-            try
-            {
-                string lrcText = File.ReadAllText(localLrcPath);
-                string? transText = File.Exists(localTransPath) ? File.ReadAllText(localTransPath) : null;
-                var parsed = ParseLrc(lrcText, transText);
-                if (parsed.Count > 0) return parsed;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error reading local lrc: {ex.Message}");
-            }
-        }
-
-        // 2. 尝试从音频文件的元数据标签 (ID3v2 USLT / FLAC VORBISCOMMENT) 读取内嵌歌词
-        try
-        {
-            using var tagFile = TagLib.File.Create(audioFilePath);
-            string? embedded = tagFile.Tag?.Lyrics;
-            if (!string.IsNullOrWhiteSpace(embedded))
-            {
-                var parsed = ParseLrc(embedded);
-                if (parsed.Count > 0) return parsed;
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Error reading embedded lyrics: {ex.Message}");
+            return ParseLrc(embedded.Lrc);
         }
 
         // 3. 之前在线补全并缓存下来的歌词（LRCLIB）
