@@ -1,0 +1,112 @@
+{
+  "date": "2026-11-14",
+  "baselineCommit": "1b3b5be58abcec7ef37a34c8d310cbc30950edd9",
+  "variant": "taskbar-soda",
+  "build": {
+    "sdk": "10.0.404",
+    "configuration": "Debug",
+    "platform": "x64",
+    "errors": 0,
+    "warnings": 17
+  },
+  "note": "Resolved dependencies for the contribution branch rebased on upstream 2.7.3; no runtime binaries or user data are committed.",
+  "packages": [
+    {
+      "id": "ComputeSharp/3.2.0",
+      "type": "package"
+    },
+    {
+      "id": "ComputeSharp.Core/3.2.0",
+      "type": "package"
+    },
+    {
+      "id": "ComputeSharp.WinUI/3.2.0",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.Graphics.Win2D/1.3.2",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.Web.WebView2/1.0.3719.77",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.Windows.AI.MachineLearning/2.4.89",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.AI/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Foundation/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.InteractiveExperiences/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.ML/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Search/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Widgets/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.WinUI/2.6.5",
+      "type": "package"
+    },
+    {
+      "id": "NAudio/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.Core/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.Midi/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.Wasapi/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "NAudio.WinMM/3.3.0",
+      "type": "package"
+    },
+    {
+      "id": "QRCoder/1.6.0",
+      "type": "package"
+    },
+    {
+      "id": "System.Numerics.Tensors/9.0.0",
+      "type": "package"
+    },
+    {
+      "id": "TagLibSharp/2.3.0",
+      "type": "package"
+    }
+  ],
+  "upstreamVersion": "2.7.3",
+  "featureBranch": "feat/taskbar-soda",
+  "releaseBuild": {
+    "configuration": "Release",
+    "platform": "x64",
+    "publishReadyToRun": false,
+    "errors": 0,
+    "warnings": 17
+  }
+}

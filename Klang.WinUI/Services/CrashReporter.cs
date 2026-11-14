@@ -15,8 +15,7 @@ namespace Klang_WinUI.Services;
 /// </summary>
 public static class CrashReporter
 {
-    private static readonly string Dir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Klang");
+    private static readonly string Dir = StateService.ResolveDataDirectory();
     private static readonly string MarkerPath = Path.Combine(Dir, "running.lock");
     private static readonly string TrailPath = Path.Combine(Dir, "trail.log");
     private static readonly string PrevTrailPath = Path.Combine(Dir, "trail.prev.log");

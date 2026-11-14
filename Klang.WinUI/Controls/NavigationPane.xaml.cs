@@ -81,6 +81,9 @@ public sealed partial class NavigationPane : UserControl
     /// <summary>播放队列：用户点播时锁定为当时列表的快照，上一首/下一首在其中循环。</summary>
     public List<TrackItem> Queue { get; private set; } = new();
 
+    /// <summary>External source owns this mutable queue, including subsequent feed batches.</summary>
+    public void SetExternalQueue(List<TrackItem> tracks) => Queue = tracks;
+
     /// <summary>以给定曲目作为播放队列，从第一首开始播放（画廊点专辑时使用）。</summary>
     public void PlayQueue(List<TrackItem> list)
     {

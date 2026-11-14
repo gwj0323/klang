@@ -105,6 +105,9 @@ public class AppState
     public int DesktopLyricFontSize { get; set; } = 30;
     public int? MiniX { get; set; }
     public int? MiniY { get; set; }
+    public bool TaskbarPlayerEnabled { get; set; }
+    public string TaskbarPlayerMonitor { get; set; } = "";
+    public string TaskbarPlayerSide { get; set; } = "right";    // 停靠在任务栏哪一侧：left | right
 
     public bool AutoFetchMetadata { get; set; } = true;     // 本地歌曲缺封面/信息/歌词时在线补全
     public string LyricSubMode { get; set; } = "trans";   // trans | roma | both | off
@@ -178,11 +181,24 @@ public class StateService
 
     public StateService()
     {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Klang");
+        var dir = ResolveDataDirectory();
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "player_state.json");
         _debounce = new Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
         Load();
+    }
+
+    /// <summary>
+    /// 状态文件所在目录。设置环境变量 KLANG_DATA_DIR 可以把它指到别处，
+    /// 方便用一份隔离数据跑开发版，不碰用户真实的播放库和播放状态。
+    /// </summary>
+    internal static string ResolveDataDirectory()
+    {
+        var custom = Environment.GetEnvironmentVariable("KLANG_DATA_DIR");
+        var root = string.IsNullOrWhiteSpace(custom)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : custom;
+        return Path.Combine(root, "Klang");
     }
 
     private void Load()

@@ -66,7 +66,7 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
                 Uri? uri = null;
                 if (!string.IsNullOrEmpty(_coverPath) && File.Exists(_coverPath)) uri = new Uri(_coverPath);
                 else if (!string.IsNullOrEmpty(CoverUrl))
-                    uri = new Uri(CoverUrl.Contains('?') ? CoverUrl : CoverUrl + "?param=96y96");
+                    uri = new Uri(NeteaseId.Length > 0 && !CoverUrl.Contains('?') ? CoverUrl + "?param=96y96" : CoverUrl);
                 return uri == null ? null : new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri) { DecodePixelWidth = 96 };
             }
             catch
@@ -191,8 +191,10 @@ public class TrackItem : System.ComponentModel.INotifyPropertyChanged
 
     /// <summary>网易云歌曲 ID；非空表示云端曲目（FilePath 在解析音源后才有值）。</summary>
     public string NeteaseId { get; set; } = string.Empty;
+    /// <summary>汽水曲目独立于网易云，缓存文件不能改变曲目的平台身份。</summary>
+    public string SodaId { get; set; } = string.Empty;
     public string CoverUrl { get; set; } = string.Empty;
-    public bool IsOnline => NeteaseId.Length > 0;
+    public bool IsOnline => NeteaseId.Length > 0 || SodaId.Length > 0;
 
     /// <summary>ReplayGain 标签（dB / 峰值），没有标签时为 null。</summary>
     public double? ReplayGainDb { get; set; }

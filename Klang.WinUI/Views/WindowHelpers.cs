@@ -23,15 +23,16 @@ internal static class WindowHelpers
     private const int DWMWCP_ROUND = 2;
 
     /// <summary>设为置顶、无边框、不可缩放、不出现在任务栏 / Alt+Tab，并按 DIP 尺寸缩放到当前 DPI。</summary>
-    public static void SetupOverlay(Window window, int widthDip, int heightDip)
+    public static void SetupOverlay(Window window, int widthDip, int heightDip, bool frame = true)
     {
         var presenter = OverlappedPresenter.Create();
         presenter.IsAlwaysOnTop = true;
         presenter.IsResizable = false;
         presenter.IsMaximizable = false;
         presenter.IsMinimizable = false;
-        // 有边框、无标题栏：系统会给这种窗口画圆角和细边框
-        presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
+        // frame=false 时完全无边框（任务栏播放条用）：有边框的窗口即使用 SetBorderAndTitleBar
+        // 事后关掉，DWM 仍会在外圈留一条 1px 的白色边框。
+        presenter.SetBorderAndTitleBar(hasBorder: frame, hasTitleBar: false);
         window.AppWindow.SetPresenter(presenter);
         try { window.AppWindow.IsShownInSwitchers = false; } catch { }
 
