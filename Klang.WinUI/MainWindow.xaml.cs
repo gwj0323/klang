@@ -582,6 +582,7 @@ public sealed partial class MainWindow : Window
         StageCoverCard.UpdateTrack(track);
         UpdateMvButton(track);
         UpdateEasterEgg();
+        if (autoPlay && State.EasterEgg) StageCoverCard.GreetEasterEgg();   // 切歌时小人打个招呼（启动恢复时不打）
         LoadDynamicCover(track);
         UpdateTrayTip();
         UpdateNarrowHeader(track);

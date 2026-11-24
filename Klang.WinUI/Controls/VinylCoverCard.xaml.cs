@@ -461,6 +461,9 @@ public sealed partial class VinylCoverCard : UserControl
     /// <summary>彩蛋小人跟着音乐：是否在播放、当前歌曲的 BPM（0 = 不知道）。</summary>
     public void UpdateEasterEgg(bool playing, double bpm) => EggSitter.SetPlaying(playing, bpm);
 
+    /// <summary>切歌时彩蛋小人挥一下（图片模式挥葱）。</summary>
+    public void GreetEasterEgg() => EggSitter.Greet();
+
     /// <summary>点了封面右上角的 MV 按钮。</summary>
     public event EventHandler? MvRequested;
 
