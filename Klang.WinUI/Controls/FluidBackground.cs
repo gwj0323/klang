@@ -303,12 +303,8 @@ public sealed class FluidBackground : UserControl
         Content = _image;
         IsTabStop = false;
         IsHitTestVisible = false;
-        try { InitGpu(); }
-        catch
-        {
-            _gpu = null; _device = null;
-            Content = _image;
-        }
+        // GPU（D3D12 设备、交换链、雨水缓冲区）等第一次真正显示（Start）时才创建：
+        // 沉浸界面一直在窗口里（折叠着），不打开的话这几十 MB 内存不必占着
         _timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
         _timer.Interval = TimeSpan.FromMilliseconds(33);
         _timer.Tick += (s, e) => Frame();
@@ -319,10 +315,29 @@ public sealed class FluidBackground : UserControl
         };
     }
 
+    private bool _gpuTried;
+
+    private void EnsureGpu()
+    {
+        if (_gpuTried) return;
+        _gpuTried = true;
+        try
+        {
+            InitGpu();
+            if (_texCur != null) SwapGpuTextures(_texCur);   // 之前已经算好的封面色块图
+        }
+        catch
+        {
+            _gpu = null; _device = null;
+            Content = _image;
+        }
+    }
+
     public void Start()
     {
         if (_running) return;
         _running = true;
+        EnsureGpu();
         if (_gpu != null)
         {
             UpdateResolution();

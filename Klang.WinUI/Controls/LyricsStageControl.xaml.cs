@@ -218,8 +218,7 @@ public sealed partial class LyricsStageControl : UserControl
         _resumeTimer.Stop();
         ResumeCenterBtn.Visibility = Visibility.Collapsed;
         _rows.Clear();
-        _layoutCache.Clear();
-        _subCache.Clear();
+        ClearLayouts();
     }
 
     public void LoadLyrics(string? audioFilePath)
@@ -383,6 +382,18 @@ public sealed partial class LyricsStageControl : UserControl
     private readonly Dictionary<(int, int, bool), CanvasTextLayout> _layoutCache = new();
     private readonly Dictionary<(int, int), CanvasTextLayout> _subCache = new();
 
+    /// <summary>
+    /// 清空排版缓存并立即释放（换歌、改字号、改宽度时）。只清字典的话，DirectWrite 排版对象背后的原生内存
+    /// 要等到垃圾回收才释放，而这个界面的托管堆很小、很少回收，换几首歌就积下来。
+    /// </summary>
+    private void ClearLayouts()
+    {
+        foreach (var l in _layoutCache.Values) l.Dispose();
+        foreach (var l in _subCache.Values) l.Dispose();
+        _layoutCache.Clear();
+        _subCache.Clear();
+    }
+
     private static string? LocaleFor(string text)
     {
         // 日文 / 韩文歌词要用对应语言的字形（同一个汉字日文和中文写法不同），否则会拿中文字体去显示
@@ -412,7 +423,7 @@ public sealed partial class LyricsStageControl : UserControl
 
         var line = _rows[i].Line;
         string text = MainText(line);
-        var fmt = new CanvasTextFormat
+        using var fmt = new CanvasTextFormat   // 排版创建时会复制格式，之后格式对象就不用留着了
         {
             FontFamily = LyricFont,
             FontSize = (float)_lyricFontSize,
@@ -436,7 +447,7 @@ public sealed partial class LyricsStageControl : UserControl
         var key = (i, 0);
         if (_subCache.TryGetValue(key, out var cached)) return cached;
 
-        var fmt = new CanvasTextFormat
+        using var fmt = new CanvasTextFormat
         {
             FontFamily = LyricFont,
             FontSize = (float)Math.Round(_lyricFontSize * 13.5 / 22.0, 1),
@@ -457,7 +468,7 @@ public sealed partial class LyricsStageControl : UserControl
     private void Rebuild(bool snap, bool keepScroll = false)
     {
         if (_rows.Count == 0) { RequestRender(); return; }
-        if (snap) { _layoutCache.Clear(); _subCache.Clear(); foreach (var r in _rows) r.WordRects = null; }
+        if (snap) { ClearLayouts(); foreach (var r in _rows) r.WordRects = null; }
 
         var dev = CanvasDevice.GetSharedDevice();
         int center = _active >= 0 ? _active : 0;
@@ -785,8 +796,7 @@ public sealed partial class LyricsStageControl : UserControl
             // 显卡驱动重置等：丢掉和旧设备绑定的资源，下一帧用新设备重建
             dev.RaiseDeviceLost();
             _swapChain = null;
-            _layoutCache.Clear();
-            _subCache.Clear();
+            ClearLayouts();
             foreach (var r in _rows) r.WordRects = null;
         }
         finally
@@ -803,8 +813,7 @@ public sealed partial class LyricsStageControl : UserControl
         double padX = SidePad;
 
         // 一直不用的排版别无限堆积
-        if (_layoutCache.Count > 20000) _layoutCache.Clear();
-        if (_subCache.Count > 20000) _subCache.Clear();
+        if (_layoutCache.Count + _subCache.Count > 4000) ClearLayouts();
 
         for (int i = 0; i < _rows.Count; i++)
         {

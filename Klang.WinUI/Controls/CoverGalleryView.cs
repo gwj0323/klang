@@ -390,6 +390,17 @@ public sealed class CoverGalleryView : UserControl
     /// <summary>当前播放曲目变了：墙上对应的专辑亮起边框，中间卡片换成这首歌。</summary>
     public void SetCurrent(TrackItem? track) => SetNowPlaying(track);
 
+    /// <summary>画廊关掉后释放所有封面图片（下次打开时 Load 会重新按需加载）。</summary>
+    public void ReleaseImages()
+    {
+        foreach (var t in _tiles)
+        {
+            t.Loaded = false;
+            if (t.Img != null) { t.Surface.Children.Remove(t.Img); t.Img.Source = null; t.Img = null; }
+        }
+        _heroCover.Source = null;
+    }
+
     private void UpdateRing(Tile t)
     {
         if (t.Ring == null) return;

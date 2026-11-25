@@ -97,8 +97,24 @@ public sealed partial class ImmersiveView : UserControl
     /// <summary>封面所在的元素：进入 / 退出沉浸模式时，封面在它和主界面封面之间做连贯转场。</summary>
     public UIElement CoverTarget => CoverFrame;
 
+    private string? _coverShown;
+
+    private void LoadCover(string? cover)
+    {
+        if (cover == _coverShown && CoverImage.Source != null) return;
+        _coverShown = cover;
+        try
+        {
+            CoverImage.Source = !string.IsNullOrEmpty(cover) && System.IO.File.Exists(cover)
+                ? new BitmapImage(new Uri(cover)) { DecodePixelWidth = 760 }
+                : null;
+        }
+        catch { CoverImage.Source = null; }
+    }
+
     public void Open()
     {
+        LoadCover(_cover);
         Visibility = Visibility.Visible;
         UiAnimations.FadeIn(RootGrid, 320);   // 背景淡入，封面由连贯转场“飞”过来
         Fluid.Start();
@@ -112,6 +128,9 @@ public sealed partial class ImmersiveView : UserControl
         _idleTimer?.Stop();
         ShowPointer();
         Fluid.Stop();
+        // 关掉后放掉大封面（下次打开再加载）
+        CoverImage.Source = null;
+        _coverShown = null;
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => CloseRequested?.Invoke(this, EventArgs.Empty);
@@ -224,13 +243,8 @@ public sealed partial class ImmersiveView : UserControl
         {
             TitleText.Text = track?.Title ?? "";
             ArtistText.Text = track?.Artist ?? "";
-            try
-            {
-                CoverImage.Source = !string.IsNullOrEmpty(cover) && System.IO.File.Exists(cover)
-                    ? new BitmapImage(new Uri(cover)) { DecodePixelWidth = 760 }
-                    : null;
-            }
-            catch { CoverImage.Source = null; }
+            // 沉浸界面没打开时不解码大封面，打开时（Open）再加载
+            if (IsOpen) LoadCover(cover);
         }
 
         // 换了一首歌：封面 / 标题整体淡出 → 换内容 → 淡入；同一首歌只是封面补全到了，就直接替换

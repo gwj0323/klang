@@ -599,8 +599,9 @@ public sealed partial class MainWindow : Window
         BottomTransportBar.UpdateProgress(0, track.Duration);
         _ = LoadWaveformAsync(track);
         LeftNavPane.SetCurrentTrack(track);
-        GalleryLayer.SetCurrent(track);
+        if (GalleryLayer.Visibility == Visibility.Visible) GalleryLayer.SetCurrent(track);   // 关着时不解码它的大封面，打开时会设置
         _media.UpdateTrack(track);
+        ScheduleMemoryTrim();
         _media.SetPlaybackState(autoPlay, true);
 
         // 同步桌面歌词与迷你播放器
@@ -2042,7 +2043,32 @@ public sealed partial class MainWindow : Window
         GalleryLayer.PlayOpenAnimation();
     }
 
-    private void CloseGallery() => GalleryLayer.Visibility = Visibility.Collapsed;
+    private void CloseGallery()
+    {
+        GalleryLayer.Visibility = Visibility.Collapsed;
+        GalleryLayer.ReleaseImages();   // 几十上百张封面，关掉后不必一直占着内存
+        ScheduleMemoryTrim();
+    }
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _trimTimer;
+
+    /// <summary>
+    /// 换歌 / 关掉画廊几秒后做一次后台垃圾回收：托管堆很小（约 20 MB），.NET 很少主动回收，
+    /// 而换下来的封面图片背后的原生内存（含显存）要等回收时才释放，不回收的话会随着切歌越积越多。
+    /// </summary>
+    private void ScheduleMemoryTrim()
+    {
+        _trimTimer ??= DispatcherQueue.CreateTimer();
+        _trimTimer.Stop();
+        _trimTimer.Interval = TimeSpan.FromSeconds(4);
+        _trimTimer.IsRepeating = false;
+        _trimTimer.Tick -= TrimTick;
+        _trimTimer.Tick += TrimTick;
+        _trimTimer.Start();
+    }
+
+    private static void TrimTick(Microsoft.UI.Dispatching.DispatcherQueueTimer s, object e)
+        => GC.Collect(2, GCCollectionMode.Forced, blocking: false);
 
     private void ToggleImmersive()
     {

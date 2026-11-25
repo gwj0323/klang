@@ -151,7 +151,8 @@ public sealed partial class TransportBar : UserControl
         {
             try
             {
-                MiniCoverImage.Source = new BitmapImage(new Uri(coverPath));
+                double scale = XamlRoot?.RasterizationScale ?? 1.5;   // 按显示大小解码，不按原图
+                MiniCoverImage.Source = new BitmapImage(new Uri(coverPath)) { DecodePixelWidth = (int)Math.Ceiling(Math.Max(MiniCoverImage.ActualWidth, 52) * scale) };
                 MiniCoverImage.Visibility = Visibility.Visible;
                 MiniCoverFallback.Visibility = Visibility.Collapsed;
                 if (coverChanged && IsLoaded) UiAnimations.FadeIn(MiniCoverImage, 420);

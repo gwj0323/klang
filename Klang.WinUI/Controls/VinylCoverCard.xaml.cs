@@ -611,7 +611,10 @@ public sealed partial class VinylCoverCard : UserControl
         {
             try
             {
-                CoverImage.Source = new BitmapImage(new Uri(cover));
+                // 按显示大小解码（封套 260、悬停时略放大，乘上屏幕缩放）。不设的话：这张图同时给唱片贴纸的
+                // ImageBrush 用，系统就按原图解码，一张 3000×3000 的封面要 36 MB
+                double scale = XamlRoot?.RasterizationScale ?? 1.5;
+                CoverImage.Source = new BitmapImage(new Uri(cover)) { DecodePixelWidth = (int)Math.Ceiling(JacketCard.Width * scale * 1.15) };
                 CoverImage.Visibility = Visibility.Visible;
                 FallbackPanel.Visibility = Visibility.Collapsed;
                 hasCover = true;
