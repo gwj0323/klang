@@ -441,6 +441,31 @@ public sealed partial class CloudPanel : UserControl
     /// <summary>要求播放某首歌的 MV。</summary>
     public event Action<TrackItem>? MvRequested;
 
+    /// <summary>要求把某首云端歌曲保存到曲库。</summary>
+    public event Action<TrackItem>? SaveRequested;
+
+    private DispatcherTimer? _toastTimer;
+
+    /// <summary>在面板底部显示一条提示，几秒后自动消失（ms &lt;= 0 表示一直显示，直到下一条）。</summary>
+    public void ShowToast(string text, int ms = 3500)
+    {
+        ToastText.Text = text;
+        ToastBorder.Opacity = 1;
+        _toastTimer?.Stop();
+        if (ms <= 0) return;
+        _toastTimer ??= new DispatcherTimer();
+        _toastTimer.Interval = TimeSpan.FromMilliseconds(ms);
+        _toastTimer.Tick -= ToastTimer_Tick;
+        _toastTimer.Tick += ToastTimer_Tick;
+        _toastTimer.Start();
+    }
+
+    private void ToastTimer_Tick(object? sender, object e)
+    {
+        _toastTimer?.Stop();
+        ToastBorder.Opacity = 0;
+    }
+
     private void TrackRow_ContextRequested(UIElement sender, Microsoft.UI.Xaml.Input.ContextRequestedEventArgs args)
     {
         if (sender is not FrameworkElement { DataContext: TrackItem t } fe) return;
@@ -455,6 +480,10 @@ public sealed partial class CloudPanel : UserControl
             mv.Click += (s, e) => MvRequested?.Invoke(t);
             flyout.Items.Add(mv);
         }
+        var save = new MenuFlyoutItem { Text = L.T("保存到曲库"), Icon = new FontIcon { Glyph = "" } };
+        ToolTipService.SetToolTip(save, L.T("下载到“音乐\\Klang”文件夹并写入标签、封面和歌词，之后不依赖缓存和会员也能播放"));
+        save.Click += (s, e) => SaveRequested?.Invoke(t);
+        flyout.Items.Add(save);
         if (args.TryGetPosition(fe, out var pt)) flyout.ShowAt(fe, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions { Position = pt });
         else flyout.ShowAt(fe);
         args.Handled = true;

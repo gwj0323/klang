@@ -153,6 +153,16 @@ public sealed partial class NavigationPane : UserControl
         };
         CloudView.CoverReady += t => CloudCoverReady?.Invoke(this, t);
         CloudView.MvRequested += t => MvRequested?.Invoke(this, t);
+        CloudView.SaveRequested += SaveCloudTrack;
+    }
+
+    /// <summary>云端歌曲保存到曲库：下载完整文件、写标签封面歌词、加进曲库，进度显示在云端面板底部。</summary>
+    private async void SaveCloudTrack(TrackItem cloud)
+    {
+        CloudView.ShowToast(L.F("正在下载《{0}》…", cloud.Title), 0);
+        var r = await Services.Cloud.CloudSaveService.SaveAsync(cloud, msg => DispatcherQueue.SafeEnqueue(() => CloudView.ShowToast(msg, 0)));
+        CloudView.ShowToast(r.Message, r.Ok ? 4000 : 6000);
+        if (r.Ok && !r.AlreadyThere) RefreshView();
     }
 
     /// <summary>云端曲目的封面缓存完成。</summary>
@@ -1178,6 +1188,11 @@ public sealed partial class NavigationPane : UserControl
         FilterNoCover.IsChecked = FilterNoAlbum.IsChecked = FilterNoLyrics.IsChecked = FilterMissingFile.IsChecked = FilterFake.IsChecked = false;
         foreach (var r in FilterSubItem.Items.OfType<RadioMenuFlyoutItem>()) r.IsChecked = (string?)r.Tag == "0";
         RefreshView();
+    }
+
+    private async void ListeningReport_Click(object sender, RoutedEventArgs e)
+    {
+        await Dialogs.ListeningReportDialog.ShowAsync(XamlRoot);
     }
 
     private async void FindDuplicates_Click(object sender, RoutedEventArgs e)

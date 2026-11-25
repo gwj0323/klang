@@ -843,6 +843,33 @@ public class LibraryService
         return (name, imported, notFound);
     }
 
+    /// <summary>
+    /// 把单个音频文件加进曲库（云端歌曲保存到本地后调用）；已经在曲库里就返回那一首。
+    /// neteaseId 不为空时记下对应的网易云曲目，在线补全不用再去搜索。
+    /// </summary>
+    public async Task<TrackItem?> AddFileAsync(string path, string? neteaseId = null)
+    {
+        path = Path.GetFullPath(path);
+        string id = TrackItem.MakeId(path);
+        var existing = Tracks.FirstOrDefault(t => t.Id == id);
+        if (existing != null) return existing;
+
+        var t = await Task.Run(() => ParseTrack(path));
+        if (t == null) return null;
+        t.AddedTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (!string.IsNullOrEmpty(neteaseId)) t.MetaNeteaseId = neteaseId;
+        t.MetaChecked = t.CoverPath != null;   // 封面已经写进文件了，不必再在线补全
+
+        // 用户明确要保存它，以前手动移除留下的“不再加回”记录作废
+        if (State.ExcludedFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)) > 0) _excluded = null;
+
+        if (Tracks.Any(x => x.Id == t.Id)) return Tracks.First(x => x.Id == t.Id);   // 解析期间被扫描加进来了
+        Tracks.Add(t);
+        Reindex();
+        SaveLibrary();
+        return t;
+    }
+
     /// <summary>把歌单顺序整体改成给定的曲目顺序（拖拽排序后保存）。</summary>
     public void SetPlaylistOrder(string name, IEnumerable<TrackItem> ordered)
     {

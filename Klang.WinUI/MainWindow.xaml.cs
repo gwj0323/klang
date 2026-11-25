@@ -159,6 +159,7 @@ public sealed partial class MainWindow : Window
         AudioEngineService.Instance.StateChanged += (state) =>
         {
             bool isPlaying = (state == PlaybackState.Playing);
+            ListeningService.Instance.SetPlaying(isPlaying, _currentTrack);
             BottomTransportBar.IsPlaying = isPlaying;
             ImmersiveLayer.SetPlaying(isPlaying);
             GalleryLayer.SetIsPlaying(isPlaying);
@@ -351,6 +352,7 @@ public sealed partial class MainWindow : Window
             _tray?.Dispose();
             _tray = null;
             SaveWindowAndAudioState();
+            ListeningService.Instance.End();
             LibraryService.Instance.FlushPendingSave();
             StateService.Instance.Flush();
             _media.Dispose();
@@ -559,6 +561,9 @@ public sealed partial class MainWindow : Window
         if (autoPlay)
         {
             LibraryService.Instance.RecordPlay(track);
+            // 听歌报告用的记录：引擎开始播放新歌时会通知“播放中”，那时才开始计时；
+            // 混音接入时声音不断，也不会再通知，直接开始计
+            ListeningService.Instance.Begin(track, _adoptingMix && AudioEngineService.Instance.IsPlaying);
 
             // 喂给漫游模型：上一首听了多少（自然播完 = 1；否则按进度算），这一首是不是漫游选的
             var engine = AudioEngineService.Instance;
