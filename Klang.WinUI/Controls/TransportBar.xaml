@@ -18,7 +18,7 @@
         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
         BorderThickness="0,1,0,0">
 
-        <Grid VerticalAlignment="Center" RowSpacing="4">
+        <Grid x:Name="BarGrid" VerticalAlignment="Center" RowSpacing="4">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -153,15 +153,17 @@
 
             <!-- 2. 中间：核心播放控制按钮簇 + 全宽贯通式时间进度条 -->
             <Grid
+                x:Name="CenterHost"
                 Grid.Row="1"
                 Grid.Column="1"
                 Margin="20,0,20,0"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Center">
 
-                <!-- 居中控制按钮组 -->
+                <!-- 控制按钮组：位置由代码算，让播放键对准整条底栏的正中（两侧栏宽不同、右边还多一个倍速按钮） -->
                 <StackPanel
-                    HorizontalAlignment="Center"
+                    x:Name="ControlsPanel"
+                    HorizontalAlignment="Left"
                     Orientation="Horizontal"
                     Spacing="12">
 

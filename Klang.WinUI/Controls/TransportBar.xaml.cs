@@ -33,6 +33,27 @@ public sealed partial class TransportBar : UserControl
     private double _previousVolume = 85;
     private readonly DispatcherTimer _bounceTimer = new();
 
+    /// <summary>
+    /// 把控制按钮组摆到让播放键正好在整条底栏中线上的位置。
+    /// 中间这一栏本身不在正中（左右两栏宽度不同），按钮组左右也不对称（右边多一个倍速按钮），
+    /// 所以不能简单居中；放不下时收回到中间栏以内，不压到两侧。
+    /// </summary>
+    private void CenterPlayButton()
+    {
+        double host = CenterHost.ActualWidth, group = ControlsPanel.ActualWidth;
+        if (host <= 0 || group <= 0 || BarGrid.ActualWidth <= 0) return;
+        try
+        {
+            double barCenter = BarGrid.TransformToVisual(CenterHost)
+                .TransformPoint(new Windows.Foundation.Point(BarGrid.ActualWidth / 2, 0)).X;
+            double spacing = ControlsPanel.Spacing;
+            double playCenter = ShuffleBtn.ActualWidth + spacing + PrevBtn.ActualWidth + spacing + PlayPauseBtn.ActualWidth / 2;
+            double x = Math.Clamp(barCenter - playCenter, 0, Math.Max(0, host - group));
+            if (Math.Abs(ControlsPanel.Margin.Left - x) > 0.5) ControlsPanel.Margin = new Thickness(Math.Round(x), 0, 0, 0);
+        }
+        catch { }
+    }
+
     public TransportBar()
     {
         InitializeComponent();
@@ -45,6 +66,8 @@ public sealed partial class TransportBar : UserControl
             VolumePctText.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
             RightColumn.Width = new GridLength(narrow ? 252 : 332);
         };
+        CenterHost.SizeChanged += (s, e) => CenterPlayButton();
+        ControlsPanel.SizeChanged += (s, e) => CenterPlayButton();
         ActualThemeChanged += (s, e) => RefreshIconColors();
         Loaded += (s, e) => RefreshIconColors();
 
