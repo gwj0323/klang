@@ -215,6 +215,23 @@
                     <Button Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="搜索" Click="RailSearch_Click" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="搜索 (Ctrl+F)">
                         <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE721;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="搜索" Visibility="Collapsed" /></StackPanel>
                     </Button>
+                    <!-- 发现：看数据 / 换个方式浏览曲库的入口（不是分页，点开是菜单） -->
+                    <Button x:Name="RailDiscover" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="发现" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="发现">
+                        <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE9D2;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="发现" Visibility="Collapsed" /></StackPanel>
+                        <Button.Flyout>
+                            <MenuFlyout Placement="RightEdgeAlignedTop">
+                                <MenuFlyoutItem Click="DiscoverReport_Click" Text="听歌报告…">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D2;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Click="DiscoverMap_Click" Text="声学地图…">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE909;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Click="GalleryBtn_Click" Text="封面画廊">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B9;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
                 </StackPanel>
             </Grid>
 

@@ -1666,6 +1666,11 @@ public sealed partial class MainWindow : Window
 
     private void SidebarToggleBtn_Click(object sender, RoutedEventArgs e) => SetSidebarOpen(!_isSidebarOpen);
 
+    private async void DiscoverReport_Click(object sender, RoutedEventArgs e) =>
+        await Dialogs.ListeningReportDialog.ShowAsync(Content.XamlRoot);
+
+    private void DiscoverMap_Click(object sender, RoutedEventArgs e) => LeftNavPane.ShowAcousticMap();
+
     private void DesktopLyricBtn_Click(object sender, RoutedEventArgs e) => ToggleDesktopLyric();
 
     private void ToggleDesktopLyric()

@@ -22,8 +22,19 @@ public static class CloudSaveService
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
     private static readonly HashSet<string> Saving = new();
 
-    public static string SaveFolder =>
+    public static string DefaultSaveFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "Klang");
+
+    /// <summary>设置里选的位置；没选或那个文件夹已经不在了（比如移动硬盘拔了）就用默认的 音乐\Klang。</summary>
+    public static string SaveFolder
+    {
+        get
+        {
+            var custom = StateService.Instance.State.CloudSaveFolder;
+            try { if (!string.IsNullOrWhiteSpace(custom) && Directory.Exists(custom)) return custom; } catch { }
+            return DefaultSaveFolder;
+        }
+    }
 
     /// <summary>保存一首云端歌曲。progress 会收到“正在下载…”之类的进度文字（界面线程调用即可）。</summary>
     public static async Task<Result> SaveAsync(TrackItem cloud, Action<string>? progress = null, CancellationToken ct = default)

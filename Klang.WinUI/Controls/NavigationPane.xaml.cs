@@ -1190,11 +1190,6 @@ public sealed partial class NavigationPane : UserControl
         RefreshView();
     }
 
-    private async void ListeningReport_Click(object sender, RoutedEventArgs e)
-    {
-        await Dialogs.ListeningReportDialog.ShowAsync(XamlRoot);
-    }
-
     private async void FindDuplicates_Click(object sender, RoutedEventArgs e)
     {
         var groups = LibraryService.Instance.FindDuplicateGroups();
@@ -1241,7 +1236,8 @@ public sealed partial class NavigationPane : UserControl
         RefreshView();
     }
 
-    private async void AcousticMap_Click(object sender, RoutedEventArgs e)
+    /// <summary>打开声学地图（入口在左侧图标栏的“发现”菜单里）。</summary>
+    public async void ShowAcousticMap()
     {
         await Dialogs.AcousticMapDialog.ShowAsync(XamlRoot, LibraryService.Instance.Tracks, (picked, near) =>
         {
@@ -1261,21 +1257,6 @@ public sealed partial class NavigationPane : UserControl
         list.AddRange(near);
         Queue = list;
         TrackSelected?.Invoke(this, track);
-    }
-
-    private async void ResetRoam_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new ContentDialog
-        {
-            Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
-            RequestedTheme = ThemeService.Current,
-            XamlRoot = XamlRoot,
-            Title = L.T("重置漫游学习数据"),
-            Content = L.F("漫游已累计 {0} 条收听记录。\n重置仅清除学习数据，不影响曲库和播放统计。", RoamingService.Instance.Samples),
-            PrimaryButtonText = L.T("重置"),
-            CloseButtonText = L.T("取消")
-        };
-        if (await dlg.ShowAsync() == ContentDialogResult.Primary) RoamingService.Instance.Reset();
     }
 
     private async void RescanNow_Click(object sender, RoutedEventArgs e)

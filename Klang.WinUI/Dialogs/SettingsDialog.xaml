@@ -12,8 +12,8 @@
     mc:Ignorable="d">
 
     <ContentDialog.Resources>
-        <x:Double x:Key="ContentDialogMaxWidth">820</x:Double>
-        <x:Double x:Key="ContentDialogMaxHeight">680</x:Double>
+        <x:Double x:Key="ContentDialogMaxWidth">960</x:Double>
+        <x:Double x:Key="ContentDialogMaxHeight">800</x:Double>
 
         <!-- 设置项卡片 -->
         <Style x:Key="SettingCard" TargetType="Border">
@@ -34,8 +34,8 @@
 
     <NavigationView
         x:Name="SettingsNav"
-        Width="680"
-        Height="460"
+        Width="760"
+        Height="540"
         Background="Transparent"
         IsBackButtonVisible="Collapsed"
         IsPaneToggleButtonVisible="False"
@@ -44,17 +44,20 @@
         PaneDisplayMode="Left"
         SelectionChanged="SettingsNav_SelectionChanged">
         <NavigationView.MenuItems>
-            <NavigationViewItem Content="外观" IsSelected="True" Tag="appearance">
+            <NavigationViewItem Content="常规" IsSelected="True" Tag="general">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="外观" Tag="appearance">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE790;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="歌词" Tag="lyrics">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE8D2;" /></NavigationViewItem.Icon>
             </NavigationViewItem>
             <NavigationViewItem Content="播放与音频" Tag="playback">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE767;" /></NavigationViewItem.Icon>
             </NavigationViewItem>
-            <NavigationViewItem Content="曲库" Tag="library">
+            <NavigationViewItem Content="曲库与云端" Tag="library">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem Content="网络与缓存" Tag="network">
-                <NavigationViewItem.Icon><FontIcon Glyph="&#xE774;" /></NavigationViewItem.Icon>
             </NavigationViewItem>
             <NavigationViewItem Content="关于" Tag="about">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
@@ -63,25 +66,26 @@
 
         <Grid Padding="8,0,0,0">
 
-            <!-- ============ 外观 ============ -->
-            <ScrollViewer x:Name="PageAppearance" VerticalScrollBarVisibility="Auto">
+            <!-- ============ 常规 ============ -->
+            <ScrollViewer x:Name="PageGeneral" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="0,0,12,0" Spacing="8">
-                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="外观" />
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="常规" />
 
                     <Border Style="{StaticResource SettingCard}">
-                        <Grid ColumnSpacing="12">
+                        <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
-                                <TextBlock FontWeight="Medium" Text="任务栏播放条" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           Text="在任务栏上显示封面、歌词与播放控制。拖动左侧把手可调整位置，Ctrl+B 切换。"
-                                           TextWrapping="Wrap" />
+                                <TextBlock FontWeight="Medium" Text="语言 / Language" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="立即生效" TextWrapping="Wrap" />
                             </StackPanel>
-                            <ToggleSwitch x:Name="TaskbarPlayerSwitch" Grid.Column="1"
-                                          OffContent="关" OnContent="开" Toggled="TaskbarPlayerSwitch_Toggled" />
+                            <ComboBox
+                                x:Name="LanguageComboBox"
+                                Grid.Column="1"
+                                Width="150"
+                                SelectionChanged="LanguageComboBox_SelectionChanged" />
                         </Grid>
                     </Border>
 
@@ -107,22 +111,47 @@
                     </Border>
 
                     <Border Style="{StaticResource SettingCard}">
-                        <Grid>
+                        <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
-                                <TextBlock FontWeight="Medium" Text="语言 / Language" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="立即生效" TextWrapping="Wrap" />
+                                <TextBlock FontWeight="Medium" Text="任务栏播放条" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="在任务栏上显示封面、歌词与播放控制。拖动左侧把手可调整位置，Ctrl+B 切换。"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
-                            <ComboBox
-                                x:Name="LanguageComboBox"
-                                Grid.Column="1"
-                                Width="150"
-                                SelectionChanged="LanguageComboBox_SelectionChanged" />
+                            <ToggleSwitch x:Name="TaskbarPlayerSwitch" Grid.Column="1"
+                                          OffContent="关" OnContent="开" Toggled="TaskbarPlayerSwitch_Toggled" />
                         </Grid>
                     </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="启动时自动检查更新" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="打开 Klang 后向 GitHub 查询是否有新版本，有新版本时提示，不会自动下载或安装。请求中不含任何个人信息。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="AutoCheckUpdateSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="AutoCheckUpdateSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ============ 外观 ============ -->
+            <ScrollViewer x:Name="PageAppearance" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,0,12,0" Spacing="8">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="外观" />
 
                     <Border Style="{StaticResource SettingCard}">
                         <Grid>
@@ -165,6 +194,7 @@
                         </Grid>
                     </Border>
 
+                    <TextBlock Style="{StaticResource GroupTitle}" Text="封面与进度条" />
                     <Border Style="{StaticResource SettingCard}">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
@@ -181,6 +211,25 @@
                                 OffContent="关"
                                 OnContent="开"
                                 Toggled="VinylDiscSwitch_Toggled" />
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="动态封面" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="网易云歌曲带有动态封面时，在封面位置静音循环播放，随音乐暂停。需要登录网易云，视频会缓存到本地。" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="DynamicCoverSwitch"
+                                Grid.Column="1"
+                                OffContent="关"
+                                OnContent="开"
+                                Toggled="DynamicCoverSwitch_Toggled" />
                         </Grid>
                     </Border>
 
@@ -264,8 +313,41 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
+                </StackPanel>
+            </ScrollViewer>
 
-                    <TextBlock Style="{StaticResource GroupTitle}" Text="歌词" />
+            <!-- ============ 歌词 ============ -->
+            <ScrollViewer x:Name="PageLyrics" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,0,12,0" Spacing="8">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="歌词" />
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="歌词字号" />
+                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="也可以按 Ctrl + / Ctrl -" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                                <Slider
+                                    x:Name="LyricSizeSlider"
+                                    Width="120"
+                                    VerticalAlignment="Center"
+                                    Maximum="40"
+                                    Minimum="14"
+                                    ValueChanged="LyricSizeSlider_ValueChanged" />
+                                <TextBlock
+                                    x:Name="LyricSizeText"
+                                    Width="28"
+                                    VerticalAlignment="Center"
+                                    FontSize="12"
+                                    TextAlignment="Right" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                     <Border Style="{StaticResource SettingCard}">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
@@ -341,33 +423,6 @@
                                 <ComboBoxItem Content="60 帧" Tag="60" />
                                 <ComboBoxItem Content="30 帧" Tag="30" />
                             </ComboBox>
-                        </Grid>
-                    </Border>
-                    <Border Style="{StaticResource SettingCard}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock FontWeight="Medium" Text="歌词字号" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="也可以按 Ctrl + / Ctrl -" TextWrapping="Wrap" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
-                                <Slider
-                                    x:Name="LyricSizeSlider"
-                                    Width="120"
-                                    VerticalAlignment="Center"
-                                    Maximum="40"
-                                    Minimum="14"
-                                    ValueChanged="LyricSizeSlider_ValueChanged" />
-                                <TextBlock
-                                    x:Name="LyricSizeText"
-                                    Width="28"
-                                    VerticalAlignment="Center"
-                                    FontSize="12"
-                                    TextAlignment="Right" />
-                            </StackPanel>
                         </Grid>
                     </Border>
                 </StackPanel>
@@ -552,10 +607,10 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ============ 曲库 ============ -->
+            <!-- ============ 曲库与云端 ============ -->
             <ScrollViewer x:Name="PageLibrary" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="0,0,12,0" Spacing="8">
-                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="曲库" />
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="曲库与云端" />
 
                     <TextBlock Style="{StaticResource GroupTitle}" Text="音乐文件夹" />
                     <Border Style="{StaticResource SettingCard}">
@@ -596,32 +651,31 @@
                                 Toggled="AutoMetaSwitch_Toggled" />
                         </Grid>
                     </Border>
-                </StackPanel>
-            </ScrollViewer>
-
-            <!-- ============ 网络与缓存 ============ -->
-            <ScrollViewer x:Name="PageNetwork" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                <StackPanel Margin="0,0,12,0" Spacing="8">
-                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="网络与缓存" />
 
                     <TextBlock Style="{StaticResource GroupTitle}" Text="云端音乐" />
                     <Border Style="{StaticResource SettingCard}">
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock FontWeight="Medium" Text="动态封面" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="网易云歌曲带有动态封面时，在封面位置静音循环播放，随音乐暂停。需要登录网易云，视频会缓存到本地。" TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ToggleSwitch
-                                x:Name="DynamicCoverSwitch"
-                                Grid.Column="1"
-                                OffContent="关"
-                                OnContent="开"
-                                Toggled="DynamicCoverSwitch_Toggled" />
-                        </Grid>
+                        <StackPanel Spacing="8">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock FontWeight="Medium" Text="保存到曲库的位置" />
+                                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="在云端面板右键“保存到曲库”时，歌曲下载到这里。更改后，之前保存的文件不会移动。" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="SaveFolderBtn" Click="SaveFolderBtn_Click" Content="更改…" />
+                                    <Button x:Name="SaveFolderResetBtn" Click="SaveFolderResetBtn_Click" Content="恢复默认" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock
+                                x:Name="SaveFolderText"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                IsTextSelectionEnabled="True"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
                     <Border Style="{StaticResource SettingCard}">
                         <StackPanel Spacing="8">
@@ -654,6 +708,52 @@
                             </Grid>
                             <Button x:Name="ClearCacheBtn" Click="ClearCacheBtn_Click" Content="清理缓存" />
                         </StackPanel>
+                    </Border>
+
+                    <TextBlock Style="{StaticResource GroupTitle}" Text="收听数据" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="听歌记录" />
+                                <TextBlock
+                                    x:Name="ListenInfoText"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button
+                                x:Name="ClearListenBtn"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Click="ClearListenBtn_Click"
+                                Content="清空听歌记录" />
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock FontWeight="Medium" Text="漫游学习数据" />
+                                <TextBlock
+                                    x:Name="RoamInfoText"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button
+                                x:Name="ResetRoamBtn"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Click="ResetRoamBtn_Click"
+                                Content="重置" />
+                        </Grid>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
@@ -691,24 +791,6 @@
                     </Border>
 
                     <TextBlock Style="{StaticResource GroupTitle}" Text="更新" />
-                    <Border Style="{StaticResource SettingCard}">
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock FontWeight="Medium" Text="启动时自动检查更新" />
-                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="打开 Klang 后向 GitHub 查询是否有新版本，有新版本时提示，不会自动下载或安装。请求中不含任何个人信息。" TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ToggleSwitch
-                                x:Name="AutoCheckUpdateSwitch"
-                                Grid.Column="1"
-                                OffContent="关"
-                                OnContent="开"
-                                Toggled="AutoCheckUpdateSwitch_Toggled" />
-                        </Grid>
-                    </Border>
                     <Border Style="{StaticResource SettingCard}">
                         <StackPanel Spacing="10">
                             <Grid ColumnSpacing="12">

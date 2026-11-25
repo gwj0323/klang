@@ -170,6 +170,7 @@ public class AppState
     public bool DynamicCover { get; set; } = true;
     public int MvQuality { get; set; } = 1080;              // MV 偏好画质（像素高度），没有这一档时用不超过它的最高画质          // 云端歌曲有动态封面时在封面上播放（网易云，需要登录）
     public int NeteaseCacheLimitMb { get; set; } = 2048;   // 云端缓存上限（每个来源各自计算）
+    public string CloudSaveFolder { get; set; } = "";        // 云端歌曲“保存到曲库”的位置；空 = 音乐\Klang
 
     // QQ 音乐：登录凭证（整段登录结果）用 DPAPI 加密后保存
     public string QQMusicCredentialEnc { get; set; } = "";

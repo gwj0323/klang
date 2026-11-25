@@ -87,9 +87,20 @@ public sealed partial class SettingsDialog : ContentDialog
 
         _loading = false;
 
+        UpdateSaveFolderText();
+        RefreshDataInfo();
+
         L.Apply(this);
-        Loaded += (s, e) => L.Apply(this);   // 模板展开后（导航栏等）再翻译一遍
+        Loaded += (s, e) =>
+        {
+            L.Apply(this);   // 模板展开后（导航栏等）再翻译一遍
+            FitToWindow();
+            if (XamlRoot != null) XamlRoot.Changed += OnXamlRootChanged;
+        };
+        Closed += (s, e) => { if (XamlRoot != null) XamlRoot.Changed -= OnXamlRootChanged; };
     }
+
+    private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => FitToWindow();
 
     private void ExclusiveSwitch_Toggled(object sender, RoutedEventArgs e)
     {
@@ -274,11 +285,23 @@ public sealed partial class SettingsDialog : ContentDialog
     private void SettingsNav_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItemContainer?.Tag is not string tag) return;
+        PageGeneral.Visibility = tag == "general" ? Visibility.Visible : Visibility.Collapsed;
         PageAppearance.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
+        PageLyrics.Visibility = tag == "lyrics" ? Visibility.Visible : Visibility.Collapsed;
         PagePlayback.Visibility = tag == "playback" ? Visibility.Visible : Visibility.Collapsed;
         PageLibrary.Visibility = tag == "library" ? Visibility.Visible : Visibility.Collapsed;
-        PageNetwork.Visibility = tag == "network" ? Visibility.Visible : Visibility.Collapsed;
         PageAbout.Visibility = tag == "about" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag == "library") { RefreshCacheInfo(); RefreshDataInfo(); }
+    }
+
+    /// <summary>对话框默认 760×540；窗口小（小屏笔记本、高缩放）时按窗口缩小，免得被截掉。</summary>
+    private void FitToWindow()
+    {
+        if (XamlRoot == null) return;
+        var size = XamlRoot.Size;
+        // 对话框自身的标题、按钮栏和边距大约占 横 100 / 竖 190
+        SettingsNav.Width = Math.Clamp(size.Width - 100, 480, 760);
+        SettingsNav.Height = Math.Clamp(size.Height - 190, 300, 540);
     }
 
     #endregion
@@ -522,6 +545,80 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         RefreshCacheInfo();
         CacheInfoText.Text += L.F("（已清理 {0} 个文件，释放 {1}）", n, FormatBytes(bytes));
+    }
+
+    #endregion
+
+    #region 保存到曲库的位置
+
+    private void UpdateSaveFolderText()
+    {
+        SaveFolderText.Text = Services.Cloud.CloudSaveService.SaveFolder;
+        SaveFolderResetBtn.IsEnabled = !string.IsNullOrEmpty(State.CloudSaveFolder);
+    }
+
+    private void SaveFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        IntPtr hwnd = App.MainWindowInstance != null ? WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance) : IntPtr.Zero;
+        string? folder = FolderPickerHelper.PickFolder(hwnd, L.T("选择保存云端歌曲的文件夹"));
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return;
+        State.CloudSaveFolder = folder;
+        StateService.Instance.RequestSave();
+        UpdateSaveFolderText();
+    }
+
+    private void SaveFolderResetBtn_Click(object sender, RoutedEventArgs e)
+    {
+        State.CloudSaveFolder = "";
+        StateService.Instance.RequestSave();
+        UpdateSaveFolderText();
+    }
+
+    #endregion
+
+    #region 收听数据（听歌记录 / 漫游学习）
+
+    // 设置本身是对话框，不能再弹确认框（WinUI 同时只能开一个 ContentDialog），所以用“再点一次确认”
+    private bool _clearListenArmed, _resetRoamArmed;
+
+    private void RefreshDataInfo()
+    {
+        int n = ListeningService.Instance.Count();
+        ListenInfoText.Text = L.F("听歌报告用的数据，只保存在本机。目前 {0} 条记录。", n);
+        ClearListenBtn.IsEnabled = n > 0;
+        RoamInfoText.Text = L.F("漫游模式按你的收听习惯学到的口味（已学习 {0} 次）。重置后从头学起，曲库和播放次数不受影响。", RoamingService.Instance.Samples);
+        ResetRoamBtn.IsEnabled = RoamingService.Instance.Samples > 0;
+        _clearListenArmed = _resetRoamArmed = false;
+        ClearListenBtn.Content = L.T("清空听歌记录");
+        ResetRoamBtn.Content = L.T("重置");
+    }
+
+    private void ClearListenBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_clearListenArmed)
+        {
+            _clearListenArmed = true;
+            ClearListenBtn.Content = L.T("再次点击以确认清空");
+            ListenInfoText.Text = L.T("将删除全部听歌记录，听歌报告会从头开始统计，无法恢复。");
+            return;
+        }
+        ListeningService.Instance.Clear();
+        RefreshDataInfo();
+        ListenInfoText.Text = L.T("听歌记录已清空");
+    }
+
+    private void ResetRoamBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_resetRoamArmed)
+        {
+            _resetRoamArmed = true;
+            ResetRoamBtn.Content = L.T("再次点击以确认重置");
+            RoamInfoText.Text = L.T("将清除漫游模式学到的全部口味，无法恢复。");
+            return;
+        }
+        RoamingService.Instance.Reset();
+        RefreshDataInfo();
+        RoamInfoText.Text = L.T("漫游学习数据已重置");
     }
 
     #endregion

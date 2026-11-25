@@ -342,18 +342,10 @@
                                 <RadioMenuFlyoutItem Click="GroupItem_Click" GroupName="LibGroup" Tag="folder" Text="按目录" />
                             </MenuFlyoutSubItem>
                             <MenuFlyoutSeparator />
-                            <MenuFlyoutItem Click="ListeningReport_Click" Text="听歌报告…">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon Glyph="&#xE9D2;" />
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
                             <MenuFlyoutSubItem Text="曲库工具">
                                 <MenuFlyoutItem Click="FindDuplicates_Click" Text="检查重复歌曲…" />
                                 <MenuFlyoutItem Click="FindMissing_Click" Text="检查丢失文件…" />
-                                <MenuFlyoutItem Click="AcousticMap_Click" Text="声学地图…" />
                                 <MenuFlyoutItem Click="RescanNow_Click" Text="立即重新扫描文件夹" />
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Click="ResetRoam_Click" Text="重置漫游学习数据…" />
                             </MenuFlyoutSubItem>
                         </MenuFlyout>
                     </Button.Flyout>

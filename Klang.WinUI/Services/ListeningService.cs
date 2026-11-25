@@ -117,6 +117,35 @@ public sealed class ListeningService
         }
     }
 
+    /// <summary>记录条数（按行数估算，不解析）。</summary>
+    public int Count()
+    {
+        try
+        {
+            if (!File.Exists(_path)) return 0;
+            int n = 0;
+            using var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var sr = new StreamReader(fs, Encoding.UTF8);
+            string? line;
+            while ((line = sr.ReadLine()) != null) if (line.Length > 1) n++;
+            return n;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>删除全部记录（正在播放的这首也不再记）。</summary>
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _current = null;
+            _track = null;
+            _played.Reset();
+            try { if (File.Exists(_path)) File.Delete(_path); }
+            catch (Exception ex) { App.LogError("Clear listening log", ex.Message); }
+        }
+    }
+
     /// <summary>读出全部记录（按时间顺序）；坏掉的行跳过。</summary>
     public List<ListenEntry> ReadAll()
     {

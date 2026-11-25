@@ -481,7 +481,7 @@ public sealed partial class CloudPanel : UserControl
             flyout.Items.Add(mv);
         }
         var save = new MenuFlyoutItem { Text = L.T("保存到曲库"), Icon = new FontIcon { Glyph = "" } };
-        ToolTipService.SetToolTip(save, L.T("下载到“音乐\\Klang”文件夹并写入标签、封面和歌词，之后不依赖缓存和会员也能播放"));
+        ToolTipService.SetToolTip(save, L.T("下载到设置里指定的文件夹（默认“音乐\\Klang”），写入标签、封面和歌词，之后不依赖缓存和会员也能播放"));
         save.Click += (s, e) => SaveRequested?.Invoke(t);
         flyout.Items.Add(save);
         if (args.TryGetPosition(fe, out var pt)) flyout.ShowAt(fe, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions { Position = pt });
