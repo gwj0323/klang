@@ -1,6 +1,9 @@
 {
   "name": "Dansk",
   "strings": {
+    "{0} 张专辑": "{0} album",
+    "定位到正在播放": "Vis det, der spiller",
+    "随机排列": "Blandet",
     "选择保存云端歌曲的文件夹": "Vælg en mappe til gemte sange fra skyen",
     "常规": "Generelt",
     "曲库与云端": "Bibliotek og sky",

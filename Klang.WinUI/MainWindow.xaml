@@ -226,6 +226,9 @@
                                 <MenuFlyoutItem Click="DiscoverMap_Click" Text="声学地图…">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE909;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <MenuFlyoutItem Click="GalleryBtn_Click" Text="封面画廊">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B9;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>

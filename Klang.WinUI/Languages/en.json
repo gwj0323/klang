@@ -1,6 +1,9 @@
 {
   "name": "English",
   "strings": {
+    "{0} 张专辑": "{0} albums",
+    "定位到正在播放": "Show what's playing",
+    "随机排列": "Shuffled",
     "选择保存云端歌曲的文件夹": "Choose a folder for saved cloud songs",
     "常规": "General",
     "曲库与云端": "Library & cloud",

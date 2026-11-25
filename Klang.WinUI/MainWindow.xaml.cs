@@ -120,13 +120,6 @@ public sealed partial class MainWindow : Window
             _taskbarPlayerWindow?.UpdateLyric(activeIdx >= 0 && activeIdx < StageLyricsControl.Lyrics.Count
                 && StageLyricsControl.Lyrics[activeIdx].EndTime < 9000
                 ? StageLyricsControl.Lyrics[activeIdx].Text : null);
-            if (GalleryLayer.Visibility == Visibility.Visible)
-            {
-                var gl = StageLyricsControl.Lyrics;
-                bool real = activeIdx >= 0 && activeIdx < gl.Count && gl[activeIdx].EndTime < 9000;
-                GalleryLayer.SetProgress(current, total);
-                GalleryLayer.SetLyric(real && activeIdx > 0 ? gl[activeIdx - 1].Text : "", real ? gl[activeIdx].Text : "", real && activeIdx + 1 < gl.Count ? gl[activeIdx + 1].Text : "");
-            }
             if (activeIdx >= 0 && activeIdx < StageLyricsControl.Lyrics.Count)
             {
                 // “暂无歌词”之类的占位行不显示，改显示歌手
@@ -162,7 +155,6 @@ public sealed partial class MainWindow : Window
             ListeningService.Instance.SetPlaying(isPlaying, _currentTrack);
             BottomTransportBar.IsPlaying = isPlaying;
             ImmersiveLayer.SetPlaying(isPlaying);
-            GalleryLayer.SetIsPlaying(isPlaying);
             StageCoverCard.SetPlaying(isPlaying);
             ApplyDynamicCover();
             UpdateEasterEgg();
@@ -193,7 +185,9 @@ public sealed partial class MainWindow : Window
         LeftNavPane.TrackSelected += (s, track) =>
         {
             // 点列表里的歌：缩略图“飞”到主界面的大封面位置（主封面可见、且确实换了一首时才做）
+            // 封面画廊盖着主界面时不飞：转场画在最上层，会在画廊上闪一下
             bool fly = track != _currentTrack && !_stageNarrow && !ImmersiveLayer.IsOpen
+                && GalleryLayer.Visibility != Visibility.Visible
                 && StageCoverCard.Visibility == Visibility.Visible
                 && LeftNavPane.PrepareCoverAnimation(track, "listCover");
             StageCoverCard.SkipNextCrossfade = fly;
@@ -203,7 +197,6 @@ public sealed partial class MainWindow : Window
         };
 
         GalleryLayer.CloseRequested += (s, e) => CloseGallery();
-        GalleryLayer.PlayPauseRequested += (s, e) => TogglePlayPause();
         GalleryLayer.AlbumPicked += (s, tracks) => LeftNavPane.PlayQueue(tracks);
         LeftNavPane.FavoriteToggled += (s, track) => ToggleFavorite(track);
         LeftNavPane.CloudCoverReady += (s, track) => RefreshTrackCover(track);
@@ -2048,7 +2041,6 @@ public sealed partial class MainWindow : Window
     {
         GalleryLayer.Load(LibraryService.Instance.Tracks);
         GalleryLayer.SetCurrent(_currentTrack);
-        GalleryLayer.SetIsPlaying(AudioEngineService.Instance.IsPlaying);
         GalleryLayer.Visibility = Visibility.Visible;
         GalleryLayer.PlayOpenAnimation();
     }
