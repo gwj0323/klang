@@ -177,6 +177,7 @@ public static class CloudSaveService
     private static string SafeName(string s)
     {
         var bad = Path.GetInvalidFileNameChars();
+        s = s.Replace(" / ", ", ").Replace("/", ", ");   // 多位歌手“A / B”在文件名里写成“A, B”，而不是“A _ B”
         var name = new string(s.Select(c => bad.Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.');
         if (name.Length > 120) name = name[..120].Trim();
         return name.Length == 0 ? "Untitled" : name;

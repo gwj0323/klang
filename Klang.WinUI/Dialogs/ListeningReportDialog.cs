@@ -40,7 +40,9 @@ public static class ListeningReportDialog
             IsTextSelectionEnabled = true,
             Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
         };
-        var panel = new StackPanel { Spacing = 10, Children = { periods, cardHost, status } };
+        // 导出用：在这里放一份按 2 倍排版的卡片再渲染（必须在可视树里才能渲染），放在可见区域之外
+        var exportHost = new Canvas { Width = 0, Height = 0 };
+        var panel = new StackPanel { Spacing = 10, Children = { periods, status, cardHost, exportHost } };   // 提示放在卡片上面，卡片长时不用滚动也能看到
 
         var dlg = new ContentDialog
         {
@@ -54,16 +56,19 @@ public static class ListeningReportDialog
             DefaultButton = ContentDialogButton.Primary,
         };
 
-        Border? card = null;
+        ListeningReport? current = null;
+        string currentLabel = "";
         int seq = 0;
         async void Show(string key)
         {
             int my = ++seq;
             var (from, to) = Range(key, all);
             var report = ListeningReport.Build(all, from, to);
-            var built = await BuildCardAsync(report, labels[Array.IndexOf(keys, key)]);
+            string label = labels[Array.IndexOf(keys, key)];
+            var built = await BuildCardAsync(report, label);
             if (my != seq) return;
-            card = built;
+            current = report;
+            currentLabel = label;
             cardHost.Child = built;
             dlg.IsPrimaryButtonEnabled = !report.IsEmpty;
             status.Text = "";
@@ -80,8 +85,8 @@ public static class ListeningReportDialog
             var deferral = args.GetDeferral();
             try
             {
-                if (card == null) return;
-                var path = await SaveCardAsync(card);
+                if (current == null) return;
+                var path = await SaveCardAsync(current, currentLabel, exportHost);
                 status.Text = L.T("已保存：") + path;
             }
             catch (Exception ex)
@@ -401,10 +406,30 @@ public static class ListeningReportDialog
         return null;
     }
 
-    private static async Task<string> SaveCardAsync(FrameworkElement card)
+    /// <summary>
+    /// 导出图片：重新做一张卡片，用 Viewbox 按 2 倍矢量排版后再渲染。直接把屏幕上的卡片渲染成大图
+    /// 只是把 1 倍的位图放大，字是虚的。
+    /// </summary>
+    private static async Task<string> SaveCardAsync(ListeningReport report, string label, Canvas host)
     {
-        var rtb = new RenderTargetBitmap();
-        await rtb.RenderAsync(card);
+        var card = await BuildCardAsync(report, label);
+        double rs = host.XamlRoot?.RasterizationScale ?? 1.0;
+        double factor = Math.Max(1.0, 2.0 / rs);   // 渲染出的像素 ≈ 2 倍（高 DPI 屏幕本来就更清晰，不再额外放大）
+        var box = new Viewbox { Width = CardWidth * factor, Stretch = Stretch.Uniform, Child = card };
+        Canvas.SetLeft(box, -20000);   // 不出现在对话框里
+        host.Children.Add(box);
+        RenderTargetBitmap rtb;
+        try
+        {
+            box.UpdateLayout();
+            await Task.Delay(300);   // 等封面图片解码出来
+            rtb = new RenderTargetBitmap();
+            await rtb.RenderAsync(box);
+        }
+        finally
+        {
+            host.Children.Remove(box);
+        }
         var pixels = await rtb.GetPixelsAsync();
 
         var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Klang");
