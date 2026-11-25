@@ -766,6 +766,8 @@ public sealed partial class MainWindow : Window
             BottomTransportBar.UpdateLyricSnippet(autoPlay ? L.T("正在获取云端音源…") : L.T("云端曲目"));
 
             await AudioEngineService.Instance.FadeOutAndStopAsync();
+            // 上一首云端歌曲边下边播还没下完的，已经不听了：停止下载（预缓冲的下载不受影响）
+            Services.Cloud.ProgressiveDownload.CancelPlaybackDownloads();
             if (ct.IsCancellationRequested || seq != _playSeq) return;
         }
 
@@ -785,7 +787,14 @@ public sealed partial class MainWindow : Window
             {
                 RefreshTrackCover(track);
                 if (!adopted && autoPlay && seq == _playSeq) AudioEngineService.Instance.Play(track.FilePath);
-                _ = LoadWaveformAsync(track);   // 云端音源缓存到本地后才有波形
+                // 云端音源缓存到本地后才有波形；边下边播时等整首下完再算
+                if (Services.Cloud.ProgressiveDownload.Find(track.FilePath) is { } dl)
+                    _ = dl.Completion.ContinueWith(t =>
+                    {
+                        if (t.Result) DispatcherQueue.TryEnqueue(() => { if (_currentTrack == track) _ = LoadWaveformAsync(track); });
+                    }, System.Threading.Tasks.TaskScheduler.Default);
+                else
+                    _ = LoadWaveformAsync(track);
                 if (!adopted) BottomTransportBar.UpdateLyricSnippet(track.FormatBadge);
             }
 

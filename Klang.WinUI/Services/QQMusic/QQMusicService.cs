@@ -46,6 +46,7 @@ public sealed class QQMusicService : ICloudSource
     {
         _cacheDir = Path.Combine(StateService.ResolveDataDirectory(), "qqmusic_cache");
         Directory.CreateDirectory(_cacheDir);
+        ProgressiveDownload.CleanStaleParts(_cacheDir);   // 上次退出时没下完的边下边播临时文件
         RestoreSession();
     }
 
@@ -201,27 +202,32 @@ public sealed class QQMusicService : ICloudSource
         return list;
     }
 
-    public async Task<List<TrackItem>> GetPlaylistTracksAsync(string playlistId)
+    /// <summary>
+    /// 歌单里的歌曲（最多 1000 首）。一次请求取完（以前每页 200 首、一页接一页地取，1000 首要 5 次请求）；
+    /// 服务器给得少于要的数量时再接着往后取。整个过程放到后台线程，不占界面线程。
+    /// </summary>
+    public Task<List<TrackItem>> GetPlaylistTracksAsync(string playlistId) => Task.Run(async () =>
     {
-        if (!long.TryParse(playlistId, System.Globalization.NumberStyles.None, null, out var tid)) return new();
+        if (!long.TryParse(playlistId, System.Globalization.NumberStyles.None, null, out var tid)) return new List<TrackItem>();
         var songs = new List<JsonNode>();
-        const int page = 200;
-        for (int begin = 0; begin < 1000; begin += page)
+        const int max = 1000;
+        while (songs.Count < max)
         {
+            int want = max - songs.Count;
             var r = await _client.CgiAsync("music.srfDissInfo.DissInfo", "CgiGetDiss", new JsonObject
             {
-                ["disstid"] = tid, ["dirid"] = 0, ["tag"] = 0, ["song_begin"] = begin, ["song_num"] = page,
+                ["disstid"] = tid, ["dirid"] = 0, ["tag"] = 0, ["song_begin"] = songs.Count, ["song_num"] = want,
                 ["userinfo"] = 0, ["orderlist"] = 1, ["onlysonglist"] = 1,
-            });
+            }).ConfigureAwait(false);
             if ((int?)r?["code"] != 0) break;
             var batch = r?["data"]?["songlist"]?.AsArray();
             if (batch == null || batch.Count == 0) break;
             songs.AddRange(batch.Where(s => s != null)!);
             int total = (int?)r?["data"]?["total_song_num"] ?? 0;
-            if (songs.Count >= total || batch.Count < page) break;
+            if (songs.Count >= total) break;
         }
         return ParseSongs(songs);
-    }
+    });
 
     public async Task<List<TrackItem>> GetDailyRecommendAsync()
     {
@@ -261,6 +267,7 @@ public sealed class QQMusicService : ICloudSource
     private List<TrackItem> ParseSongs(IEnumerable<JsonNode> songs)
     {
         var tracks = new List<TrackItem>();
+        var cache = new CloudCacheIndex(_cacheDir);   // 整个列表只扫一次缓存目录
         int index = 1;
         foreach (var s in songs)
         {
@@ -278,12 +285,12 @@ public sealed class QQMusicService : ICloudSource
                 : MidRx.IsMatch(singerMid) ? $"https://y.gtimg.cn/music/photo_new/T001R500x500M000{singerMid}.jpg" : "";
             string title = (string?)s["name"] ?? (string?)s["title"] ?? L.T("未知曲目");
             tracks.Add(MakeTrack(index++, mid, title, artist.Length > 0 ? artist : "未知歌手",
-                (string?)s["album"]?["name"] ?? (string?)s["album"]?["title"] ?? "", (int?)s["interval"] ?? 0, coverUrl));
+                (string?)s["album"]?["name"] ?? (string?)s["album"]?["title"] ?? "", (int?)s["interval"] ?? 0, coverUrl, cache));
         }
         return tracks;
     }
 
-    private TrackItem MakeTrack(int index, string mid, string title, string artist, string album, double duration, string coverUrl)
+    private TrackItem MakeTrack(int index, string mid, string title, string artist, string album, double duration, string coverUrl, CloudCacheIndex cache)
     {
         var t = new TrackItem
         {
@@ -298,25 +305,25 @@ public sealed class QQMusicService : ICloudSource
             CoverUrl = coverUrl,
             FormatBadge = L.T("云端")
         };
-        var cached = FindCachedAudio(mid);
+        var cached = cache.FindAudio(mid, PreferredQuality);
         if (cached != null)
         {
             t.FilePath = cached;
             t.FormatBadge = L.T("已缓存");
         }
-        var cover = CachedCoverPath(mid);
-        t.CoverPath = File.Exists(cover) ? cover : null;
+        t.CoverPath = cache.HasCover(mid) ? CachedCoverPath(mid) : null;
         return t;
     }
 
     public List<TrackItem> FromSnapshots(IEnumerable<OnlineTrackSnapshot> list)
     {
         var tracks = new List<TrackItem>();
+        var cache = new CloudCacheIndex(_cacheDir);
         int index = 1;
         foreach (var s in list)
         {
             if (!MidRx.IsMatch(s.CloudId)) continue;
-            tracks.Add(MakeTrack(index++, s.CloudId, s.Title, s.Artist, s.Album, s.Duration, IsTrustedUrl(s.CoverUrl) ? s.CoverUrl : ""));
+            tracks.Add(MakeTrack(index++, s.CloudId, s.Title, s.Artist, s.Album, s.Duration, IsTrustedUrl(s.CoverUrl) ? s.CoverUrl : "", cache));
         }
         return tracks;
     }
@@ -371,21 +378,6 @@ public sealed class QQMusicService : ICloudSource
 
     private string CachedCoverPath(string mid) => Path.Combine(_cacheDir, $"{mid}_cover.jpg");
 
-    private string? FindCachedAudio(string mid)
-    {
-        try
-        {
-            var pref = $"{mid}_{PreferredQuality}.";
-            return Directory.EnumerateFiles(_cacheDir, $"{mid}_*.*")
-                .Where(f => NetGuard.AudioExtensions.Contains(Path.GetExtension(f).TrimStart('.').ToLowerInvariant())
-                            && new FileInfo(f).Length > 10240)
-                .OrderBy(f => Path.GetFileName(f).StartsWith(pref) ? 0 : 1)
-                .ThenByDescending(File.GetLastWriteTimeUtc)
-                .FirstOrDefault();
-        }
-        catch { return null; }
-    }
-
     private string CachePath(string mid, (string Key, string Label, string Prefix, string Ext) q) =>
         Path.Combine(_cacheDir, $"{mid}_{q.Key}.{q.Ext}");
 
@@ -400,16 +392,19 @@ public sealed class QQMusicService : ICloudSource
     public async Task<bool> ResolveAsync(TrackItem track, CancellationToken ct)
     {
         if (!track.IsOnline) return !string.IsNullOrEmpty(track.FilePath);
+        // 这首歌正在预缓冲：已经开始下载的话够播了就用（边下边播），还在取地址时等它
         Task<bool>? pending;
         lock (_prefetching) _prefetching.TryGetValue(track.CloudId, out pending);
-        if (pending != null)
+        if (pending != null && ProgressiveDownload.FindByKey(DownloadKey(track.CloudId)) == null)
         {
             try { await pending.WaitAsync(ct); }
             catch (OperationCanceledException) { throw; }
             catch { }
         }
-        return await ResolveCoreAsync(track, ct);
+        return await ResolveCoreAsync(track, ct, progressive: true);
     }
+
+    private static string DownloadKey(string mid) => SourceKey + ":" + mid;
 
     public void Prefetch(TrackItem track)
     {
@@ -420,7 +415,7 @@ public sealed class QQMusicService : ICloudSource
             if (_prefetching.ContainsKey(mid)) return;
             _prefetching[mid] = Task.Run(async () =>
             {
-                try { return await ResolveCoreAsync(track, CancellationToken.None); }
+                try { return await ResolveCoreAsync(track, CancellationToken.None, progressive: false); }
                 catch { return false; }
                 finally { lock (_prefetching) _prefetching.Remove(mid); }
             });
@@ -444,7 +439,11 @@ public sealed class QQMusicService : ICloudSource
         return mid;
     }
 
-    private async Task<bool> ResolveCoreAsync(TrackItem track, CancellationToken ct)
+    /// <summary>
+    /// 取得可播放的文件。progressive = 边下边播：下够一小段就返回，下载在后台继续（见 <see cref="ProgressiveDownload"/>）；
+    /// 否则（预缓冲）等整首下完才返回。首选音质拿不到地址或下载一开始就失败时，依次换低一档。
+    /// </summary>
+    private async Task<bool> ResolveCoreAsync(TrackItem track, CancellationToken ct, bool progressive)
     {
         var mid = track.CloudId;
         if (!MidRx.IsMatch(mid)) return false;
@@ -460,6 +459,10 @@ public sealed class QQMusicService : ICloudSource
             return true;
         }
 
+        // 这首已经在下载了（预缓冲，或刚才播放时开始的）：不再另开一次
+        if (ProgressiveDownload.FindByKey(DownloadKey(mid)) is { } running)
+            return await UseDownloadAsync(track, running, ct, progressive);
+
         var mediaMid = await GetMediaMidAsync(mid, ct);
         for (int i = start; i < QualityList.Length; i++)
         {
@@ -474,14 +477,27 @@ public sealed class QQMusicService : ICloudSource
             }
             string? url = await GetStreamUrlAsync(mid, mediaMid, q.Prefix, q.Ext, ct);
             if (url == null) continue;
-            if (await DownloadAsync(url, final, ct))
+
+            var dl = new ProgressiveDownload(DownloadKey(mid), final, q.Key, q.Ext, 0) { IsPrefetch = !progressive };
+            if (!dl.Register())
             {
-                Apply(track, final, q.Key);
-                EnforceCacheQuota();
-                return true;
+                if (ProgressiveDownload.FindByKey(DownloadKey(mid)) is { } other) return await UseDownloadAsync(track, other, ct, progressive);
+                return false;
             }
+            // 预缓冲不随切歌取消；播放发起的下载由 CancelPlaybackDownloads 在换到另一首云端歌曲时取消
+            _ = Task.Run(() => DownloadAsync(dl, url));
+            if (await UseDownloadAsync(track, dl, ct, progressive)) return true;
         }
         return false;
+    }
+
+    /// <summary>边下边播时等到够播（否则等下完），然后把路径和音质写到曲目上。</summary>
+    private static async Task<bool> UseDownloadAsync(TrackItem track, ProgressiveDownload dl, CancellationToken ct, bool progressive)
+    {
+        bool ok = progressive ? await dl.WaitReadyAsync(ct) : await dl.Completion.WaitAsync(ct);
+        if (!ok) return false;
+        Apply(track, dl.FinalPath, dl.Level);
+        return true;
     }
 
     private async Task<string?> GetStreamUrlAsync(string mid, string mediaMid, string prefix, string ext, CancellationToken ct)
@@ -510,41 +526,17 @@ public sealed class QQMusicService : ICloudSource
         catch { return null; }
     }
 
-    private async Task<bool> DownloadAsync(string url, string final, CancellationToken ct)
+    private async Task DownloadAsync(ProgressiveDownload dl, string url)
     {
-        var tmp = final + "." + Guid.NewGuid().ToString("N")[..8] + ".tmp";
-        try
+        HttpRequestMessage Make()
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
             req.Headers.TryAddWithoutValidation("Referer", "https://y.qq.com/");
             req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            using var dl = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            using var rsp = await dl.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (!rsp.IsSuccessStatusCode) return false;
-            if (!NetGuard.IsQQMusicUri(rsp.RequestMessage?.RequestUri)) return false;   // 跟随重定向后也必须还在腾讯域名下
-            long? expected = rsp.Content.Headers.ContentLength;
-            long written = 0;
-            await using (var src = await rsp.Content.ReadAsStreamAsync(ct))
-            await using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                var buf = new byte[64 * 1024];
-                int n;
-                while ((n = await src.ReadAsync(buf, ct)) > 0)
-                {
-                    await dst.WriteAsync(buf.AsMemory(0, n), ct);
-                    written += n;
-                }
-            }
-            if (written <= 10240 || (expected.HasValue && written != expected.Value)) return false;
-            File.Move(tmp, final, true);
-            return true;
+            return req;
         }
-        catch (OperationCanceledException) { throw; }
-        catch { return false; }
-        finally
-        {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
-        }
+        // 跟随重定向后也必须还在腾讯域名下
+        if (await dl.RunAsync(Make, NetGuard.IsQQMusicUri).ConfigureAwait(false)) EnforceCacheQuota();
     }
 
     private static void Apply(TrackItem t, string path, string quality)

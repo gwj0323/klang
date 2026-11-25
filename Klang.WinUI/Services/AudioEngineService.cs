@@ -111,7 +111,8 @@ public class AudioEngineService : IDisposable
 
     public void Play(string filePath, double segmentStart = 0, double segmentEnd = 0)
     {
-        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        // 云端歌曲边下边播时，最终的缓存文件还不存在，由 ProgressiveDownload 提供读取
+        if (string.IsNullOrWhiteSpace(filePath) || (!File.Exists(filePath) && !Cloud.ProgressiveDownload.IsActive(filePath)))
         {
             return;
         }
@@ -131,6 +132,12 @@ public class AudioEngineService : IDisposable
 
         try
         {
+            // 还在下载：从已下载的部分读（读到没下载的位置会等）；下完了（或刚好下完）就按普通文件打开
+            if (!File.Exists(filePath) && Cloud.ProgressiveDownload.OpenReader(filePath) is { } partial)
+            {
+                StartPipeline(partial);
+                return;
+            }
             // Windows 10/11 MediaFoundationReader 原生支持 FLAC, MP3, WAV, AAC, M4A, ALAC
             StartPipeline(new MediaFoundationReader(filePath));
         }
@@ -151,6 +158,7 @@ public class AudioEngineService : IDisposable
     }
 
     private string? _filePath;
+    private (double From, double To, DateTime At)? _lastSeek;   // 最近一次跳转：从哪里跳到哪里
 
     // ---- 让出声卡（播放 MV 时）：独占模式下普通的暂停仍然占着设备（见 Pause），MV 会没有声音，所以要完全停掉 ----
     // AutoPlay = 让出期间有人要求播放（歌曲加载完成），恢复时无论之前是否在播放都要播放
@@ -202,6 +210,10 @@ public class AudioEngineService : IDisposable
         CrashReporter.Note($"重开音频输出（设备 {StateService.Instance.State.SelectedDeviceId}，独占 {StateService.Instance.State.WasapiExclusive}）");
         string path = _filePath;
         double start = _segStart, end = _segEnd, pos = CurrentTime;
+        // 刚跳转过、但解码器没能跳过去就出错了（云端歌曲跳到还没下载的地方，数据来得太慢）：
+        // 位置还停在跳转前，按跳转的目标重开，不要跳回原处
+        if (_lastSeek is { } ls && (DateTime.UtcNow - ls.At).TotalSeconds < 30 && Math.Abs(pos - ls.From) < 1.5)
+            pos = ls.To;
         Play(path, start, end);
         if (!HasSource) return;
         if (pos > 0.05) Seek(pos);
@@ -804,6 +816,8 @@ public class AudioEngineService : IDisposable
         if (_audioFileReader != null)
         {
             var clamped = Math.Clamp(seconds, 0, TotalDuration);
+            // 边下边播时跳到还没下载的地方：解码器按 Range 请求那个位置，下载会跳过去先下那里
+            _lastSeek = (CurrentTime, clamped, DateTime.UtcNow);
             _audioFileReader.CurrentTime = TimeSpan.FromSeconds(_segStart + clamped);
             _stretch?.Reset();
             _dspProvider?.RestartFadeIn(15);

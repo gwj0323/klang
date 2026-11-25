@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -71,6 +71,8 @@ public sealed class NeteaseService : ICloudSource
         _cacheDir = Path.Combine(
             StateService.ResolveDataDirectory(), "netease_cache");
         Directory.CreateDirectory(_cacheDir);
+        // 上次退出时没下完的边下边播临时文件
+        ProgressiveDownload.CleanStaleParts(_cacheDir);
         RestoreSession();
     }
 
@@ -274,27 +276,41 @@ public sealed class NeteaseService : ICloudSource
         return ParseSongs(res!["data"]?["dailySongs"]?.AsArray());
     }
 
-    public async Task<List<TrackItem>> GetPlaylistTracksAsync(string playlistId)
+    /// <summary>
+    /// 歌单里的歌曲。整个过程放到后台线程（解析上千首歌、查本地缓存都不占界面线程）。
+    /// 歌单详情带上 n 后，tracks 里通常已经是全部歌曲的详情，不用再逐批查；
+    /// 只有 tracks 里缺的（超长歌单）才补查歌曲详情，每批 500 首、几批同时发。
+    /// </summary>
+    public Task<List<TrackItem>> GetPlaylistTracksAsync(string playlistId) => Task.Run(async () =>
     {
-        if (!long.TryParse(playlistId, System.Globalization.NumberStyles.None, null, out var plId)) return new();
+        if (!long.TryParse(playlistId, System.Globalization.NumberStyles.None, null, out var plId)) return new List<TrackItem>();
         var res = await _client.WeapiAsync("/weapi/v6/playlist/detail", new JsonObject
         {
-            ["id"] = plId.ToString(), ["offset"] = "0", ["total"] = "true", ["limit"] = "1000"
-        });
-        if ((int?)res?["code"] != 200) return new();
+            ["id"] = plId.ToString(), ["offset"] = "0", ["total"] = "true", ["limit"] = "1000", ["n"] = "1000"
+        }).ConfigureAwait(false);
+        if ((int?)res?["code"] != 200) return new List<TrackItem>();
         var pl = res!["playlist"];
+        var tracks = pl?["tracks"]?.AsArray() ?? new JsonArray();
         var ids = (pl?["trackIds"]?.AsArray() ?? new JsonArray())
             .Select(t => (long?)t?["id"] ?? 0).Where(i => i != 0).Take(1000).ToList();
+        if (ids.Count == 0) return ParseSongs(tracks);
 
-        var songs = new JsonArray();
-        for (int i = 0; i < ids.Count; i += 100)
+        var byId = new Dictionary<long, JsonNode>();
+        foreach (var t in tracks)
+            if (t != null && ((long?)t["id"] ?? 0) is var id and not 0) byId[id] = t;
+
+        var missing = ids.Where(i => !byId.ContainsKey(i)).ToList();
+        if (missing.Count > 0)
         {
-            var detail = await GetTrackDetailAsync(ids.Skip(i).Take(100));
-            foreach (var s in detail?["songs"]?.AsArray() ?? new JsonArray())
-                songs.Add(s?.DeepClone());
+            var batches = Enumerable.Range(0, (missing.Count + 499) / 500).Select(b => missing.Skip(b * 500).Take(500).ToList()).ToList();
+            var details = await Task.WhenAll(batches.Select(b => GetTrackDetailAsync(b))).ConfigureAwait(false);
+            foreach (var d in details)
+            foreach (var s in d?["songs"]?.AsArray() ?? new JsonArray())
+                if (s != null && ((long?)s["id"] ?? 0) is var id and not 0) byId[id] = s;
         }
-        return songs.Count > 0 ? ParseSongs(songs) : ParseSongs(pl?["tracks"]?.AsArray());
-    }
+        // 按歌单里的顺序排
+        return ParseSongs(ids.Where(byId.ContainsKey).Select(i => byId[i]));
+    });
 
     private Task<JsonNode?> GetTrackDetailAsync(IEnumerable<long> ids)
     {
@@ -336,10 +352,13 @@ public sealed class NeteaseService : ICloudSource
         return ParseSongs(songs);
     }
 
-    private List<TrackItem> ParseSongs(JsonArray? songs)
+    private List<TrackItem> ParseSongs(JsonArray? songs) => ParseSongs((IEnumerable<JsonNode?>?)songs);
+
+    private List<TrackItem> ParseSongs(IEnumerable<JsonNode?>? songs)
     {
         var tracks = new List<TrackItem>();
         if (songs == null) return tracks;
+        var cache = new CloudCacheIndex(_cacheDir);   // 整个列表只扫一次缓存目录
         int index = 1;
         foreach (var s in songs)
         {
@@ -355,7 +374,7 @@ public sealed class NeteaseService : ICloudSource
 
             var t = MakeTrack(index++, id, (string?)s["name"] ?? L.T("未知曲目"),
                 artist.Length > 0 ? artist : "未知歌手", (string?)album?["name"] ?? "", ms / 1000.0,
-                (string?)album?["picUrl"] ?? (string?)s["picUrl"] ?? "");
+                (string?)album?["picUrl"] ?? (string?)s["picUrl"] ?? "", cache);
             // 歌曲详情 / 歌单 / 推荐里是 mv，搜索结果里是 mvid；没有 MV 时是 0
             long mv = (long?)(s["mv"] ?? s["mvid"]) ?? 0;
             t.MvId = mv.ToString();
@@ -364,7 +383,7 @@ public sealed class NeteaseService : ICloudSource
         return tracks;
     }
 
-    private TrackItem MakeTrack(int index, string id, string title, string artist, string album, double duration, string coverUrl)
+    private TrackItem MakeTrack(int index, string id, string title, string artist, string album, double duration, string coverUrl, CloudCacheIndex cache)
     {
         var t = new TrackItem
         {
@@ -379,14 +398,13 @@ public sealed class NeteaseService : ICloudSource
             CoverUrl = coverUrl,
             FormatBadge = L.T("云端")
         };
-        var cached = FindCachedAudio(id);
+        var cached = cache.FindAudio(id, PreferredQuality);
         if (cached != null)
         {
             t.FilePath = cached;
             t.FormatBadge = L.T("已缓存");
         }
-        var cover = CachedCoverPath(id);
-        t.CoverPath = File.Exists(cover) ? cover : null;
+        t.CoverPath = cache.HasCover(id) ? CachedCoverPath(id) : null;
         return t;
     }
 
@@ -394,38 +412,22 @@ public sealed class NeteaseService : ICloudSource
     public List<TrackItem> FromSnapshots(IEnumerable<OnlineTrackSnapshot> list)
     {
         var tracks = new List<TrackItem>();
+        var cache = new CloudCacheIndex(_cacheDir);
         int index = 1;
         foreach (var s in list)
         {
             if (!long.TryParse(s.CloudId, System.Globalization.NumberStyles.None, null, out var n) || n == 0) continue;
-            tracks.Add(MakeTrack(index++, s.CloudId, s.Title, s.Artist, s.Album, s.Duration, s.CoverUrl));
+            tracks.Add(MakeTrack(index++, s.CloudId, s.Title, s.Artist, s.Album, s.Duration, s.CoverUrl, cache));
         }
         return tracks;
     }
+
 
     #endregion
 
     #region 音源解析与缓存
 
     private string CachedCoverPath(string id) => Path.Combine(_cacheDir, $"{id}_cover.jpg");
-
-    private string? FindCachedAudio(string id)
-    {
-        try
-        {
-            var pref = $"{id}_{PreferredQuality}.";
-            return Directory.EnumerateFiles(_cacheDir, $"{id}_*.*")
-                .Where(f => new[] { ".flac", ".m4a", ".mp3", ".ogg" }.Contains(Path.GetExtension(f).ToLowerInvariant())
-                            && new FileInfo(f).Length > 10240)
-                .OrderBy(f => Path.GetFileName(f).StartsWith(pref) ? 0 : 1)
-                .ThenByDescending(f => File.GetLastWriteTimeUtc(f))
-                .FirstOrDefault();
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private async Task<(string Url, string Type, int Br, string Level)?> GetStreamInfoAsync(
         string id, string quality, CancellationToken ct)
@@ -469,18 +471,20 @@ public sealed class NeteaseService : ICloudSource
     {
         if (!track.IsOnline) return !string.IsNullOrEmpty(track.FilePath);
 
-        // 这首歌正在预缓冲：等它下完直接用，不再另开一次下载
+        // 这首歌正在预缓冲：已经开始下载的话够播了就用（边下边播），还在取地址时等它
         Task<bool>? pending;
         lock (_prefetching) _prefetching.TryGetValue(track.CloudId, out pending);
-        if (pending != null)
+        if (pending != null && ProgressiveDownload.FindByKey(DownloadKey(track.CloudId)) == null)
         {
             try { await pending.WaitAsync(ct); }
             catch (OperationCanceledException) { throw; }
             catch { }
             // 下完后走下面的常规流程：命中缓存，立即返回，并把路径 / 音质写到这个曲目对象上
         }
-        return await ResolveCoreAsync(track, ct);
+        return await ResolveCoreAsync(track, ct, progressive: true);
     }
+
+    private string DownloadKey(string id) => Key + ":" + id;
 
     private readonly Dictionary<string, Task<bool>> _prefetching = new();
 
@@ -510,7 +514,7 @@ public sealed class NeteaseService : ICloudSource
             if (_prefetching.ContainsKey(id)) return;
             var task = Task.Run(async () =>
             {
-                try { return await ResolveCoreAsync(track, CancellationToken.None); }
+                try { return await ResolveCoreAsync(track, CancellationToken.None, progressive: false); }
                 catch { return false; }
                 finally { lock (_prefetching) _prefetching.Remove(id); }
             });
@@ -518,7 +522,12 @@ public sealed class NeteaseService : ICloudSource
         }
     }
 
-    private async Task<bool> ResolveCoreAsync(TrackItem track, CancellationToken ct)
+    /// <summary>
+    /// 取得可播放的文件。progressive = 边下边播：开始下载后，下够一小段就返回（路径是最终的缓存路径，
+    /// 文件下完前播放引擎通过 <see cref="ProgressiveDownload"/> 读取），下载在后台继续；
+    /// 否则（预缓冲）等整首下完才返回。
+    /// </summary>
+    private async Task<bool> ResolveCoreAsync(TrackItem track, CancellationToken ct, bool progressive)
     {
         var id = track.CloudId;
         // id 会拼进缓存文件名，只接受纯数字（也可能来自保存的状态文件）
@@ -539,6 +548,10 @@ public sealed class NeteaseService : ICloudSource
             }
         }
 
+        // 这首已经在下载了（预缓冲，或刚才播放时开始的）：不再另开一次
+        if (ProgressiveDownload.FindByKey(DownloadKey(id)) is { } running)
+            return await UseDownloadAsync(track, running, ct, progressive);
+
         var info = await GetStreamInfoAsync(id, quality, ct);
         if (info == null) return false;
         var (url, type, br, level) = info.Value;
@@ -551,45 +564,37 @@ public sealed class NeteaseService : ICloudSource
             return true;
         }
 
-        var tmp = final + "." + Guid.NewGuid().ToString("N")[..8] + ".tmp";
-        try
+        var dl = new ProgressiveDownload(DownloadKey(id), final, level, type, br) { IsPrefetch = !progressive };
+        if (!dl.Register())
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.TryAddWithoutValidation("Referer", "https://music.163.com/");
-            using var dl = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            using var rsp = await dl.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (!rsp.IsSuccessStatusCode) return false;
-            // 跟随重定向后也必须还在网易云的域名下
-            if (!NetGuard.IsNeteaseUri(rsp.RequestMessage?.RequestUri)) return false;
-            long? expected = rsp.Content.Headers.ContentLength;
-            long written = 0;
-            await using (var src = await rsp.Content.ReadAsStreamAsync(ct))
-            await using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                var buf = new byte[64 * 1024];
-                int n;
-                while ((n = await src.ReadAsync(buf, ct)) > 0)
-                {
-                    await dst.WriteAsync(buf.AsMemory(0, n), ct);
-                    written += n;
-                }
-            }
-            // 被截断的下载不能当成有效缓存
-            if (written <= 10240 || (expected.HasValue && written != expected.Value)) return false;
-            File.Move(tmp, final, true);
-            Apply(track, final, level, type, br);
-            EnforceCacheQuota();
-            return true;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch
-        {
+            // 同时有别处刚开始下载同一首（比如预缓冲）：用那一个
+            if (ProgressiveDownload.FindByKey(DownloadKey(id)) is { } other) return await UseDownloadAsync(track, other, ct, progressive);
             return false;
         }
-        finally
+        // 预缓冲不随切歌取消；播放发起的下载由 CancelPlaybackDownloads 在换到另一首云端歌曲时取消
+        _ = Task.Run(() => DownloadAsync(dl, url));
+        return await UseDownloadAsync(track, dl, ct, progressive);
+    }
+
+    /// <summary>边下边播时等到够播（否则等下完），然后把路径和音质写到曲目上。</summary>
+    private static async Task<bool> UseDownloadAsync(TrackItem track, ProgressiveDownload dl, CancellationToken ct, bool progressive)
+    {
+        bool ok = progressive ? await dl.WaitReadyAsync(ct) : await dl.Completion.WaitAsync(ct);
+        if (!ok) return false;
+        Apply(track, dl.FinalPath, dl.Level, dl.Type, dl.Bitrate);
+        return true;
+    }
+
+    private async Task DownloadAsync(ProgressiveDownload dl, string url)
+    {
+        HttpRequestMessage Make()
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("Referer", "https://music.163.com/");
+            return req;
         }
+        // 跟随重定向后也必须还在网易云的域名下
+        if (await dl.RunAsync(Make, NetGuard.IsNeteaseUri).ConfigureAwait(false)) EnforceCacheQuota();
     }
 
     private static void Apply(TrackItem t, string path, string quality, string ext, int br)
