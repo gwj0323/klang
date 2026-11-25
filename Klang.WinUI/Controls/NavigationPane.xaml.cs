@@ -401,6 +401,7 @@ public sealed partial class NavigationPane : UserControl
         AlbumsGridView.Visibility = inAlbumList ? Visibility.Visible : Visibility.Collapsed;
         TracksListView.Visibility = (inPlaylistList || inAlbumList || inNetease) ? Visibility.Collapsed : Visibility.Visible;
         AddFolderBtn.Visibility = inNetease ? Visibility.Collapsed : Visibility.Visible;
+        ViewOptionsBtn.Visibility = inNetease ? Visibility.Collapsed : Visibility.Visible;   // 排序 / 筛选只对本地曲库有用
 
         var lib = LibraryService.Instance;
 

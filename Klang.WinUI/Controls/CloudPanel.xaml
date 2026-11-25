@@ -6,6 +6,24 @@
     xmlns:models="using:Klang_WinUI.Models"
     xmlns:local="using:Klang_WinUI.Controls">
 
+    <UserControl.Resources>
+        <!-- 来源分段切换：选中的一段是凸起的按钮，其余是透明的文字 -->
+        <Style x:Key="SegmentOffStyle" TargetType="Button" BasedOn="{StaticResource SubtleButtonStyle}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Style>
+        <Style x:Key="SegmentOnStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </UserControl.Resources>
+
     <Grid RowSpacing="6">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -13,14 +31,18 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 云端来源切换：接入了不止一个平台时才显示 -->
-        <ComboBox
-            x:Name="SourceBox"
-            HorizontalAlignment="Stretch"
-            FontSize="12"
-            SelectionChanged="SourceBox_SelectionChanged"
-            ToolTipService.ToolTip="云端来源"
-            Visibility="Collapsed" />
+        <!-- 云端来源分段切换：接入了不止一个平台时才显示；各段在代码里按来源生成 -->
+        <Border
+            x:Name="SourceSwitch"
+            Padding="2"
+            AutomationProperties.Name="云端来源"
+            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="6"
+            Visibility="Collapsed">
+            <Grid x:Name="SourceSwitchGrid" ColumnSpacing="2" />
+        </Border>
 
         <!-- 查看歌单 / 搜索结果时的返回条 -->
         <Grid
@@ -141,31 +163,47 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Grid ColumnSpacing="6">
+                <!-- 账号行：头像 + 昵称 + 当前音质；音质和退出登录收在“⋯”菜单里 -->
+                <Grid Padding="4,2,0,2" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <PersonPicture
+                        x:Name="AvatarPicture"
+                        Width="28"
+                        Height="28"
+                        VerticalAlignment="Center" />
                     <TextBlock
                         x:Name="NicknameText"
+                        Grid.Column="1"
                         VerticalAlignment="Center"
                         FontSize="14"
                         FontWeight="SemiBold"
                         TextTrimming="CharacterEllipsis" />
-                    <ComboBox
-                        x:Name="QualityBox"
-                        Grid.Column="1"
-                        MinWidth="104"
+                    <TextBlock
+                        x:Name="QualityText"
+                        Grid.Column="2"
+                        VerticalAlignment="Center"
                         FontSize="12"
-                        SelectionChanged="QualityBox_SelectionChanged"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                         ToolTipService.ToolTip="播放音质（不可用时自动降级）" />
                     <Button
-                        Grid.Column="2"
-                        Padding="8,4,8,4"
-                        Click="Logout_Click"
-                        Content="退出"
-                        FontSize="12" />
+                        Grid.Column="3"
+                        Width="32"
+                        Height="28"
+                        Padding="0"
+                        AutomationProperties.Name="账号与音质"
+                        CornerRadius="4"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="账号与音质">
+                        <FontIcon FontSize="14" Glyph="&#xE712;" />
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="AccountMenu" Placement="BottomEdgeAlignedRight" />
+                        </Button.Flyout>
+                    </Button>
                 </Grid>
                 <ListView
                     x:Name="HomeList"

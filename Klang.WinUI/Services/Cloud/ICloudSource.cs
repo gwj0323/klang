@@ -43,6 +43,8 @@ public interface ICloudSource
 
     bool IsLoggedIn { get; }
     string Nickname { get; }
+    /// <summary>头像地址；没有时为空（界面显示昵称首字）。</summary>
+    string AvatarUrl => "";
     /// <summary>登录状态变化（可能在后台线程触发，订阅方自行切线程）。</summary>
     event Action? LoginChanged;
     /// <summary>启动后静默校验登录状态。</summary>

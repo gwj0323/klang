@@ -1,6 +1,11 @@
 {
   "name": "Dansk",
   "strings": {
+    "退出登录…": "Log ud…",
+    "退出登录": "Log ud",
+    "退出{0}账号？": "Log ud af {0}?",
+    "退出后需要重新扫码登录。": "Du skal scanne QR-koden igen for at logge ind.",
+    "账号与音质": "Konto og lydkvalitet",
     "任务栏播放条": "Proceslinjeafspiller",
     "关闭任务栏播放条": "Luk proceslinjeafspilleren",
     "调整封面…": "Tilpas omslag…",

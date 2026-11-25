@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Storage.Streams;
@@ -33,7 +34,6 @@ public sealed partial class CloudPanel : UserControl
     private string _qrKey = "";
     private bool _qrBusy;
     private bool _active;
-    private bool _loadingQuality = true;
     private int _requestSeq;
     private bool _inTracksMode;
 
@@ -57,18 +57,61 @@ public sealed partial class CloudPanel : UserControl
         _qrTimer.Interval = TimeSpan.FromSeconds(2);
         _qrTimer.Tick += async (s, e) => await PollQrAsync();
 
-        // 来源切换框：只有一个来源时不显示
+        // 来源分段切换：每个来源一段；只有一个来源时不显示
+        int col = 0;
         foreach (var src in CloudSources.All)
         {
-            SourceBox.Items.Add(new ComboBoxItem { Content = src.DisplayName, Tag = src.Key });
+            SourceSwitchGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var seg = new Button { Content = src.DisplayName, Tag = src.Key };
+            AutomationProperties.SetName(seg, src.DisplayName);
+            Grid.SetColumn(seg, col++);
+            seg.Click += (s, e) => SelectSource((string)((Button)s).Tag);
+            SourceSwitchGrid.Children.Add(seg);
             var s = src;
             // 只有当前显示的来源变化才刷新界面；封面缓存不分来源，都要通知主窗口
             s.LoginChanged += () => DispatcherQueue.SafeEnqueue(() => { if (s == Svc) UpdateView(); });
             s.CoverCached += t => DispatcherQueue.SafeEnqueue(() => CoverReady?.Invoke(t));
         }
-        SourceBox.SelectedItem = SourceBox.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == Svc.Key);
         ApplySourceUi();
         UpdateView();
+    }
+
+    /// <summary>分段切换的样式：当前来源那一段凸起。</summary>
+    private void UpdateSourceSegments()
+    {
+        var on = (Style)Resources["SegmentOnStyle"];
+        var off = (Style)Resources["SegmentOffStyle"];
+        foreach (var seg in SourceSwitchGrid.Children.OfType<Button>())
+            seg.Style = (string)seg.Tag == Svc.Key ? on : off;
+    }
+
+    /// <summary>重建“⋯”菜单：音质（单选）+ 退出登录。</summary>
+    private void BuildAccountMenu()
+    {
+        var src = Svc;
+        AccountMenu.Items.Clear();
+        var quality = new MenuFlyoutSubItem { Text = L.T("音质") };
+        foreach (var (key, label) in src.Qualities)
+        {
+            var item = new RadioMenuFlyoutItem { Text = label, Tag = key, GroupName = "CloudQuality", IsChecked = key == src.PreferredQuality };
+            item.Click += (s, e) =>
+            {
+                Svc.PreferredQuality = (string)((MenuFlyoutItem)s).Tag;
+                UpdateQualityText();
+            };
+            quality.Items.Add(item);
+        }
+        AccountMenu.Items.Add(quality);
+        AccountMenu.Items.Add(new MenuFlyoutSeparator());
+        var logout = new MenuFlyoutItem { Text = L.T("退出登录…"), Icon = new FontIcon { Glyph = "" } };
+        logout.Click += Logout_Click;
+        AccountMenu.Items.Add(logout);
+    }
+
+    private void UpdateQualityText()
+    {
+        var src = Svc;
+        QualityText.Text = src.Qualities.FirstOrDefault(q => q.Key == src.PreferredQuality).Label ?? "";
     }
 
     /// <summary>按当前来源刷新登录提示、音质列表等。</summary>
@@ -92,13 +135,9 @@ public sealed partial class CloudPanel : UserControl
         CookieBox.Password = "";
         CookieStatusText.Text = "";
 
-        _loadingQuality = true;
-        QualityBox.Items.Clear();
-        foreach (var (key, label) in src.Qualities)
-            QualityBox.Items.Add(new ComboBoxItem { Content = label, Tag = key });
-        QualityBox.SelectedItem = QualityBox.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(i => (string)i.Tag == src.PreferredQuality);
-        _loadingQuality = false;
+        UpdateSourceSegments();
+        BuildAccountMenu();
+        UpdateQualityText();
     }
 
     private string _qrMode = "";
@@ -115,9 +154,9 @@ public sealed partial class CloudPanel : UserControl
         if (_active) await RefreshQrAsync();
     }
 
-    private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void SelectSource(string key)
     {
-        if (SourceBox.SelectedItem is not ComboBoxItem it || it.Tag is not string key || key == Svc.Key) return;
+        if (key == Svc.Key) return;
         var src = CloudSources.Get(key);
         if (src == null) return;
         CloudSources.Current = src;
@@ -160,7 +199,7 @@ public sealed partial class CloudPanel : UserControl
     private void UpdateView()
     {
         bool logged = Svc.IsLoggedIn;
-        SourceBox.Visibility = CloudSources.All.Count > 1 && !_inTracksMode ? Visibility.Visible : Visibility.Collapsed;
+        SourceSwitch.Visibility = CloudSources.All.Count > 1 && !_inTracksMode ? Visibility.Visible : Visibility.Collapsed;
         LoginView.Visibility = (!logged && !_inTracksMode) ? Visibility.Visible : Visibility.Collapsed;
         HomeView.Visibility = (logged && !_inTracksMode) ? Visibility.Visible : Visibility.Collapsed;
         TracksList.Visibility = _inTracksMode ? Visibility.Visible : Visibility.Collapsed;
@@ -170,6 +209,10 @@ public sealed partial class CloudPanel : UserControl
         {
             _qrTimer.Stop();
             NicknameText.Text = Svc.Nickname;
+            AvatarPicture.DisplayName = Svc.Nickname;
+            var avatar = Svc.AvatarUrl;
+            AvatarPicture.ProfilePicture = Svc.IsTrustedUrl(avatar) && Uri.TryCreate(avatar, UriKind.Absolute, out var u)
+                ? new BitmapImage(u) { DecodePixelWidth = 56 } : null;
             if (!_inTracksMode && _entries.Count == 0 && !_homeLoading) _ = LoadHomeAsync();
         }
         else
@@ -282,18 +325,26 @@ public sealed partial class CloudPanel : UserControl
         if (ok) CookieBox.Password = "";
     }
 
-    private void Logout_Click(object sender, RoutedEventArgs e)
+    /// <summary>退出登录：先确认（菜单里一点就退、要重新扫码，代价不小）。</summary>
+    private async void Logout_Click(object sender, RoutedEventArgs e)
     {
-        Svc.Logout();
+        var src = Svc;
+        var dlg = new ContentDialog
+        {
+            Style = Application.Current.Resources["DefaultContentDialogStyle"] as Style,
+            RequestedTheme = ThemeService.Current,
+            XamlRoot = XamlRoot,
+            Title = L.F("退出{0}账号？", src.DisplayName),
+            Content = L.T("退出后需要重新扫码登录。"),
+            PrimaryButtonText = L.T("退出登录"),
+            CloseButtonText = L.T("取消"),
+            DefaultButton = ContentDialogButton.Close
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary || src != Svc) return;
+        src.Logout();
         _qrKey = "";
         _inTracksMode = false;
         UpdateView();
-    }
-
-    private void QualityBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_loadingQuality || QualityBox.SelectedItem is not ComboBoxItem it || it.Tag is not string key) return;
-        Svc.PreferredQuality = key;
     }
 
     #endregion

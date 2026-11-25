@@ -1,6 +1,11 @@
 {
   "name": "English",
   "strings": {
+    "退出登录…": "Sign out…",
+    "退出登录": "Sign out",
+    "退出{0}账号？": "Sign out of {0}?",
+    "退出后需要重新扫码登录。": "You'll need to scan the QR code again to sign in.",
+    "账号与音质": "Account and quality",
     "任务栏播放条": "Taskbar player",
     "关闭任务栏播放条": "Close taskbar player",
     "调整封面…": "Adjust cover…",
