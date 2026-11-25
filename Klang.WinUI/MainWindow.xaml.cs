@@ -1580,18 +1580,28 @@ public sealed partial class MainWindow : Window
 
     private bool IsLoaded() => Content is FrameworkElement fe && fe.IsLoaded;
 
+    private readonly RectangleGeometry _sidebarClip = new();
+
     private void SidebarHost_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // 宽度收缩过程中裁剪侧栏，避免内容溢出到舞台上
-        SidebarHost.Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, e.NewSize.Width, e.NewSize.Height) };
+        // 宽度收缩过程中裁剪侧栏，避免内容溢出到舞台上（复用同一个几何体，动画时每帧只改矩形）
+        _sidebarClip.Rect = new Windows.Foundation.Rect(0, 0, e.NewSize.Width, e.NewSize.Height);
+        if (SidebarHost.Clip != _sidebarClip) SidebarHost.Clip = _sidebarClip;
     }
 
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _sidebarTimer;
+    private bool _sidebarAnimating;
+    private double _sidebarFrom, _sidebarTo, _sidebarStart;
+    private readonly System.Diagnostics.Stopwatch _sidebarClock = System.Diagnostics.Stopwatch.StartNew();
+    private const double SidebarAnimMs = 240;
 
-    /// <summary>侧栏宽度缓动（easeOutCubic，约 240ms）。</summary>
+    /// <summary>
+    /// 侧栏宽度缓动（easeOutCubic，约 240ms），跟着屏幕刷新逐帧推进。
+    /// 动画期间舞台固定为最终宽度、只随侧栏边缘平移：舞台每改一次宽度，歌词就要整页重新排版、重建绘制缓冲区，
+    /// 逐帧改宽度会一卡一卡的；现在整个过程里舞台只在开始时排一次版。
+    /// </summary>
     private void AnimateSidebar(double target, bool animate)
     {
-        _sidebarTimer?.Stop();
+        StopSidebarAnimation();
         double from = SidebarColumn.Width.Value;
         if (!animate || Math.Abs(from - target) < 1)
         {
@@ -1600,23 +1610,43 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // 展开显示完整侧栏，折叠显示竖排图标栏（两者带淡入淡出）
-        ShowSidebarPart(target > SidebarRailWidth + 1);
-        var start = DateTime.UtcNow;
-        const double ms = 240;
-        _sidebarTimer = DispatcherQueue.CreateTimer();
-        _sidebarTimer.Interval = TimeSpan.FromMilliseconds(8);
-        _sidebarTimer.Tick += (s, e) =>
+        // 展开：先把完整侧栏显示出来；收起：等动画结束再隐藏，收的过程中还看得到内容
+        if (target > from) ShowSidebarPart(true);
+        if (StageGrid.Parent is FrameworkElement workspace && workspace.ActualWidth > target)
         {
-            double t = Math.Min(1, (DateTime.UtcNow - start).TotalMilliseconds / ms);
-            double eased = 1 - Math.Pow(1 - t, 3);
-            SidebarColumn.Width = new GridLength(from + (target - from) * eased);
-            if (t >= 1)
-            {
-                _sidebarTimer?.Stop();
-            }
-        };
-        _sidebarTimer.Start();
+            StageGrid.Width = workspace.ActualWidth - target;
+            StageGrid.HorizontalAlignment = HorizontalAlignment.Left;
+        }
+        _sidebarFrom = from;
+        _sidebarTo = target;
+        _sidebarStart = -1;          // 第一帧才开始计时：显示侧栏那一下的排版不会吃掉动画的开头
+        _sidebarAnimating = true;
+        CompositionTarget.Rendering += OnSidebarFrame;
+    }
+
+    private void OnSidebarFrame(object? sender, object e)
+    {
+        double now = _sidebarClock.Elapsed.TotalMilliseconds;
+        if (_sidebarStart < 0) _sidebarStart = now;
+        double t = Math.Min(1, (now - _sidebarStart) / SidebarAnimMs);
+        double eased = 1 - Math.Pow(1 - t, 3);
+        SidebarColumn.Width = new GridLength(Math.Round(_sidebarFrom + (_sidebarTo - _sidebarFrom) * eased));
+        if (t >= 1)
+        {
+            SidebarColumn.Width = new GridLength(_sidebarTo);
+            StopSidebarAnimation();
+            ShowSidebarPart(_sidebarTo > SidebarRailWidth + 1);
+        }
+    }
+
+    private void StopSidebarAnimation()
+    {
+        if (!_sidebarAnimating) return;
+        _sidebarAnimating = false;
+        CompositionTarget.Rendering -= OnSidebarFrame;
+        // 舞台恢复自适应宽度（此时宽度正好等于它占的列宽，不会再触发重排）
+        StageGrid.Width = double.NaN;
+        StageGrid.HorizontalAlignment = HorizontalAlignment.Stretch;
     }
 
     private void ShowSidebarPart(bool full)
