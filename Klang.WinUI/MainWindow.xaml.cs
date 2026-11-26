@@ -111,6 +111,7 @@ public sealed partial class MainWindow : Window
             BottomTransportBar.UpdateProgress(current, total);
             TryPlanMix(current, total);
             TryPrefetchNext(current, total);
+            HighlightTick(current, total);
             if (ImmersiveLayer.IsOpen) ImmersiveLayer.UpdateProgress(current, total);
             StageLyricsControl.UpdatePlaybackTime(current + _lyricOffset); ImmersiveLayer.UpdateTime(current + _lyricOffset);
             _media.UpdateTimeline(current, total);
@@ -196,6 +197,7 @@ public sealed partial class MainWindow : Window
             if (fly) StartCoverAnimation("listCover", StageCoverCard.CoverTarget);
         };
 
+        LeftNavPane.PlayFromHighlightRequested += (s, track) => PlayFromHighlight(track);
         GalleryLayer.CloseRequested += (s, e) => CloseGallery();
         GalleryLayer.AlbumPicked += (s, tracks) => LeftNavPane.PlayQueue(tracks);
         LeftNavPane.FavoriteToggled += (s, track) => ToggleFavorite(track);
@@ -1254,7 +1256,9 @@ public sealed partial class MainWindow : Window
         var cur = _currentTrack;
         if (cur == null || total <= 0 || _playMode == "loop_single" || _prefetchFromId == cur.Id) return;
         if (!AudioEngineService.Instance.IsPlaying) return;
-        if (total - current > 60) return;
+        // 高潮连播时每首只放三十来秒：按高潮的结束位置算
+        double left = _hlMode && _hlEnd > 0 ? _hlEnd - current : total - current;
+        if (left > 60) return;
 
         _prefetchFromId = cur.Id;
         try
@@ -1285,7 +1289,7 @@ public sealed partial class MainWindow : Window
     private async void TryPlanMix(double current, double total)
     {
         var mode = State.AutoMix;
-        if (mode == "off" || _planning || _currentTrack == null || _playMode == "loop_single") return;
+        if (mode == "off" || _planning || _currentTrack == null || _playMode == "loop_single" || _hlMode) return;
         if (mode == "roam" && _playMode != "roam") return;
         var a = _currentTrack;
         if (a.IsCueTrack || _plannedFromId == a.Id) return;
@@ -1371,7 +1375,8 @@ public sealed partial class MainWindow : Window
         try { PlayTrack(next); }
         finally { _adoptingMix = false; }
         var mp = _mixPlan; _mixPlan = null;
-        string mixText = mp != null && !mp.BeatMatched
+        string mixText = mp == null ? L.T("高潮连播")
+            : !mp.BeatMatched
             ? L.T("交叉淡入淡出")
             : L.F("节拍混音 · {0:0} BPM", next.Bpm) + (string.IsNullOrEmpty(next.Camelot) ? "" : " · " + next.Camelot);
         BottomTransportBar.UpdateLyricSnippet(reason != null ? L.T("漫游 · ") + reason + "  ·  " + mixText : mixText);
@@ -2297,7 +2302,6 @@ public sealed partial class MainWindow : Window
             };
 
             dialog.BackdropChanged += ApplyBackdrop;
-            dialog.TaskbarPlayerChanged += SetTaskbarPlayerEnabled;
             dialog.ThemeChanged += theme =>
             {
                 ThemeService.Apply(this, theme);

@@ -11,7 +11,6 @@ public sealed partial class SettingsDialog : ContentDialog
 {
     public event Action<string>? BackdropChanged;
     public event Action<string>? ThemeChanged;
-    public event Action<bool>? TaskbarPlayerChanged;
     public event Action<int>? LyricFontSizeChanged;
     /// <summary>曲库内容被设置页改变（重新扫描 / 清空）。</summary>
     public event Action? LibraryChanged;
@@ -32,7 +31,6 @@ public sealed partial class SettingsDialog : ContentDialog
         SelectByTag(LanguageComboBox, State.Language, "auto");
 
         SelectByTag(ThemeComboBox, State.Theme, "system");
-        TaskbarPlayerSwitch.IsOn = State.TaskbarPlayerEnabled;
         SelectByTag(BackdropComboBox, State.BackdropMaterial, "mica");
         SelectByTag(LatencyComboBox, State.WasapiLatencyMs.ToString(), "50");
         SelectByTag(AutoMixComboBox, State.AutoMix, "roam");
@@ -109,14 +107,6 @@ public sealed partial class SettingsDialog : ContentDialog
         AudioEngineService.Instance.ExclusiveMode = ExclusiveSwitch.IsOn;
         StateService.Instance.RequestSave();
         AudioEngineService.Instance.ReopenOutput();
-    }
-
-    private void TaskbarPlayerSwitch_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        State.TaskbarPlayerEnabled = TaskbarPlayerSwitch.IsOn;
-        StateService.Instance.RequestSave();
-        TaskbarPlayerChanged?.Invoke(TaskbarPlayerSwitch.IsOn);
     }
 
     private void BypassSwitch_Toggled(object sender, RoutedEventArgs e)

@@ -41,6 +41,9 @@ public sealed class AiIndexService
     // 向量是哪个模型文件算的（显卡版 fp32 / CPU 版 int8 算出的不能混用）；子进程每次返回实际用的文件名
     private string _audioTag = "";
     private static string LyricsFile => Path.Combine(AiCatalog.IndexDir, "lyrics.bin");
+    // 高潮位置（秒）；找不到时存 (-1, -1)，免得每次重算
+    private Dictionary<string, (float S, float E)> _highlights = new();
+    private static string HighlightFile => Path.Combine(AiCatalog.IndexDir, "highlights.bin");
 
     // ================= 读写 =================
 
@@ -90,6 +93,19 @@ public sealed class AiIndexService
                 }
             }
             catch (Exception ex) { App.LogError("AI index load (lyrics)", ex.Message); _lyrics.Clear(); }
+            try
+            {
+                if (File.Exists(HighlightFile))
+                {
+                    using var r = new BinaryReader(File.OpenRead(HighlightFile), Encoding.UTF8);
+                    if (r.ReadInt32() == 0x314C484B)   // "KHL1"
+                    {
+                        int n = r.ReadInt32();
+                        for (int i = 0; i < n; i++) _highlights[r.ReadString()] = (r.ReadSingle(), r.ReadSingle());
+                    }
+                }
+            }
+            catch (Exception ex) { App.LogError("AI index load (highlights)", ex.Message); _highlights.Clear(); }
             _loaded = true;
         }
     }
@@ -146,6 +162,24 @@ public sealed class AiIndexService
             File.Move(tmp, LyricsFile, true);
         }
         catch (Exception ex) { App.LogError("AI index save (lyrics)", ex.Message); }
+    }
+
+    private void SaveHighlights()
+    {
+        try
+        {
+            Directory.CreateDirectory(AiCatalog.IndexDir);
+            KeyValuePair<string, (float S, float E)>[] items;
+            lock (_lock) items = _highlights.ToArray();
+            var tmp = HighlightFile + ".tmp";
+            using (var w = new BinaryWriter(File.Create(tmp), Encoding.UTF8))
+            {
+                w.Write(0x314C484B); w.Write(items.Length);
+                foreach (var kv in items) { w.Write(kv.Key); w.Write(kv.Value.S); w.Write(kv.Value.E); }
+            }
+            File.Move(tmp, HighlightFile, true);
+        }
+        catch (Exception ex) { App.LogError("AI index save (highlights)", ex.Message); }
     }
 
     public void ClearAudio()
@@ -398,6 +432,85 @@ public sealed class AiIndexService
         }
     }
 
+    // ---------- 高潮 ----------
+
+    public sealed record Highlight(double Start, double End);
+
+    /// <summary>算过的高潮位置：null = 还没算；Found=false = 算过但没找到。</summary>
+    public (bool Found, Highlight? H)? CachedHighlight(TrackItem t)
+    {
+        EnsureLoaded();
+        lock (_lock)
+        {
+            if (!_highlights.TryGetValue(t.Id, out var h)) return null;
+            return h.S < 0 ? (false, null) : (true, new Highlight(h.S, h.E));
+        }
+    }
+
+    /// <summary>取高潮位置，没算过就现在算（一首歌 1~2 秒）。只支持本地文件（含已缓存的云端歌曲）。</summary>
+    public async Task<Highlight?> HighlightAsync(TrackItem t, CancellationToken ct = default)
+    {
+        if (CachedHighlight(t) is { } c) return c.H;
+        if (!AiAudioService.CanProcess(t)) return null;
+        var r = await AiService.Instance.RequestAsync("highlight", new JsonObject
+        {
+            ["path"] = t.FilePath, ["start"] = 0, ["end"] = 0, ["length"] = 30,
+        }, null, ct);
+        var h = StoreHighlight(t, r);
+        SaveHighlights();
+        return h;
+    }
+
+    private Highlight? StoreHighlight(TrackItem t, JsonNode? r)
+    {
+        bool found = r?["found"]?.GetValue<bool>() == true;
+        float s = found ? (float)r!["s"]!.GetValue<double>() : -1, e = found ? (float)r!["e"]!.GetValue<double>() : -1;
+        lock (_lock) _highlights[t.Id] = (s, e);
+        return found ? new Highlight(s, e) : null;
+    }
+
+    /// <summary>
+    /// 有带时间轴的歌词时，把高潮的起止挪到句子边界：起点挪到附近一段重复歌词（副歌）的第一句，
+    /// 终点挪到 25~40 秒之间某句开始的地方，听起来是完整的一段。
+    /// </summary>
+    public static Highlight Refine(Highlight h, IReadOnlyList<LyricLine> lyrics, double duration)
+    {
+        var lines = lyrics.Where(l => l.EndTime < 9000 && !string.IsNullOrWhiteSpace(l.Text)).OrderBy(l => l.Time).ToList();
+        if (lines.Count < 6) return h;
+        static string Key(string s) => new(s.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        var count = lines.GroupBy(l => Key(l.Text)).ToDictionary(g => g.Key, g => g.Count());
+        bool Rep(int i) => Key(lines[i].Text).Length >= 2 && count[Key(lines[i].Text)] >= 2;
+
+        double start = h.Start;
+        int pick = -1;
+        for (int i = 0; i < lines.Count; i++)
+        {
+            double t = lines[i].Time;
+            if (t < h.Start - 5 || t > h.Start + 10) continue;
+            // 一段副歌的第一句：这句重复出现，上一句不是
+            if (Rep(i) && (i == 0 || !Rep(i - 1))) { pick = i; break; }
+        }
+        if (pick < 0)
+        {
+            // 没有重复歌词可对：挪到最近的一句开头（±2 秒内）
+            double bd = 2.01;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                double d = Math.Abs(lines[i].Time - h.Start);
+                if (d < bd) { bd = d; pick = i; }
+            }
+        }
+        if (pick >= 0) start = Math.Max(0, lines[pick].Time - 0.3);
+
+        double limit = duration > 0 ? duration - 0.5 : double.MaxValue;
+        double end = Math.Min(limit, start + (h.End - h.Start));
+        // 终点：离“起点 + 30 秒”最近、且在 25~40 秒之间开始的一句（在它开始前收尾）
+        var endLine = lines.Where(l => l.Time >= start + 25 && l.Time <= start + 40)
+            .OrderBy(l => Math.Abs(l.Time - (start + 30))).FirstOrDefault();
+        if (endLine != null) end = Math.Min(limit, endLine.Time - 0.2);
+        return new Highlight(start, Math.Max(start + 10, end));
+    }
+
     // ---------- 按意思搜歌词 ----------
 
     public async Task<List<Hit>> SearchLyricsAsync(string query, IReadOnlyList<TrackItem> lib, CancellationToken ct = default)
@@ -447,6 +560,7 @@ public sealed class AiIndexService
                 if (ai.Ready(AiCatalog.Clap)) await IndexAudioAsync();
                 if (ai.Ready(AiCatalog.TextEmbed)) await IndexLyricsAsync();
                 if (ai.Ready(AiCatalog.Clap)) { try { await LabelEmbeddingsAsync(); Bump(); } catch { } }
+                if (ai.Ready(AiCatalog.Clap)) await IndexHighlightsAsync();
             }
             catch (Exception ex) { App.LogError("AI index", ex.Message); }
             finally
@@ -518,6 +632,56 @@ public sealed class AiIndexService
         }
         if (sinceSave > 0) { SaveAudio(); Bump(); }
         Status = "";
+    }
+
+    private async Task IndexHighlightsAsync()
+    {
+        var todo = LibraryService.Instance.Tracks.ToList().Where(Indexable).Where(t => !t.IsCueTrack).Where(t =>
+        {
+            lock (_lock) return !_highlights.ContainsKey(t.Id) && !_failed.Contains("h:" + t.Id);
+        }).ToList();
+        int sinceSave = 0;
+        for (int i = 0; i < todo.Count; i++)
+        {
+            var t = todo[i];
+            if (!StillWanted() || !AiService.Instance.Ready(AiCatalog.Clap)) break;
+            Status = L.F("正在找高潮：{0} / {1}", i + 1, todo.Count);
+            try
+            {
+                var r = await AiService.Instance.RequestAsync("highlight", new JsonObject
+                {
+                    ["path"] = t.FilePath, ["start"] = 0, ["end"] = 0, ["length"] = 30,
+                });
+                StoreHighlight(t, r);
+                if (++sinceSave >= 25) { sinceSave = 0; SaveHighlights(); }
+            }
+            catch (Exception ex)
+            {
+                lock (_lock) _failed.Add("h:" + t.Id);
+                if (ex is AiProcessException) { App.LogError("AI index (highlight)", ex.Message); break; }
+            }
+            await Task.Delay(30);
+        }
+        if (sinceSave > 0) SaveHighlights();
+        Status = "";
+    }
+
+    /// <summary>不播放也能拿到的歌词（选定过的 / 本地 LRC），给还没开始播的下一首对齐高潮用。</summary>
+    public static List<LyricLine> LocalLyrics(TrackItem t)
+    {
+        try
+        {
+            if (LyricsService.ReadChosen(t.Id) is { } chosen) return LyricsService.Instance.ParseLrc(chosen.Lrc, chosen.Trans, chosen.Roma);
+            if (t.IsCueTrack || string.IsNullOrEmpty(t.FilePath)) return new();
+            return LyricsService.Instance.LoadLyrics(t.FilePath);
+        }
+        catch { return new(); }
+    }
+
+    public int HighlightCount(IReadOnlyList<TrackItem> lib)
+    {
+        EnsureLoaded();
+        lock (_lock) return lib.Count(t => _highlights.ContainsKey(t.Id));
     }
 
     private static (string Hash, List<(float Time, string Text)> Lines)? ReadLyrics(TrackItem t)

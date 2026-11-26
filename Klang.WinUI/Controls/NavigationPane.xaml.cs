@@ -108,6 +108,8 @@ public sealed partial class NavigationPane : UserControl
     private TrackItem? _currentTrack;
 
     public event EventHandler<TrackItem>? TrackSelected;
+    /// <summary>右键“从高潮开始播放”（队列已经换成当前列表）。</summary>
+    public event EventHandler<TrackItem>? PlayFromHighlightRequested;
     public event EventHandler<TrackItem>? TrackRemoved;
     public event EventHandler<TrackItem>? FavoriteToggled;
     public event EventHandler? ViewStateChanged;
@@ -1050,6 +1052,19 @@ public sealed partial class NavigationPane : UserControl
         playNext.IsEnabled = !track.IsMissing;
         playNext.Click += (s, e) => PlayNextInQueue(track);
         flyout.Items.Add(playNext);
+
+        // AI：从高潮开始放（装了“听感分析”时才有）
+        if (Services.Ai.AiService.Instance.Ready(Services.Ai.AiCatalog.Clap) && !track.IsCueTrack)
+        {
+            var fromHl = new MenuFlyoutItem { Text = L.T("从高潮开始播放"), Icon = new FontIcon { Glyph = "" } };
+            fromHl.IsEnabled = !track.IsMissing;
+            fromHl.Click += (s, e) =>
+            {
+                Queue = DisplayTracks.ToList();
+                PlayFromHighlightRequested?.Invoke(this, track);
+            };
+            flyout.Items.Add(fromHl);
+        }
 
         var similar = new MenuFlyoutItem { Text = L.T("播放相似歌曲"), Icon = new FontIcon { Glyph = "" } };
         similar.IsEnabled = !track.IsMissing && track.AudioFeat != null;

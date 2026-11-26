@@ -65,7 +65,7 @@ public static class AiCatalog
     public static readonly AiPack Clap = new(
         "clap",
         "听感分析",
-        "AI 找歌、自动标签，声学地图更准。",
+        "AI 找歌、自动标签、高潮连播，声学地图更准。",
         new[]
         {
             // LAION 在音乐和语音上专门训练的版本（比通用版更懂流派、配器、人声）

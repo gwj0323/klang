@@ -116,7 +116,7 @@ public static class AiWorkerHost
                     if (Jobs.TryGetValue(req["target"]?.GetValue<int>() ?? -1, out var c)) c.Cancel();
                     continue;
                 }
-                if (!ok && op != "info")
+                if (!ok && op != "info" && op != "highlight")
                 {
                     Send(new JsonObject { ["id"] = id, ["ok"] = false, ["error"] = AiRuntime.LoadError });
                     continue;
@@ -228,6 +228,16 @@ public static class AiWorkerHost
                     };
                 }
                 finally { Whisper.Release(); }
+            }
+
+            case "highlight":
+            {
+                // 不用模型：解码整首歌找重复最多、最响的一段
+                double start = D("start"), end = D("end");
+                var x = AiDsp.DecodeMono(S("path"), AiHighlight.SampleRate, start, end > start ? end - start : 0);
+                var h = AiHighlight.Detect(x, D("length") > 0 ? D("length") : 30, ct);
+                return h == null ? new JsonObject { ["found"] = false }
+                    : new JsonObject { ["found"] = true, ["s"] = Math.Round(h.Value.Start, 2), ["e"] = Math.Round(h.Value.End, 2) };
             }
 
             case "unload":

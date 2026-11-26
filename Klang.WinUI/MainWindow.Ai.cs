@@ -27,7 +27,7 @@ public sealed partial class MainWindow
     {
         var ai = AiService.Instance;
         var vis = ai.Enabled ? Visibility.Visible : Visibility.Collapsed;
-        AiLyricSep.Visibility = KaraokeItem.Visibility = AiTranscribeItem.Visibility = AiAlignItem.Visibility = AiExportItem.Visibility = vis;
+        AiLyricSep.Visibility = KaraokeItem.Visibility = AiTranscribeItem.Visibility = AiAlignSep.Visibility = AiAlignItem.Visibility = AiExportItem.Visibility = vis;
         AiCancelItem.Visibility = ai.Enabled && (AiJobRunning || _karaokeCts != null) ? Visibility.Visible : Visibility.Collapsed;
         if (!ai.Enabled) return;
 
@@ -54,8 +54,16 @@ public sealed partial class MainWindow
         return l.Count >= 3 && !(l.Count == 1 && l[0].EndTime >= 9000);
     }
 
-    private void DiscoverMenu_Opening(object? sender, object e) =>
-        DiscoverAiItem.Visibility = AiService.Instance.Enabled ? Visibility.Visible : Visibility.Collapsed;
+    private void DiscoverMenu_Opening(object? sender, object e)
+    {
+        var vis = AiService.Instance.Enabled ? Visibility.Visible : Visibility.Collapsed;
+        DiscoverAiItem.Visibility = HighlightModeItem.Visibility = vis;
+        HighlightModeItem.IsChecked = _hlMode;
+        HighlightModeItem.IsEnabled = HighlightReady || _hlMode;
+        ToolTipService.SetToolTip(HighlightModeItem, HighlightReady
+            ? L.T("每首只放高潮那一段，自动接到下一首的高潮")
+            : L.T("需要先在设置 → AI 功能里下载“听感分析”。"));
+    }
 
     private async void DiscoverAi_Click(object sender, RoutedEventArgs e)
     {
@@ -188,6 +196,7 @@ public sealed partial class MainWindow
         var ai = AiService.Instance;
         if (!ai.Enabled) _aiJobCts?.Cancel();
         if ((_karaoke || _karaokeCts != null || _playingInstrumental) && !ai.Ready(AiCatalog.Separator)) SetKaraoke(false);
+        if (_hlMode && !HighlightReady) SetHighlightMode(false);
     }
 
     private void SetKaraoke(bool on)

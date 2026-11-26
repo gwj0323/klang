@@ -1,28 +1,36 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
 using Klang_WinUI.Services;
 using Klang_WinUI.Services.Ai;
 
 namespace Klang_WinUI.Controls;
 
-/// <summary>设置 → AI 功能：总开关、计算设备、后台分析、各组件的下载 / 删除、K 歌缓存。</summary>
+/// <summary>
+/// 设置 → AI 功能：总开关；“组件”一张卡片（四个功能各一行，顶上一键全部下载 / 换显卡版）；
+/// “选项”一张卡片（计算设备、后台分析、伴奏缓存）。推理引擎不单独列出，下载任意组件时自动装上。
+/// </summary>
 public sealed class AiSettingsPanel : StackPanel
 {
     private static AppState State => StateService.Instance.State;
+    private static readonly AiPack[] Features = AiCatalog.All.Where(p => p != AiCatalog.Runtime).ToArray();
+
     private readonly ToggleSwitch _enable = new() { OnContent = L.T("开"), OffContent = L.T("关") };
     private readonly ComboBox _device = new() { Width = 180, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _deviceStatus = Small("");
     private readonly ToggleSwitch _bg = new() { OnContent = L.T("开"), OffContent = L.T("关") };
     private readonly TextBlock _bgStatus = Small("");
-    private readonly StackPanel _packs = new() { Spacing = 8 };
     private readonly TextBlock _cacheInfo = Small("");
+    private readonly StackPanel _packs = new();
+    private readonly Border _optionsCard;
+    private readonly Dictionary<string, (ProgressBar Bar, TextBlock Text)> _progress = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private bool _loading = true;
     private bool _probing, _probeFailed;
+    private bool _batch;   // 正在一个接一个地下载（全部下载 / 换显卡版）
 
     public AiSettingsPanel()
     {
@@ -30,23 +38,30 @@ public sealed class AiSettingsPanel : StackPanel
         Margin = new Thickness(0, 0, 12, 12);
         Children.Add(new TextBlock { Text = L.T("AI 功能"), FontSize = 20, FontWeight = FontWeights.SemiBold });
 
-        Children.Add(Card(L.T("启用 AI 功能"),
-            L.T("全部在本机运行，不上传数据。"), _enable));
+        Children.Add(new Border
+        {
+            Style = CardStyle,
+            Child = Row(new StackPanel { Spacing = 2, Children = { Title(L.T("启用 AI 功能")), Small(L.T("全部在本机运行，不上传数据。")) } }, _enable),
+        });
+
+        Children.Add(new TextBlock { Text = L.T("组件"), Style = GroupStyle });
+        Children.Add(new Border { Style = CardStyle, Padding = new Thickness(0), Child = _packs });
 
         _device.Items.Add(new ComboBoxItem { Content = L.T("自动（优先用显卡）"), Tag = "auto" });
         _device.Items.Add(new ComboBoxItem { Content = L.T("仅用 CPU"), Tag = "cpu" });
         _device.SelectedIndex = State.AiDevice == "cpu" ? 1 : 0;
-        var devText = new StackPanel { Spacing = 2, Children = { Title(L.T("计算设备")), Small(L.T("有显卡时用显卡，更快。")), _deviceStatus } };
-        Children.Add(CardRaw(devText, _device));
+        var clear = new Button { Content = L.T("清空") };
+        clear.Click += (s, e) => { AiAudioService.ClearCache(); RefreshStatus(); };
 
-        Children.Add(CardRaw(new StackPanel { Spacing = 2, Children = { Title(L.T("在后台分析曲库")), Small(L.T("空闲时分析曲库，AI 找歌要用到。")), _bgStatus } }, _bg));
-
-        Children.Add(new TextBlock { Text = L.T("组件"), Style = GroupStyle });
-        Children.Add(_packs);
-
-        var clear = new Button { Content = L.T("清空"), VerticalAlignment = VerticalAlignment.Center };
-        clear.Click += (s, e) => { AiAudioService.ClearCache(); Refresh(); };
-        Children.Add(CardRaw(new StackPanel { Spacing = 2, Children = { Title(L.T("伴奏 / 人声缓存")), Small(L.T("K 歌时分离出的音频，超过 2 GB 自动清理。")), _cacheInfo } }, clear));
+        Children.Add(new TextBlock { Text = L.T("选项"), Style = GroupStyle });
+        var opts = new StackPanel();
+        opts.Children.Add(Pad(Row(new StackPanel { Spacing = 2, Children = { Title(L.T("计算设备")), Small(L.T("有显卡时用显卡，更快。")), _deviceStatus } }, _device)));
+        opts.Children.Add(Divider());
+        opts.Children.Add(Pad(Row(new StackPanel { Spacing = 2, Children = { Title(L.T("在后台分析曲库")), Small(L.T("空闲时分析曲库，AI 找歌和高潮连播要用到。")), _bgStatus } }, _bg)));
+        opts.Children.Add(Divider());
+        opts.Children.Add(Pad(Row(new StackPanel { Spacing = 2, Children = { Title(L.T("伴奏 / 人声缓存")), Small(L.T("K 歌时分离出的音频，超过 2 GB 自动清理。")), _cacheInfo } }, clear)));
+        _optionsCard = new Border { Style = CardStyle, Padding = new Thickness(0), Child = opts };
+        Children.Add(_optionsCard);
 
         Children.Add(Small(L.T("均为开源模型，从官方地址下载。")));
 
@@ -91,13 +106,13 @@ public sealed class AiSettingsPanel : StackPanel
     private static readonly Style AccentSmallStyle = S($"<Style {Ns} TargetType=\"TextBlock\"><Setter Property=\"FontSize\" Value=\"12\"/><Setter Property=\"Foreground\" Value=\"{{ThemeResource AccentTextFillColorPrimaryBrush}}\"/></Style>");
     private static readonly Style ErrorStyle = S($"<Style {Ns} TargetType=\"TextBlock\"><Setter Property=\"FontSize\" Value=\"12\"/><Setter Property=\"TextWrapping\" Value=\"Wrap\"/><Setter Property=\"Foreground\" Value=\"{{ThemeResource SystemFillColorCriticalBrush}}\"/></Style>");
     private static readonly Style GroupStyle = S($"<Style {Ns} TargetType=\"TextBlock\"><Setter Property=\"FontSize\" Value=\"12\"/><Setter Property=\"FontWeight\" Value=\"SemiBold\"/><Setter Property=\"Margin\" Value=\"2,8,0,0\"/><Setter Property=\"Foreground\" Value=\"{{ThemeResource TextFillColorSecondaryBrush}}\"/></Style>");
+    private static readonly Style DividerStyle = S($"<Style {Ns} TargetType=\"Border\"><Setter Property=\"Height\" Value=\"1\"/><Setter Property=\"Background\" Value=\"{{ThemeResource CardStrokeColorDefaultBrush}}\"/></Style>");
     private static TextBlock Small(string text) => new() { Text = text, Style = SmallStyle };
     private static TextBlock Title(string text) => new() { Text = text, FontWeight = FontWeights.Medium, TextWrapping = TextWrapping.Wrap };
+    private static Border Divider() => new() { Style = DividerStyle };
+    private static Border Pad(FrameworkElement e) => new() { Padding = new Thickness(14, 12, 14, 12), Child = e };
 
-    private static Border Card(string title, string desc, FrameworkElement right) =>
-        CardRaw(new StackPanel { Spacing = 2, Children = { Title(title), Small(desc) } }, right);
-
-    private static Border CardRaw(FrameworkElement left, FrameworkElement right)
+    private static Grid Row(FrameworkElement left, FrameworkElement right)
     {
         var g = new Grid { ColumnSpacing = 12 };
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -106,55 +121,114 @@ public sealed class AiSettingsPanel : StackPanel
         right.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(right, 1);
         g.Children.Add(right);
-        return new Border { Style = CardStyle, Child = g };
+        return g;
     }
 
     private static string Mb(long bytes) => bytes >= 1024L * 1024 * 1024 ? $"{bytes / 1024.0 / 1024 / 1024:0.0} GB" : $"{bytes / 1024.0 / 1024:0} MB";
+
+    /// <summary>这个组件还要下载多少（含推理引擎，只算一次）。</summary>
+    private static long Need(AiPack pack) =>
+        AiCatalog.Required(pack, AiService.GpuClass).Where(f => !System.IO.File.Exists(AiCatalog.PathOf(f))).Sum(f => f.Size);
+
+    private static long RuntimeNeed() => AiCatalog.IsInstalled(AiCatalog.Runtime) ? 0 : Need(AiCatalog.Runtime);
 
     private void Refresh()
     {
         var ai = AiService.Instance;
         _device.IsEnabled = _bg.IsEnabled = ai.Enabled;
-        _packs.Opacity = ai.Enabled ? 1 : 0.55;
+        _optionsCard.Opacity = _packs.Opacity = ai.Enabled ? 1 : 0.55;
         _packs.Children.Clear();
-        foreach (var pack in AiCatalog.All) _packs.Children.Add(PackCard(pack));
+        _progress.Clear();
+        _packs.Children.Add(Pad(Header()));
+        foreach (var pack in Features)
+        {
+            _packs.Children.Add(Divider());
+            _packs.Children.Add(Pad(PackRow(pack)));
+        }
         RefreshStatus();
     }
 
-    private Border PackCard(AiPack pack)
+    /// <summary>组件卡片的第一行：装了几个、占多少，右边一个按钮（全部下载 / 换显卡版）。</summary>
+    private FrameworkElement Header()
+    {
+        var ai = AiService.Instance;
+        int installed = Features.Count(AiCatalog.IsInstalled);
+        long used = AiCatalog.All.Sum(AiCatalog.InstalledBytes);
+        var missing = Features.Where(p => !AiCatalog.IsInstalled(p)).ToList();
+        // 有显卡、但装的是 CPU 版：可以换成显卡版
+        var upgrade = AiService.GpuClass ? Features.Where(p => AiCatalog.IsInstalled(p) && Need(p) > 0).ToList() : new();
+        bool busy = _batch || Features.Any(p => ai.IsDownloading(p.Id));
+
+        var left = new StackPanel { Spacing = 2 };
+        left.Children.Add(Title(L.F("已安装 {0} / {1}", installed, Features.Length)));
+        left.Children.Add(Small(used > 0 ? L.F("共占用 {0}，推理引擎随组件自动安装。", Mb(used)) : L.T("先下载要用的功能，推理引擎会一起装上。")));
+
+        FrameworkElement right;
+        if (upgrade.Count > 0 && !busy)
+        {
+            long size = upgrade.Sum(Need);
+            var b = new Button { Content = L.F("换成显卡版（约 {0}）", Mb(size)), Style = (Style)Application.Current.Resources["AccentButtonStyle"], IsEnabled = ai.Enabled };
+            ToolTipService.SetToolTip(b, L.T("当前是 CPU 版，换成显卡版会快很多。"));
+            b.Click += (s, e) => DownloadAll(upgrade);
+            right = b;
+        }
+        else if (missing.Count > 0 && !busy)
+        {
+            long size = missing.Sum(Need) + RuntimeNeed();
+            var b = new Button { Content = L.F("全部下载（约 {0}）", Mb(size)), IsEnabled = ai.Enabled };
+            b.Click += (s, e) => DownloadAll(missing);
+            right = b;
+        }
+        else right = new Border();
+        return Row(left, right);
+    }
+
+    private async void DownloadAll(List<AiPack> packs)
+    {
+        // 一个接一个下：同时下会重复下载推理引擎
+        _batch = true;
+        Refresh();
+        try
+        {
+            foreach (var p in packs)
+            {
+                if (!AiService.Instance.Enabled) break;
+                await AiService.Instance.DownloadAsync(p);
+                if (AiService.Instance.DownloadErrors.ContainsKey(p.Id)) break;
+            }
+        }
+        finally { _batch = false; Refresh(); }
+    }
+
+    private FrameworkElement PackRow(AiPack pack)
     {
         var ai = AiService.Instance;
         bool installed = AiCatalog.IsInstalled(pack);
         bool downloading = ai.IsDownloading(pack.Id);
+        long need = Need(pack);
+
         var left = new StackPanel { Spacing = 3 };
         var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         head.Children.Add(Title(pack.Name));
         if (installed) head.Children.Add(new TextBlock { Text = "✓ " + L.T("已安装"), Style = AccentSmallStyle, VerticalAlignment = VerticalAlignment.Center });
         left.Children.Add(head);
-        left.Children.Add(Small(pack.Description));
-        long need = AiCatalog.Required(pack, AiService.GpuClass).Where(f => !System.IO.File.Exists(AiCatalog.PathOf(f))).Sum(f => f.Size);
-        left.Children.Add(Small(installed ? L.F("已占用 {0}", Mb(AiCatalog.InstalledBytes(pack))) : L.F("约 {0}", Mb(need))));
+        string size = installed ? L.F("已占用 {0}", Mb(AiCatalog.InstalledBytes(pack))) : L.F("约 {0}", Mb(need));
+        left.Children.Add(Small(pack.Description + "  " + size));
         ToolTipService.SetToolTip(left, L.F("许可：{0}", pack.License));
         if (downloading)
         {
             ai.DownloadProgress.TryGetValue(pack.Id, out var p);
-            left.Children.Add(new ProgressBar { Value = p * 100, Maximum = 100, Margin = new Thickness(0, 4, 0, 0), IsIndeterminate = p <= 0 });
-            left.Children.Add(Small(p > 0 ? L.F("正在下载… {0:0}%", p * 100) : L.T("正在连接…")));
+            var bar = new ProgressBar { Value = p * 100, Maximum = 100, Margin = new Thickness(0, 4, 0, 0), IsIndeterminate = p <= 0 };
+            var txt = Small(p > 0 ? L.F("正在下载… {0:0}%", p * 100) : L.T("正在连接…"));
+            left.Children.Add(bar);
+            left.Children.Add(txt);
+            _progress[pack.Id] = (bar, txt);
         }
         if (ai.DownloadErrors.TryGetValue(pack.Id, out var err))
             left.Children.Add(new TextBlock { Text = L.T("下载失败：") + err, Style = ErrorStyle });
 
-        // 有显卡、但装的是 CPU 版（之前没检测到显卡，或者先选了仅 CPU）：提示可以换显卡版
-        bool upgrade = installed && !downloading && need > 0 && AiService.GpuClass;
-        if (upgrade) left.Children.Add(Small(L.F("当前是 CPU 版，可下载显卡版（约 {0}）。", Mb(need))));
-
         Button btn;
-        if (upgrade)
-        {
-            btn = new Button { Content = L.T("下载显卡版"), Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
-            btn.Click += (s, e) => { _ = ai.DownloadAsync(pack); Refresh(); };
-        }
-        else if (downloading)
+        if (downloading)
         {
             btn = new Button { Content = L.T("取消") };
             btn.Click += (s, e) => ai.CancelDownload(pack.Id);
@@ -167,35 +241,29 @@ public sealed class AiSettingsPanel : StackPanel
             {
                 if (!armed) { armed = true; btn.Content = L.T("再点一次确认删除"); return; }
                 ai.Remove(pack);
+                // 一个功能都不剩了：推理引擎也删掉
+                if (!Features.Any(AiCatalog.AnyFile) && AiCatalog.AnyFile(AiCatalog.Runtime)) ai.Remove(AiCatalog.Runtime);
                 Refresh();
             };
         }
         else
         {
-            btn = new Button { Content = L.T("下载"), Style = (Style)Application.Current.Resources["AccentButtonStyle"], IsEnabled = ai.Enabled };
+            btn = new Button { Content = L.T("下载"), Style = (Style)Application.Current.Resources["AccentButtonStyle"], IsEnabled = ai.Enabled && !_batch };
             btn.Click += (s, e) => { _ = ai.DownloadAsync(pack); Refresh(); };
         }
-        return CardRaw(left, btn);
+        btn.MinWidth = 72;
+        return Row(left, btn);
     }
 
     private void RefreshStatus()
     {
         var ai = AiService.Instance;
-        // 下载进度条
-        foreach (var pack in AiCatalog.All)
+        foreach (var (id, (bar, txt)) in _progress)
         {
-            if (!ai.IsDownloading(pack.Id)) continue;
-            int i = AiCatalog.All.ToList().IndexOf(pack);
-            if (i < _packs.Children.Count && _packs.Children[i] is Border { Child: Grid g } && g.Children[0] is StackPanel sp)
-            {
-                ai.DownloadProgress.TryGetValue(pack.Id, out var p);
-                foreach (var c in sp.Children)
-                {
-                    if (c is ProgressBar pb) { pb.IsIndeterminate = p <= 0; pb.Value = p * 100; }
-                }
-                if (sp.Children.LastOrDefault(c => c is TextBlock t && t.FontSize == 12) is TextBlock last && p > 0 && sp.Children.OfType<ProgressBar>().Any())
-                    last.Text = L.F("正在下载… {0:0}%", p * 100);
-            }
+            if (!ai.DownloadProgress.TryGetValue(id, out var p)) continue;
+            bar.IsIndeterminate = p <= 0;
+            bar.Value = p * 100;
+            if (p > 0) txt.Text = L.F("正在下载… {0:0}%", p * 100);
         }
 
         // 设备
@@ -221,8 +289,13 @@ public sealed class AiSettingsPanel : StackPanel
         if (!ai.Enabled) _bgStatus.Text = "";
         else
         {
-            var parts = new System.Collections.Generic.List<string>();
-            if (AiCatalog.IsInstalled(AiCatalog.Clap)) parts.Add(L.F("听感 {0} / {1} 首", idx.AudioCount(lib), lib.Count(AiIndexService.Indexable)));
+            var parts = new List<string>();
+            int total = lib.Count(AiIndexService.Indexable);
+            if (AiCatalog.IsInstalled(AiCatalog.Clap))
+            {
+                parts.Add(L.F("听感 {0} / {1} 首", idx.AudioCount(lib), total));
+                parts.Add(L.F("高潮 {0} / {1} 首", idx.HighlightCount(lib), lib.Count(t => AiIndexService.Indexable(t) && !t.IsCueTrack)));
+            }
             if (AiCatalog.IsInstalled(AiCatalog.TextEmbed)) parts.Add(L.F("歌词索引 {0} 首", idx.LyricsCount(lib)));
             _bgStatus.Text = idx.Status.Length > 0 ? idx.Status : string.Join(" · ", parts);
         }

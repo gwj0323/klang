@@ -164,6 +164,8 @@ public class AudioEngineService : IDisposable
     }
 
     private string? _filePath;
+    /// <summary>正在播放的文件（K 歌模式下是分离出的伴奏）。</summary>
+    public string? CurrentPath => _filePath;
     private (double From, double To, DateTime At)? _lastSeek;   // 最近一次跳转：从哪里跳到哪里
 
     // ---- 让出声卡（播放 MV 时）：独占模式下普通的暂停仍然占着设备（见 Pause），MV 会没有声音，所以要完全停掉 ----

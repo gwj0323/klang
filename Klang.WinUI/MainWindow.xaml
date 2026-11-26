@@ -95,6 +95,21 @@
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
+                <!-- 高潮连播开着时一直显示，点一下关掉 -->
+                <Button x:Name="HighlightBadge"
+                    Height="32"
+                    Padding="10,0,10,0"
+                    CornerRadius="4"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    Visibility="Collapsed"
+                    Click="HighlightBadge_Click"
+                    AutomationProperties.Name="高潮连播"
+                    ToolTipService.ToolTip="高潮连播已开启，点击关闭">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE945;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock FontSize="12" Text="高潮连播" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
                 <!-- K 歌模式开着时一直显示：调人声多少、关掉 K 歌 -->
                 <Button x:Name="KaraokeBadge"
                     Height="32"
@@ -132,7 +147,7 @@
                     ToolTipService.ToolTip="歌词相关功能">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE8F1;" />
-                        <TextBlock FontSize="12" Text="歌词设置" />
+                        <TextBlock FontSize="12" Text="歌词" />
                         <FontIcon FontSize="12" Glyph="&#xE70D;" />
                     </StackPanel>
                     <Button.Flyout>
@@ -159,6 +174,8 @@
                                 <MenuFlyoutItem Click="LyricLater_Click" Text="歌词延后 0.5 秒" />
                                 <MenuFlyoutItem Click="LyricCalibrate_Click" Text="校准：点击当前演唱的歌词行" />
                                 <MenuFlyoutItem Click="LyricOffsetReset_Click" Text="重置偏移" />
+                                <MenuFlyoutSeparator x:Name="AiAlignSep" Visibility="Collapsed" />
+                                <MenuFlyoutItem x:Name="AiAlignItem" Click="AiAlign_Click" Text="AI 自动校准" Visibility="Collapsed" />
                             </MenuFlyoutSubItem>
                             <MenuFlyoutItem Click="LyricChoose_Click" Text="选择歌词…" />
                             <MenuFlyoutSeparator />
@@ -169,7 +186,6 @@
                             <MenuFlyoutSeparator x:Name="AiLyricSep" Visibility="Collapsed" />
                             <ToggleMenuFlyoutItem x:Name="KaraokeItem" Click="KaraokeItem_Click" Text="K 歌模式（消除人声）" Visibility="Collapsed" />
                             <MenuFlyoutItem x:Name="AiTranscribeItem" Click="AiTranscribe_Click" Text="AI 识别歌词" Visibility="Collapsed" />
-                            <MenuFlyoutItem x:Name="AiAlignItem" Click="AiAlign_Click" Text="AI 自动对齐歌词时间" Visibility="Collapsed" />
                             <MenuFlyoutItem x:Name="AiExportItem" Click="AiExport_Click" Text="导出伴奏和人声…" Visibility="Collapsed" />
                             <MenuFlyoutItem x:Name="AiCancelItem" Click="AiCancel_Click" Text="取消正在进行的 AI 任务" Visibility="Collapsed" />
                         </MenuFlyout>
@@ -202,7 +218,8 @@
                                 x:Name="TaskbarPlayerItem"
                                 Click="TaskbarPlayerItem_Click"
                                 KeyboardAcceleratorTextOverride="Ctrl+B"
-                                Text="任务栏播放条" />
+                                Text="任务栏播放条"
+                                ToolTipService.ToolTip="在任务栏上显示封面、歌词和播放按钮，拖动左侧把手调整位置" />
                             <MenuFlyoutItem
                                 Click="FullscreenBtn_Click"
                                 KeyboardAcceleratorTextOverride="F11"
@@ -276,6 +293,9 @@
                                 <MenuFlyoutItem x:Name="DiscoverAiItem" Click="DiscoverAi_Click" Text="AI 找歌…" Visibility="Collapsed">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE721;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <ToggleMenuFlyoutItem x:Name="HighlightModeItem" Click="HighlightModeItem_Click" Text="高潮连播" Visibility="Collapsed">
+                                    <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE945;" /></ToggleMenuFlyoutItem.Icon>
+                                </ToggleMenuFlyoutItem>
                                 <MenuFlyoutItem Click="DiscoverReport_Click" Text="听歌报告…">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D2;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
