@@ -185,10 +185,114 @@ public sealed class AcousticService
         return s;
     }
 
+    // ---------- AI（CLAP 听感向量）版地图 ----------
+    // 开了 AI 功能、曲库大部分歌已经算出 CLAP 向量时，地图和找相似改用这 512 维向量：
+    // 它是模型“听”出来的，能分出流派、配器、人声这些 10 个手工特征分不出的差别。
+
+    private List<Entry>? _aiEntries;
+    private long _aiVersion = -1;
+
+    /// <summary>当前地图 / 找相似用的是 AI 向量。</summary>
+    public bool UsingAi { get; private set; }
+
+    private List<Entry>? AiEntries(IReadOnlyList<TrackItem> lib)
+    {
+        if (!Ai.AiService.Instance.Enabled) return null;
+        var idx = Ai.AiIndexService.Instance;
+        var withEmb = lib.Where(t => !t.IsMissing).Select(t => (T: t, V: idx.AudioOf(t))).Where(x => x.V != null).ToList();
+        int local = lib.Count(t => !t.IsOnline && !t.IsMissing);
+        if (withEmb.Count < 3 || withEmb.Count < local * 0.5) return null;
+        long ver = (long)idx.Version * 1_000_000 + withEmb.Count;
+        if (ver == _aiVersion && _aiEntries != null) return _aiEntries;
+        _aiVersion = ver;
+
+        int d = withEmb[0].V!.Length;
+        var mean = new float[d];
+        foreach (var x in withEmb) for (int i = 0; i < d; i++) mean[i] += x.V![i] / withEmb.Count;
+        Ensure(lib);   // 经典特征的能量 / 明暗：用来给 AI 地图定方向
+        var classic = _entries.ToDictionary(e => e.Track.Id, e => e);
+        var list = withEmb.Select(x =>
+        {
+            var v = new float[d];
+            for (int i = 0; i < d; i++) v[i] = x.V![i] - mean[i];
+            classic.TryGetValue(x.T.Id, out var c);
+            return new Entry { Track = x.T, Z = v, Energy = c?.Energy ?? 0, Brightness = c?.Brightness ?? 0 };
+        }).ToList();
+
+        // PCA：直接在数据上做幂迭代（512 维时比先算协方差矩阵快得多）
+        double[] Pc(double[]? deflate)
+        {
+            var v = new double[d];
+            for (int i = 0; i < d; i++) v[i] = 1.0 / Math.Sqrt(d) + (i % 7) * 0.003;
+            for (int it = 0; it < 60; it++)
+            {
+                var w = new double[d];
+                foreach (var e in list)
+                {
+                    double dot = 0;
+                    for (int i = 0; i < d; i++) dot += e.Z[i] * v[i];
+                    for (int i = 0; i < d; i++) w[i] += dot * e.Z[i];
+                }
+                if (deflate != null)
+                {
+                    double dd = 0; for (int i = 0; i < d; i++) dd += w[i] * deflate[i];
+                    for (int i = 0; i < d; i++) w[i] -= dd * deflate[i];
+                }
+                double norm = Math.Sqrt(w.Sum(x => x * x));
+                if (norm < 1e-12) break;
+                for (int i = 0; i < d; i++) v[i] = w[i] / norm;
+            }
+            return v;
+        }
+        var pc1 = Pc(null);
+        var pc2 = Pc(pc1);
+        foreach (var e in list)
+        {
+            double x = 0, y = 0;
+            for (int i = 0; i < d; i++) { x += pc1[i] * e.Z[i]; y += pc2[i] * e.Z[i]; }
+            e.X = (float)x; e.Y = (float)y;
+        }
+        var oriented = list.Where(e => classic.ContainsKey(e.Track.Id)).ToList();
+        if (oriented.Count >= 3)
+        {
+            if (Corr(oriented.Select(e => e.X), oriented.Select(e => e.Energy)) < 0) foreach (var e in list) e.X = -e.X;
+            if (Corr(oriented.Select(e => e.Y), oriented.Select(e => e.Brightness)) < 0) foreach (var e in list) e.Y = -e.Y;
+        }
+        float minX = list.Min(e => e.X), maxX = list.Max(e => e.X), minY = list.Min(e => e.Y), maxY = list.Max(e => e.Y);
+        float sx = Math.Max(1e-4f, maxX - minX), sy = Math.Max(1e-4f, maxY - minY);
+        foreach (var e in list) { e.X = (e.X - minX) / sx * 2 - 1; e.Y = (e.Y - minY) / sy * 2 - 1; }
+
+        // k-means 上色
+        int k = Math.Clamp(list.Count / 4, 1, 6);
+        var rnd = new Random(5);
+        var centers = list.OrderBy(_ => rnd.Next()).Take(k).Select(e => (float[])e.Z.Clone()).ToList();
+        for (int it = 0; it < 12; it++)
+        {
+            foreach (var e in list)
+            {
+                int best = 0; float bd = float.MaxValue;
+                for (int c = 0; c < centers.Count; c++) { float dist = Dist2(e.Z, centers[c]); if (dist < bd) { bd = dist; best = c; } }
+                e.Cluster = best;
+            }
+            for (int c = 0; c < centers.Count; c++)
+            {
+                var members = list.Where(e => e.Cluster == c).ToList();
+                if (members.Count == 0) continue;
+                var cen = new float[d];
+                foreach (var m in members) for (int i = 0; i < d; i++) cen[i] += m.Z[i] / members.Count;
+                centers[c] = cen;
+            }
+        }
+        return _aiEntries = list;
+    }
+
     // ---------- 对外接口 ----------
 
     public List<MapPoint> GetMap(IReadOnlyList<TrackItem> lib)
     {
+        var ai = AiEntries(lib);
+        UsingAi = ai != null;
+        if (ai != null) return ai.Select(e => new MapPoint(e.Track, e.X, e.Y, e.Cluster)).ToList();
         Ensure(lib);
         return _entries.Select(e => new MapPoint(e.Track, e.X, e.Y, e.Cluster)).ToList();
     }
@@ -196,6 +300,11 @@ public sealed class AcousticService
     /// <summary>在特征空间里离 track 最近的 count 首歌（不含它自己）。没有特征时返回空。</summary>
     public List<TrackItem> Similar(TrackItem track, IReadOnlyList<TrackItem> lib, int count)
     {
+        if (Ai.AiService.Instance.Enabled && Ai.AiIndexService.Instance.AudioOf(track) != null)
+        {
+            var near = Ai.AiIndexService.Instance.Similar(track, lib, count);
+            if (near.Count > 0) return near;
+        }
         Ensure(lib);
         var me = _entries.FirstOrDefault(e => ReferenceEquals(e.Track, track) || e.Track.Id == track.Id);
         if (me == null) return new List<TrackItem>();

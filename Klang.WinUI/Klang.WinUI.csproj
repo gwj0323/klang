@@ -1,11 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Klang_WinUI</RootNamespace>
     <!-- 版本号：“关于”页显示它，检查更新时拿它和 GitHub 上最新的 WinUI 发布比较。发新版时在这里改 -->
-    <Version>2.8.2</Version>
+    <Version>2.8.3</Version>
     <!-- 自己写 Main（Program.cs）：同一个 exe 也能以后台分析子进程的方式启动 -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <IncludeSourceRevisionInVersion>false</IncludeSourceRevisionInVersion>
@@ -64,6 +64,8 @@
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.3.2" />
     <PackageReference Include="ComputeSharp.WinUI" Version="3.2.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <!-- AI 功能：只引用托管绑定；原生的 onnxruntime.dll / DirectML.dll 由用户在设置里选择下载，只在 AI 子进程里加载 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.24.4" />
   </ItemGroup>
 
   <!-- 未打包 + 自包含发布时，应用自己的资源索引 (Klang.WinUI.pri) 默认不会被复制到发布目录，

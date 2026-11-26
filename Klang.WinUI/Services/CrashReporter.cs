@@ -181,6 +181,10 @@ public static class CrashReporter
             foreach (var block in output.Split(new[] { "Event[" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (block.IndexOf("Klang", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                // 后台子进程（分析 / AI）用的是同一个 exe，它们崩溃不影响播放器，不算进“上次没有正常退出”的原因里
+                if (block.Contains("AiWorkerHost") || block.Contains("AnalysisWorker.RunWorker")
+                    || block.Contains("onnxruntime.dll", StringComparison.OrdinalIgnoreCase)
+                    || block.Contains("DirectML.dll", StringComparison.OrdinalIgnoreCase)) continue;
                 result.Add("Event[" + block);
                 if (result.Count >= 5) break;
             }

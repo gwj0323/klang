@@ -425,6 +425,7 @@ public sealed partial class MainWindow : Window
             if (added.Count > 0) MetadataService.Instance.Enqueue(added);
             LeftNavPane.RefreshView();
             AudioFeatureService.Instance.Enqueue(lib.Tracks);   // 后台慢慢给还没算过的歌提取声学特征
+            Services.Ai.AiIndexService.Instance.Kick();          // AI 功能开着时：补算听感向量和歌词索引
 
             // 无损真伪检测：后台分析所有无损文件的频谱，结果出来后刷新徽标 / 列表
             QualityAnalysisService.Instance.Start(DispatcherQueue);
@@ -692,7 +693,20 @@ public sealed partial class MainWindow : Window
             await engine.FadeOutAndStopAsync();
             if (seq != _playSeq) return; // 期间又切了别的曲目
         }
-        engine.Play(path, start, end);
+        // K 歌模式：已经分离过的歌直接放伴奏；没分离过的先放原曲，分离好后无缝换过去
+        var track = _currentTrack != null && _currentTrack.FilePath == path ? _currentTrack : null;
+        var inst = track != null ? KaraokeSourceFor(track) : null;
+        if (inst != null)
+        {
+            engine.Play(inst);
+            _playingInstrumental = engine.HasSource;
+            if (!engine.HasSource) engine.Play(path, start, end);
+        }
+        else
+        {
+            engine.Play(path, start, end);
+            if (_karaoke && track != null) _ = ApplyKaraokeAsync(track);
+        }
     }
 
     private System.Threading.CancellationTokenSource? _metaCts;
@@ -785,7 +799,12 @@ public sealed partial class MainWindow : Window
             else
             {
                 RefreshTrackCover(track);
-                if (!adopted && autoPlay && seq == _playSeq) AudioEngineService.Instance.Play(track.FilePath);
+                if (!adopted && autoPlay && seq == _playSeq)
+                {
+                    _playingInstrumental = false;
+                    AudioEngineService.Instance.Play(track.FilePath);
+                    if (_karaoke) _ = ApplyKaraokeAsync(track);
+                }
                 // 云端音源缓存到本地后才有波形；边下边播时等整首下完再算
                 if (Services.Cloud.ProgressiveDownload.Find(track.FilePath) is { } dl)
                     _ = dl.Completion.ContinueWith(t =>
@@ -1850,6 +1869,7 @@ public sealed partial class MainWindow : Window
 
     private void LyricMenu_Opening(object? sender, object e)
     {
+        UpdateAiLyricMenu();
         SwapPairsItem.IsEnabled = StageLyricsControl.HasPairedLines;
         SwapPairsItem.IsChecked = StageLyricsControl.SwapPairs;
         ToolTipService.SetToolTip(SwapPairsItem, SwapPairsItem.IsEnabled
@@ -2235,6 +2255,7 @@ public sealed partial class MainWindow : Window
     /// <summary>沉浸层打开时，同步当前曲目与歌词。</summary>
     private void SyncImmersive()
     {
+        OfferLyricsToAi();   // 歌词每次变化后都会走到这里：顺便交给 AI 歌词索引（防抖，开了 AI 才做）
         if (!ImmersiveLayer.IsOpen) return;
         ImmersiveLayer.SetTrack(_currentTrack);
         ImmersiveLayer.SetPlaying(AudioEngineService.Instance.IsPlaying);

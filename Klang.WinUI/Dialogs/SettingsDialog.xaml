@@ -59,6 +59,9 @@
             <NavigationViewItem Content="曲库与云端" Tag="library">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem Content="AI 功能" Tag="ai">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE945;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem Content="关于" Tag="about">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
             </NavigationViewItem>
@@ -759,6 +762,9 @@
             </ScrollViewer>
 
             <!-- ============ 关于 ============ -->
+            <!-- ============ AI 功能（内容在代码里生成：Controls/AiSettingsPanel） ============ -->
+            <ScrollViewer x:Name="PageAi" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" />
+
             <ScrollViewer x:Name="PageAbout" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="0,0,12,0" Spacing="8">
                     <TextBlock FontSize="20" FontWeight="SemiBold" Text="关于" />

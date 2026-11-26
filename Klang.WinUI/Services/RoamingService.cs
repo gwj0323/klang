@@ -211,6 +211,14 @@ public sealed class RoamingService
 
     private float AudioSimilarity(TrackItem a, TrackItem b)
     {
+        // 开了 AI 功能且两首都有 CLAP 听感向量：用它（模型“听”出来的相似度，比手工特征准）。
+        // 歌与歌之间的余弦一般在 0.5~1 之间，拉伸到 0~1 和下面的经典相似度同一量级
+        if (Ai.AiService.Instance.Enabled)
+        {
+            var ea = Ai.AiIndexService.Instance.AudioOf(a);
+            var eb = ea != null ? Ai.AiIndexService.Instance.AudioOf(b) : null;
+            if (ea != null && eb != null) return Math.Clamp((Ai.AiDsp.Dot(ea, eb) - 0.55f) / 0.4f, 0f, 1f);
+        }
         var fa = a.AudioFeat; var fb = b.AudioFeat;
         if (fa == null || fb == null || fa.Length != AudioFeatureService.Dim || fb.Length != AudioFeatureService.Dim) return 0f;
         double dot = 0, na = 0, nb = 0;

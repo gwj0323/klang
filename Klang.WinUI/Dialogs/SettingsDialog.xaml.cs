@@ -291,7 +291,14 @@ public sealed partial class SettingsDialog : ContentDialog
         PagePlayback.Visibility = tag == "playback" ? Visibility.Visible : Visibility.Collapsed;
         PageLibrary.Visibility = tag == "library" ? Visibility.Visible : Visibility.Collapsed;
         PageAbout.Visibility = tag == "about" ? Visibility.Visible : Visibility.Collapsed;
+        PageAi.Visibility = tag == "ai" ? Visibility.Visible : Visibility.Collapsed;
         if (tag == "library") { RefreshCacheInfo(); RefreshDataInfo(); }
+        if (tag == "ai" && PageAi.Content == null)
+        {
+            var panel = new Controls.AiSettingsPanel();
+            PageAi.Content = panel;
+            Closed += (s, e) => panel.Detach();
+        }
     }
 
     /// <summary>对话框默认 760×540；窗口小（小屏笔记本、高缩放）时按窗口缩小，免得被截掉。</summary>

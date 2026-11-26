@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -172,6 +172,14 @@ public class AppState
     public int NeteaseCacheLimitMb { get; set; } = 2048;   // 云端缓存上限（每个来源各自计算）
     public string CloudSaveFolder { get; set; } = "";        // 云端歌曲“保存到曲库”的位置；空 = 音乐\Klang
 
+    // AI 功能（可选，默认关；模型在设置里按需下载）
+    public bool AiEnabled { get; set; }
+    public string AiDevice { get; set; } = "auto";           // auto（有显卡用显卡）| cpu
+    public bool AiBackgroundIndex { get; set; } = true;      // 在后台分析曲库（听感向量、歌词索引）
+    public int AiKaraokeCacheMb { get; set; } = 2048;        // 分离好的伴奏缓存上限
+    public bool AiGpuDetected { get; set; }                  // 上次检测到可用的显卡（决定下载显卡版还是 CPU 版模型）
+    public List<string> AiGpuBlacklist { get; set; } = new(); // 在显卡上让 AI 进程崩溃过的模型文件，之后只用 CPU
+
     // QQ 音乐：登录凭证（整段登录结果）用 DPAPI 加密后保存
     public string QQMusicCredentialEnc { get; set; } = "";
     public string QQMusicNickname { get; set; } = "";
@@ -261,6 +269,7 @@ public class StateService
                     state.Roam ??= new();
                     state.LyricOffsets ??= new();
                     state.LyricSwapTracks ??= new();
+                    state.AiGpuBlacklist ??= new();
                     state.Roam.Stats ??= new();
                     state.Roam.Transitions ??= new();
                     State = state;

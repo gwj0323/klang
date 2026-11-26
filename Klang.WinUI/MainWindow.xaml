@@ -77,6 +77,24 @@
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="4">
+                <!-- AI 任务进度（K 歌分离、识别 / 对齐歌词、导出伴奏）：底栏的歌词摘要会被歌词刷掉，所以放这里 -->
+                <Button x:Name="AiJobPill"
+                    Height="32"
+                    Padding="10,0,10,0"
+                    CornerRadius="4"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    Visibility="Collapsed"
+                    AutomationProperties.Name="AI 任务进度">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ProgressRing x:Name="AiJobRing" Width="14" Height="14" Maximum="100" IsIndeterminate="True" />
+                        <TextBlock x:Name="AiJobText" FontSize="12" VerticalAlignment="Center" MaxWidth="320" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem x:Name="AiJobCancelItem" Click="AiCancel_Click" Text="取消正在进行的 AI 任务" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
                 <Button AutomationProperties.Name="歌词相关功能"
                     x:Name="LyricMenuBtn"
                     Height="32"
@@ -119,6 +137,13 @@
                             <MenuFlyoutItem
                                 Click="PosterBtn_Click"
                                 Text="生成歌词海报…" />
+                            <!-- AI 功能（设置里开启后才显示） -->
+                            <MenuFlyoutSeparator x:Name="AiLyricSep" Visibility="Collapsed" />
+                            <ToggleMenuFlyoutItem x:Name="KaraokeItem" Click="KaraokeItem_Click" Text="K 歌模式（消除人声）" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="AiTranscribeItem" Click="AiTranscribe_Click" Text="AI 识别歌词" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="AiAlignItem" Click="AiAlign_Click" Text="AI 自动对齐歌词时间" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="AiExportItem" Click="AiExport_Click" Text="导出伴奏和人声…" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="AiCancelItem" Click="AiCancel_Click" Text="取消正在进行的 AI 任务" Visibility="Collapsed" />
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
@@ -219,7 +244,10 @@
                     <Button x:Name="RailDiscover" Width="40" HorizontalContentAlignment="Center" Height="40" Padding="0" AutomationProperties.Name="发现" CornerRadius="4" Style="{StaticResource SubtleButtonStyle}" ToolTipService.ToolTip="发现">
                         <StackPanel Orientation="Horizontal" Spacing="12"><FontIcon FontSize="16" Glyph="&#xE9D2;" /><TextBlock Tag="label" VerticalAlignment="Center" FontSize="13" Text="发现" Visibility="Collapsed" /></StackPanel>
                         <Button.Flyout>
-                            <MenuFlyout Placement="RightEdgeAlignedTop">
+                            <MenuFlyout Placement="RightEdgeAlignedTop" Opening="DiscoverMenu_Opening">
+                                <MenuFlyoutItem x:Name="DiscoverAiItem" Click="DiscoverAi_Click" Text="AI 找歌…" Visibility="Collapsed">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE721;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                                 <MenuFlyoutItem Click="DiscoverReport_Click" Text="听歌报告…">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D2;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>

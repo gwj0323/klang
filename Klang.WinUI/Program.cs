@@ -18,6 +18,8 @@ public static class Program
     {
         if (args.Length > 0 && args[0] == Services.AnalysisWorker.WorkerArg)
             return Services.AnalysisWorker.RunWorker();
+        if (args.Length > 0 && args[0] == Services.Ai.AiWorkerHost.WorkerArg)
+            return Services.Ai.AiWorkerHost.Run(args);
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
         if (RedirectToRunningInstance()) return 0;

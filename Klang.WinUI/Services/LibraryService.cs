@@ -308,6 +308,7 @@ public class LibraryService
         AudioFeatureService.Instance.Enqueue(added);
         QualityAnalysisService.Instance.Enqueue(added);
         RhythmAnalysisService.Instance.Enqueue(added);
+        Ai.AiIndexService.Instance.Kick();
         CrashReporter.Note($"导入完成：{folderPath}，新增 {added.Count} 首");
         return added;
     }

@@ -53,7 +53,9 @@ public static class AcousticMapDialog
             var points = svc.GetMap(library);
             panel.Children.Add(new TextBlock
             {
-                Text = L.F("共 {0} 首，已分析 {1} 首。距离越近，声学特征越相似；点击即可播放。", points.Count, analyzed),
+                Text = svc.UsingAi
+                    ? L.F("共 {0} 首，按 AI 听感向量排布：距离越近，听起来越像（流派、配器、人声都会考虑）；点击即可播放。", points.Count)
+                    : L.F("共 {0} 首，已分析 {1} 首。距离越近，声学特征越相似；点击即可播放。", points.Count, analyzed),
                 FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = secondary
             });
 
