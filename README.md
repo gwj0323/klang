@@ -71,6 +71,20 @@ Klang 取自丹麦语 klang，意为声音、音色、余音。
 - 歌词时间校准：整体提前或延后，也可点击“正在演唱的那一句”自动对齐，按歌曲分别保存。
 - 桌面歌词、歌词海报生成。
 
+### AI 功能（可选，默认关闭）
+在“设置 → AI 功能”中开启。所有模型都在本机运行，不上传任何音频或数据；模型按功能分别下载，不用的可以不装。有显卡时通过 DirectML 用显卡计算（NVIDIA / AMD / Intel 均可），没有时用 CPU。推理在独立的低优先级子进程中进行，不影响播放；任务做完会释放模型，子进程空闲后自动退出。
+
+| 组件 | 模型 | 用途 |
+| :--- | :--- | :--- |
+| 听感分析 | LAION CLAP（music & speech） | 用一句话描述找歌（如“下雨天在咖啡馆听的爵士”）；自动标注流派、情绪、乐器、人声；声学地图、漫游、相似歌曲改用 AI 听感向量 |
+| 歌词搜索 | multilingual-E5-small | 按意思搜索歌词，不需要记得原词，支持多语言；点击结果从那一句开始播放 |
+| 人声分离 | MDX-Net（UVR Inst HQ 3） | K 歌模式：播放去掉人声的伴奏，可调保留的人声比例（0–100%），本地与云端歌曲均可；边分离边播放，开启后约 2 秒切换为伴奏，拖动进度时优先分离新位置。伴奏与人声可分别导出为 WAV |
+| 歌词识别 | Whisper small | 为没有歌词的歌曲识别带时间轴的歌词；已有歌词时自动校准整体偏移 |
+
+- 高潮连播：后台找出每首歌的高潮段落（重复最多、最响的一段，有时间轴歌词时对齐到副歌第一句），连播时每首只放高潮并交叉淡入下一首的高潮；右键菜单可“从高潮开始播放”。找高潮不使用模型，随“听感分析”一起启用。
+- AI 任务的进度显示在标题栏，点击可以取消。
+- 组件大小：使用显卡时全部约 870 MB，仅用 CPU 时约 600 MB。模型从 Hugging Face、GitHub 和 NuGet 的官方地址下载，保存在 `%LocalAppData%\Klang\ai`。
+
 ### 云端音乐
 云端页面顶部可以在网易云音乐和 QQ 音乐之间切换。两者都使用非官方接口，平台调整后可能暂时失效；会员歌曲与高音质需要账号有对应会员。
 
@@ -79,7 +93,7 @@ Klang 取自丹麦语 klang，意为声音、音色、余音。
 - 共同：支持在线搜索与试听；所选音质不可用时自动降级；登录凭据使用 Windows DPAPI 加密保存，仅当前 Windows 用户可解密；音频与封面只从对应平台的域名下载；本地缓存按平台分别设上限，超出后清除最久未播放的文件；重启后恢复上次播放的云端歌曲和队列。
 
 ### 任务栏播放条
-- 在“视图”或“设置 → 外观”开启（Ctrl+B）。支持透明背景、左右停靠、拖动吸附和空间避让；空间不足时显示紧凑布局，再不足则隐藏。点封面恢复主窗口。
+- 在“视图”菜单开启（Ctrl+B）。支持透明背景、左右停靠、拖动吸附和空间避让；空间不足时显示紧凑布局，再不足则隐藏。点封面恢复主窗口。
 - 使用 Windows 原生窗口与 UI Automation API，不注入或修改 Explorer。全屏、任务栏自动收起或竖向任务栏时隐藏；多显示器停靠位置和左右偏好会自动保存。
 
 ### 界面与系统集成
@@ -98,6 +112,7 @@ Klang 仅在以下情况联网，均可在设置中控制或不使用相应功�
 | 网易云账号与云端播放 | 网易云音乐 | 登录凭据与请求的曲目 |
 | QQ 音乐账号与云端播放 | QQ 音乐；扫码时另访问 QQ 登录或微信开放平台 | 登录凭据与请求的曲目 |
 | 天气效果（默认关闭） | Open-Meteo | 城市名；约 1 千米精度的经纬度 |
+| 下载 AI 组件（默认关闭，手动下载） | Hugging Face、GitHub、NuGet | 无个人信息；模型下载后在本机运行，不上传音频或歌词 |
 | 检查更新 | GitHub | 无个人信息 |
 
 曲库、播放统计和设置只保存在本机 `%LocalAppData%\Klang`。 完整说明见 [PRIVACY.md](PRIVACY.md)（简体中文 / English / Dansk）。
@@ -148,6 +163,7 @@ ISCC.exe /DAppVersion=2.4.0 /DSourceDir=..\publish\Klang.WinUI installer\Klang.i
 | `Klang.WinUI/` | WinUI 3 应用（当前主版本） |
 | `Klang.WinUI/Services/` | 音频引擎、DSP、曲库、歌词、分析等服务 |
 | `Klang.WinUI/Services/Cloud/` | 云端来源接口；网易云（`Netease/`）、QQ 音乐（`QQMusic/`）各有一份实现 |
+| `Klang.WinUI/Services/Ai/` | AI 功能：组件下载、推理子进程、模型前后处理、索引与高潮检测 |
 | `Klang.WinUI/Languages/` | 界面语言文件（`en.json`、`da.json`，以中文原文为键） |
 | `installer/` | Inno Setup 安装脚本 |
 | `qt6_player/`、`src/` | 早期的 PyQt6 版本 |
@@ -214,6 +230,11 @@ pyinstaller Klang.spec --noconfirm
 | [QQMusicApi](https://github.com/luren-dc/QQMusicApi)（luren-dc） | GPL-3.0 | QQ 音乐接口的请求格式、签名与扫码登录流程（参考后用 C# 重写） |
 | [ComputeSharp](https://github.com/Sergio0694/ComputeSharp) | MIT | GPU 计算（动态背景） |
 | [AutoEq](https://github.com/jaakkopasanen/AutoEq) | MIT | 耳机频响补偿数据 |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) / [DirectML](https://github.com/microsoft/DirectML) | MIT | AI 模型推理（可选组件，按需下载） |
+| [LAION CLAP](https://github.com/LAION-AI/CLAP)（[Xenova/larger_clap_music_and_speech](https://huggingface.co/Xenova/larger_clap_music_and_speech)） | Apache-2.0 | 听感分析、按描述找歌、自动标签 |
+| [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small)（[Xenova 转换版](https://huggingface.co/Xenova/multilingual-e5-small)） | MIT | 按意思搜索歌词 |
+| [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)（MDX-Net Inst HQ 3） | MIT | 人声分离（K 歌、导出伴奏） |
+| [Whisper](https://github.com/openai/whisper)（[onnx-community/whisper-small](https://huggingface.co/onnx-community/whisper-small)） | MIT | 歌词识别与自动校准 |
 | [LRCLIB](https://lrclib.net) | — | 歌词数据来源（开放接口） |
 | [Open-Meteo](https://open-meteo.com) | CC BY 4.0（数据） | 沉浸背景的天气效果（可选，默认关闭） |
 | [Codrops RainEffect](https://github.com/codrops/RainEffect)（Lucas Bebber） | [Codrops 许可](https://tympanus.net/codrops/licensing/) | 沉浸背景的雨水效果：参考其水珠模拟算法（水珠贴图为本项目程序生成） |
