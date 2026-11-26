@@ -191,7 +191,14 @@ internal sealed class MdxSeparator : IDisposable
     private InferenceSession? _s;
     public bool OnGpu { get; private set; }
 
-    public void Separate(string path, double start, double end, string instOut, string? vocalsOut, Action<double> progress, CancellationToken ct)
+    /// <summary>
+    /// 分离出伴奏（和人声）。边算边写：开始时就建好完整长度的 WAV 文件，每算完一段（约 5.8 秒）写到对应位置并调用
+    /// <paramref name="ready"/>（这一段的起止秒数），主进程可以跟在后面播放。处理顺序从 <paramref name="from"/> 秒所在的段开始，
+    /// 到结尾后再回头补前面；处理中 <paramref name="priority"/> 返回新位置（≥ 0）时，下一段就跳过去（用户拖了进度）。
+    /// 写的过程中旁边有一个 .partial 标记文件，全部写完才删掉。
+    /// </summary>
+    public void Separate(string path, double start, double end, string instOut, string? vocalsOut, double from,
+        Func<double> priority, Action<double> progress, Action<double, double>? ready, CancellationToken ct)
     {
         var (l, r) = AiDsp.DecodeStereo(path, Sr, start, end > start ? end - start : 0);
         int n = l.Length;
@@ -200,7 +207,6 @@ internal sealed class MdxSeparator : IDisposable
         int total = Trim + n + pad + Trim;
         var mixL = new float[total]; var mixR = new float[total];
         Array.Copy(l, 0, mixL, Trim, n); Array.Copy(r, 0, mixR, Trim, n);
-        var instL = new float[n + pad]; var instR = new float[n + pad];
 
         var fft = new Fft(NFft);
         var win = AiDsp.Hann(NFft);
@@ -208,15 +214,31 @@ internal sealed class MdxSeparator : IDisposable
         var re = new float[NFft]; var im = new float[NFft];
         var bufL = new float[Chunk]; var bufR = new float[Chunk];
         var outL = new float[Chunk]; var outR = new float[Chunk];
+        var bytes = new byte[Gen * 4];
+
+        string marker = instOut + ".partial";
+        File.WriteAllText(marker, "");
+        using var fi = CreateWav(instOut, n);
+        using var fv = vocalsOut != null ? CreateWav(vocalsOut, n) : null;
 
         lock (_lock)
         {
             if (_s == null) { var (s, g) = AiRuntime.Create(AiRuntime.Pick(AiCatalog.Separator, "model")); _s = s; OnGpu = g; }
             string inName = _s.InputMetadata.Keys.First();
             int chunks = (n + pad) / Gen;
-            for (int c = 0, i = 0; i < n + pad; i += Gen, c++)
+            var done = new bool[chunks];
+            int ChunkAt(double sec) => Math.Clamp((int)(sec * Sr / Gen), 0, chunks - 1);
+            int cursor = ChunkAt(from);
+            for (int k = 0; k < chunks; k++)
             {
                 ct.ThrowIfCancellationRequested();
+                double p = priority();
+                if (p >= 0) cursor = ChunkAt(p);
+                // 从 cursor 往后找第一段没做的（到结尾就绕回开头）
+                int c = cursor;
+                while (done[c]) c = (c + 1) % chunks;
+                int i = c * Gen;
+
                 Array.Copy(mixL, i, bufL, 0, Chunk);
                 Array.Copy(mixR, i, bufR, 0, Chunk);
                 Stft(bufL, 0, specIn, fft, win, re, im);
@@ -228,39 +250,57 @@ internal sealed class MdxSeparator : IDisposable
 
                 Istft(specOut, 0, outL, fft, win, re, im);
                 Istft(specOut, 1, outR, fft, win, re, im);
-                Array.Copy(outL, Trim, instL, i, Gen);
-                Array.Copy(outR, Trim, instR, i, Gen);
-                progress((c + 1.0) / chunks);
+
+                // 写这一段：伴奏 = 模型输出 × 补偿；人声 = 原曲 − 伴奏
+                int len = Math.Min(Gen, n - i);
+                if (len > 0)
+                {
+                    long offset = 44 + (long)i * 4;
+                    Pack(bytes, len, k2 => outL[Trim + k2] * Compensate, k2 => outR[Trim + k2] * Compensate);
+                    fi.Position = offset; fi.Write(bytes, 0, len * 4); fi.Flush();
+                    if (fv != null)
+                    {
+                        Pack(bytes, len, k2 => l[i + k2] - outL[Trim + k2] * Compensate, k2 => r[i + k2] - outR[Trim + k2] * Compensate);
+                        fv.Position = offset; fv.Write(bytes, 0, len * 4); fv.Flush();
+                    }
+                }
+                done[c] = true;
+                cursor = (c + 1) % chunks;
+                progress((k + 1.0) / chunks);
+                if (len > 0) ready?.Invoke((double)i / Sr, (double)(i + len) / Sr);
             }
         }
-
-        var fmt = new WaveFormat(Sr, 16, 2);
-        using (var w = new WaveFileWriter(instOut + ".part", fmt))
-            WritePcm(w, instL, instR, n, Compensate);
-        File.Move(instOut + ".part", instOut, true);
-        if (vocalsOut != null)
-        {
-            var vl = new float[n]; var vr = new float[n];
-            for (int k = 0; k < n; k++) { vl[k] = l[k] - instL[k] * Compensate; vr[k] = r[k] - instR[k] * Compensate; }
-            using (var w = new WaveFileWriter(vocalsOut + ".part", fmt))
-                WritePcm(w, vl, vr, n, 1f);
-            File.Move(vocalsOut + ".part", vocalsOut, true);
-        }
+        fi.Dispose();
+        fv?.Dispose();
+        File.Delete(marker);
     }
 
-    private static void WritePcm(WaveFileWriter w, float[] l, float[] r, int n, float gain)
+    /// <summary>建好完整长度的 16 位立体声 WAV（头里的长度一开始就写对，数据先全是 0），允许别的进程同时读。</summary>
+    private static FileStream CreateWav(string path, int frames)
     {
-        var bytes = new byte[Sr * 4];
-        int pos = 0;
-        for (int k = 0; k < n; k++)
+        var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+        int data = frames * 4;
+        using (var w = new BinaryWriter(fs, System.Text.Encoding.ASCII, leaveOpen: true))
         {
-            short a = (short)Math.Clamp((int)MathF.Round(l[k] * gain * 32767f), -32768, 32767);
-            short b = (short)Math.Clamp((int)MathF.Round(r[k] * gain * 32767f), -32768, 32767);
+            w.Write("RIFF"u8); w.Write(36 + data); w.Write("WAVE"u8);
+            w.Write("fmt "u8); w.Write(16); w.Write((short)1); w.Write((short)2); w.Write(Sr); w.Write(Sr * 4); w.Write((short)4); w.Write((short)16);
+            w.Write("data"u8); w.Write(data);
+        }
+        fs.SetLength(44L + data);
+        fs.Flush();
+        return fs;
+    }
+
+    private static void Pack(byte[] bytes, int len, Func<int, float> left, Func<int, float> right)
+    {
+        int pos = 0;
+        for (int k = 0; k < len; k++)
+        {
+            short a = (short)Math.Clamp((int)MathF.Round(left(k) * 32767f), -32768, 32767);
+            short b = (short)Math.Clamp((int)MathF.Round(right(k) * 32767f), -32768, 32767);
             bytes[pos++] = (byte)a; bytes[pos++] = (byte)(a >> 8);
             bytes[pos++] = (byte)b; bytes[pos++] = (byte)(b >> 8);
-            if (pos == bytes.Length) { w.Write(bytes, 0, pos); pos = 0; }
         }
-        if (pos > 0) w.Write(bytes, 0, pos);
     }
 
     /// <summary>一个声道的 STFT（center=True、反射填充），写进模型输入：通道顺序 左实、左虚、右实、右虚。</summary>

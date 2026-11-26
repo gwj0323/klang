@@ -37,8 +37,9 @@ public sealed class KaraokeMixStream : WaveStream
         WaveFileReader? a = null, b = null;
         try
         {
-            a = new WaveFileReader(instPath);
-            b = new WaveFileReader(vocPath);
+            // 边分离边播放：子进程还在往文件里写，要允许共享读写
+            a = new WaveFileReader(OpenShared(instPath));
+            b = new WaveFileReader(OpenShared(vocPath));
             var f = a.WaveFormat;
             if (f.Encoding != WaveFormatEncoding.Pcm || f.BitsPerSample != 16 || !f.Equals(b.WaveFormat))
             {
@@ -53,6 +54,9 @@ public sealed class KaraokeMixStream : WaveStream
             return null;
         }
     }
+
+    private static FileStream OpenShared(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
 
     public override WaveFormat WaveFormat => _fmt;
     public override long Length => _inst.Length * 2;

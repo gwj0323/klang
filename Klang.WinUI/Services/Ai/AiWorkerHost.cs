@@ -21,6 +21,15 @@ public static class AiWorkerHost
     private static readonly object OutLock = new();
     private static StreamWriter? _out;
     private static readonly ConcurrentDictionary<int, CancellationTokenSource> Jobs = new();
+
+    // 正在分离的歌（按伴奏输出路径）：主进程发 prioritize 时记下新位置，分离循环下一段就跳过去
+    private static readonly ConcurrentDictionary<string, PriorityBox> Priorities = new(StringComparer.OrdinalIgnoreCase);
+    private sealed class PriorityBox
+    {
+        private double _sec = -1;
+        public void Set(double sec) => Interlocked.Exchange(ref _sec, Math.Max(0, sec));
+        public double Take() => Interlocked.Exchange(ref _sec, -1);
+    }
     // 听感 / 歌词模型在后台分析时连续用，留着；人声分离和歌词识别是偶尔用一次的大模型，用完马上释放
     private static readonly ModelSlot<ClapModel> Clap = new(() => new ClapModel(), keep: true);
     private static readonly ModelSlot<E5Model> E5 = new(() => new E5Model(), keep: true);
@@ -116,6 +125,12 @@ public static class AiWorkerHost
                     if (Jobs.TryGetValue(req["target"]?.GetValue<int>() ?? -1, out var c)) c.Cancel();
                     continue;
                 }
+                if (op == "prioritize")
+                {
+                    // 用户拖了进度：正在分离的这首先处理新位置
+                    if (Priorities.TryGetValue(req["inst"]?.GetValue<string>() ?? "", out var pb)) pb.Set(req["from"]?.GetValue<double>() ?? 0);
+                    continue;
+                }
                 if (!ok && op != "info" && op != "highlight")
                 {
                     Send(new JsonObject { ["id"] = id, ["ok"] = false, ["error"] = AiRuntime.LoadError });
@@ -195,13 +210,20 @@ public static class AiWorkerHost
             case "separate":
             {
                 string? vocals = S("vocals");
+                string inst = S("inst");
+                var prio = Priorities[inst] = new PriorityBox();
                 var m = Mdx.Acquire();
                 try
                 {
-                    m.Separate(S("path"), D("start"), D("end"), S("inst"), string.IsNullOrEmpty(vocals) ? null : vocals, Progress, ct);
+                    // 每写好一段就告诉主进程（带上这段的起止秒数），主进程可以跟在后面播放
+                    double lastP = 0;
+                    m.Separate(S("path"), D("start"), D("end"), inst, string.IsNullOrEmpty(vocals) ? null : vocals, D("from"),
+                        prio.Take, p => lastP = p,
+                        (s, e) => Send(new JsonObject { ["id"] = id, ["progress"] = Math.Round(lastP, 4), ["ready"] = new JsonArray(Math.Round(s, 3), Math.Round(e, 3)) }),
+                        ct);
                     return new JsonObject { ["gpu"] = m.OnGpu };
                 }
-                finally { Mdx.Release(); }
+                finally { Mdx.Release(); Priorities.TryRemove(inst, out _); }
             }
 
             case "transcribe":

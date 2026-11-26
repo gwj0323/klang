@@ -1,6 +1,8 @@
 {
   "name": "Dansk",
   "strings": {
+    "K 歌模式：正在播放伴奏，后台继续分离": "Karaoke: afspiller instrumental, adskiller resten i baggrunden",
+    "K 歌模式：这一段还没分离好，先放原曲": "Karaoke: denne del er ikke klar endnu, afspiller originalen",
     "主界面": "Hovedvisning",
     "云端歌曲“保存到曲库”时存到这里。更改后已保存的文件不会移动。": "Hvor skysange gemmes, når du gemmer dem i biblioteket. En ændring flytter ikke gemte filer.",
     "关掉均衡器、空间音效等全部处理。": "Slår equalizer, rumlige effekter og al anden behandling fra.",

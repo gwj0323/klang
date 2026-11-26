@@ -35,27 +35,76 @@ public static class AiAudioService
     public static string InstrumentalPath(TrackItem t) => Path.Combine(AiCatalog.KaraokeDir, Key(t) + ".inst.wav");
     public static string VocalsPath(TrackItem t) => Path.Combine(AiCatalog.KaraokeDir, Key(t) + ".vocals.wav");
 
-    public static bool IsSeparated(TrackItem t) => File.Exists(InstrumentalPath(t)) && File.Exists(VocalsPath(t));
+    // 分离时旁边有个 .partial 标记，写完才删：有标记的是没做完的（可能是上次中途退出留下的）
+    public static bool IsSeparated(TrackItem t) =>
+        File.Exists(InstrumentalPath(t)) && File.Exists(VocalsPath(t)) && !File.Exists(InstrumentalPath(t) + ".partial");
 
-    // 同一首歌同时只分离一次（K 歌模式自动分离时用户又点了识别 / 导出）：后来的等前一个的结果
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task<string>> Running = new();
-
-    /// <summary>分离出伴奏和人声（已有缓存就直接返回）。返回伴奏路径。</summary>
-    public static Task<string> SeparateAsync(TrackItem t, Action<double>? progress, CancellationToken ct)
+    /// <summary>一首歌正在进行的分离：已经写好的时间段（秒），主进程可以边分离边播放。</summary>
+    public sealed class SeparationJob
     {
-        var key = Key(t);
-        if (Running.TryGetValue(key, out var existing)) return existing.WaitAsync(ct);
-        var task = SeparateCoreAsync(t, progress, ct);
-        if (!Running.TryAdd(key, task)) return Running[key].WaitAsync(ct);
-        _ = task.ContinueWith(_ => Running.TryRemove(key, out Task<string>? _), TaskScheduler.Default);
-        return task;
+        private readonly object _lock = new();
+        private readonly List<(double S, double E)> _ready = new();
+        public Task<string> Task { get; internal set; } = null!;
+        public string Instrumental { get; init; } = "";
+
+        internal void Add(double s, double e) { lock (_lock) _ready.Add((s, e)); }
+
+        /// <summary>[from, to] 这一段是不是都写好了（调用方把 to 限制在歌曲长度以内）。</summary>
+        public bool Covers(double from, double to)
+        {
+            if (Task is { IsCompletedSuccessfully: true }) return true;
+            lock (_lock)
+            {
+                double at = Math.Max(0, from);
+                // 按起点排序后从 at 往后接，接不上就是没好
+                foreach (var (s, e) in _ready.OrderBy(x => x.S))
+                {
+                    if (s > at + 0.01) break;
+                    if (e > at) at = e;
+                    if (at >= to - 0.01) return true;
+                }
+                return at >= to - 0.01;
+            }
+        }
     }
 
-    private static async Task<string> SeparateCoreAsync(TrackItem t, Action<double>? progress, CancellationToken ct)
+    // 同一首歌同时只分离一次（K 歌模式自动分离时用户又点了识别 / 导出）：后来的等前一个的结果
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SeparationJob> Running = new();
+
+    /// <summary>这首歌正在分离的话返回它（可以查哪些段已经好了）。</summary>
+    public static SeparationJob? JobFor(TrackItem t) => Running.TryGetValue(Key(t), out var j) ? j : null;
+
+    /// <summary>
+    /// 分离出伴奏和人声（已有缓存就直接返回）。返回伴奏路径。<paramref name="from"/>：先从哪里开始分离（秒，K 歌中途打开时是当前播放位置）。
+    /// </summary>
+    public static Task<string> SeparateAsync(TrackItem t, Action<double>? progress, CancellationToken ct, double from = 0)
     {
+        var key = Key(t);
+        if (Running.TryGetValue(key, out var existing))
+        {
+            if (from > 0) Prioritize(t, from);
+            return existing.Task.WaitAsync(ct);
+        }
+        var job = new SeparationJob { Instrumental = InstrumentalPath(t) };
+        if (!Running.TryAdd(key, job)) return Running[key].Task.WaitAsync(ct);
+        job.Task = SeparateCoreAsync(t, job, from, progress, ct);
+        _ = job.Task.ContinueWith(_ => Running.TryRemove(key, out SeparationJob? _), TaskScheduler.Default);
+        return job.Task;
+    }
+
+    /// <summary>用户拖了进度：正在分离的这首先处理新位置。</summary>
+    public static void Prioritize(TrackItem t, double from)
+    {
+        if (JobFor(t) is not { } job) return;
+        AiService.Instance.Signal("prioritize", new JsonObject { ["inst"] = job.Instrumental, ["from"] = Math.Max(0, from) });
+    }
+
+    private static async Task<string> SeparateCoreAsync(TrackItem t, SeparationJob job, double from, Action<double>? progress, CancellationToken ct)
+    {
+        await Task.Yield();   // 先让调用方拿到 job.Task
         var inst = InstrumentalPath(t);
         var voc = VocalsPath(t);
-        if (File.Exists(inst) && File.Exists(voc))
+        if (IsSeparated(t))
         {
             try { File.SetLastAccessTimeUtc(inst, DateTime.UtcNow); } catch { }
             return inst;
@@ -64,8 +113,11 @@ public static class AiAudioService
         TrimCache();
         await AiService.Instance.RequestAsync("separate", new JsonObject
         {
-            ["path"] = t.FilePath, ["start"] = 0, ["end"] = 0, ["inst"] = inst, ["vocals"] = voc,
-        }, progress, ct);
+            ["path"] = t.FilePath, ["start"] = 0, ["end"] = 0, ["inst"] = inst, ["vocals"] = voc, ["from"] = Math.Max(0, from),
+        }, progress, ct, msg =>
+        {
+            if (msg["ready"] is JsonArray r && r.Count == 2) job.Add(r[0]!.GetValue<double>(), r[1]!.GetValue<double>());
+        });
         return inst;
     }
 

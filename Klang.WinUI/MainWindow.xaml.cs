@@ -112,6 +112,7 @@ public sealed partial class MainWindow : Window
             TryPlanMix(current, total);
             TryPrefetchNext(current, total);
             HighlightTick(current, total);
+            KaraokeTick(current, total);
             if (ImmersiveLayer.IsOpen) ImmersiveLayer.UpdateProgress(current, total);
             StageLyricsControl.UpdatePlaybackTime(current + _lyricOffset); ImmersiveLayer.UpdateTime(current + _lyricOffset);
             _media.UpdateTimeline(current, total);

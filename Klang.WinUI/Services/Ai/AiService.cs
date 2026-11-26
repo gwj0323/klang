@@ -163,27 +163,27 @@ public sealed class AiService
     private Process? _proc;
     private StreamWriter? _stdin;
     private int _nextId;
-    private readonly ConcurrentDictionary<int, (TaskCompletionSource<JsonNode?> Tcs, Action<double>? Progress)> _pending = new();
+    private readonly ConcurrentDictionary<int, (TaskCompletionSource<JsonNode?> Tcs, Action<double>? Progress, Action<JsonNode>? Event)> _pending = new();
     private Timer? _idle;
     private static readonly TimeSpan IdleExit = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan HeavyIdleExit = TimeSpan.FromSeconds(15);
     private readonly Queue<string> _stderrTail = new();
 
     /// <summary>发一个请求给子进程。出错时抛出异常（消息给人看）；取消时抛 OperationCanceledException。</summary>
-    public async Task<JsonNode?> RequestAsync(string op, JsonObject args, Action<double>? progress = null, CancellationToken ct = default)
+    public async Task<JsonNode?> RequestAsync(string op, JsonObject args, Action<double>? progress = null, CancellationToken ct = default, Action<JsonNode>? onEvent = null)
     {
         try
         {
-            return await RequestOnceAsync(op, (JsonObject)args.DeepClone(), progress, ct);
+            return await RequestOnceAsync(op, (JsonObject)args.DeepClone(), progress, ct, onEvent);
         }
         catch (AiProcessException ex) when (ex.GpuCrash)
         {
             // 某个模型在显卡上让进程崩溃了：它已进黑名单，换 CPU 再试一次
-            return await RequestOnceAsync(op, (JsonObject)args.DeepClone(), progress, ct);
+            return await RequestOnceAsync(op, (JsonObject)args.DeepClone(), progress, ct, onEvent);
         }
     }
 
-    private async Task<JsonNode?> RequestOnceAsync(string op, JsonObject args, Action<double>? progress, CancellationToken ct)
+    private async Task<JsonNode?> RequestOnceAsync(string op, JsonObject args, Action<double>? progress, CancellationToken ct, Action<JsonNode>? onEvent)
     {
         if (!AiCatalog.IsInstalled(AiCatalog.Runtime)) throw new AiProcessException(L.T("请先在设置 → AI 功能里下载推理引擎"));
         int id;
@@ -194,7 +194,7 @@ public sealed class AiService
             EnsureStarted();
             id = ++_nextId;
             w = _stdin!;
-            _pending[id] = (tcs, progress);
+            _pending[id] = (tcs, progress, onEvent);
             _idle?.Change(Timeout.Infinite, Timeout.Infinite);
         }
         args["id"] = id;
@@ -227,6 +227,22 @@ public sealed class AiService
             // 人声分离 / 识别歌词用完后进程还留着几百 MB（运行时和显卡驱动不会全还给系统），没别的事就早点退出
             ArmIdle(op is "separate" or "transcribe" ? HeavyIdleExit : IdleExit);
         }
+    }
+
+    /// <summary>给正在运行的子进程发一条不需要回复的消息（子进程没在运行就算了）。</summary>
+    public void Signal(string op, JsonObject args)
+    {
+        args["op"] = op;
+        try
+        {
+            lock (_procLock)
+            {
+                if (_proc is not { HasExited: false } || _stdin == null) return;
+                _stdin.WriteLine(args.ToJsonString());
+                _stdin.Flush();
+            }
+        }
+        catch { }
     }
 
     private bool _restartRequested;
@@ -316,6 +332,8 @@ public sealed class AiService
                 if (msg["progress"] is JsonNode pr && msg["ok"] == null)
                 {
                     try { entry.Progress?.Invoke(pr.GetValue<double>()); } catch { }
+                    // 进度消息里带的额外内容（比如分离好的一段的起止时间）
+                    if (entry.Event != null) { try { entry.Event(msg); } catch { } }
                     continue;
                 }
                 _pending.TryRemove(id, out _);

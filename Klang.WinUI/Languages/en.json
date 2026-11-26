@@ -1,6 +1,8 @@
 {
   "name": "English",
   "strings": {
+    "K 歌模式：正在播放伴奏，后台继续分离": "Karaoke: playing the instrumental, still separating the rest",
+    "K 歌模式：这一段还没分离好，先放原曲": "Karaoke: this part isn't ready yet, playing the original",
     "主界面": "Main view",
     "云端歌曲“保存到曲库”时存到这里。更改后已保存的文件不会移动。": "Where cloud songs go when you save them to the library. Changing it doesn't move saved files.",
     "关掉均衡器、空间音效等全部处理。": "Turns off the equalizer, spatial effects and all other processing.",

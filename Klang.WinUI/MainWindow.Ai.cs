@@ -250,23 +250,85 @@ public sealed partial class MainWindow
                 if (!ok || !AiAudioService.CanProcess(track)) { ShowAiStatus(L.T("歌曲没有下载完，无法分离人声")); return; }
             }
 
-            bool cached = AiAudioService.IsSeparated(track);
-            if (!cached) ShowAiProgress(L.T("K 歌模式：正在分离人声"), 0);
-            var inst = await AiAudioService.SeparateAsync(track, cached ? null : ThrottledStatus(L.T("K 歌模式：正在分离人声")), cts.Token);
+            if (AiAudioService.IsSeparated(track))
+            {
+                SwapSource(track, AiAudioService.InstrumentalPath(track));
+                ShowAiStatus(L.T("K 歌模式：正在播放伴奏"));
+                return;
+            }
+
+            // 边分离边播放：从当前位置开始分离，写好一段就由 KaraokeTick 换成伴奏，后面的在后台继续
+            var engine = AudioEngineService.Instance;
+            double from = engine.HasSource ? engine.CurrentTime : 0;
+            _karaokeLabel = L.T("K 歌模式：正在分离人声");
+            ShowAiProgress(_karaokeLabel, 0);
+            var last = DateTime.MinValue;
+            var inst = await AiAudioService.SeparateAsync(track, p => DispatcherQueue.TryEnqueue(() =>
+            {
+                if ((DateTime.UtcNow - last).TotalMilliseconds < 250 || _karaokeCts != cts) return;
+                last = DateTime.UtcNow;
+                ShowAiProgress(_karaokeLabel, p);
+            }), cts.Token, from);
             if (cts.IsCancellationRequested || !_karaoke || _currentTrack != track) return;
-            SwapSource(track, inst);
+            if (!_playingInstrumental) SwapSource(track, inst);
             ShowAiStatus(L.T("K 歌模式：正在播放伴奏"));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            if (_currentTrack == track) ShowAiStatus(L.T("人声分离失败：") + ex.Message);
+            if (_currentTrack == track)
+            {
+                // 只分离了一部分就失败了：后面没写的地方是静音，换回原曲
+                if (_playingInstrumental) SwapSource(track, null);
+                _playingInstrumental = false;
+                ShowAiStatus(L.T("人声分离失败：") + ex.Message);
+            }
             App.LogError("Karaoke", ex.Message);
         }
         finally
         {
             if (_karaokeCts == cts) _karaokeCts = null;
             HideAiPillIfIdle();
+        }
+    }
+
+    private string _karaokeLabel = "";
+    private double _karaokeLastPos = -1;
+    private DateTime _karaokeSwapAt;
+
+    /// <summary>
+    /// 边分离边播放（每次播放进度更新时调用）：当前位置往后 2 秒都分离好了就换成伴奏；
+    /// 播到（或拖到）还没分离好的地方先换回原曲，并让子进程优先处理这里。
+    /// </summary>
+    private void KaraokeTick(double current, double total)
+    {
+        if (!_karaoke || _karaokeCts == null) { _karaokeLastPos = -1; return; }
+        var t = _currentTrack;
+        if (t == null || AiAudioService.JobFor(t) is not { } job) return;
+        var engine = AudioEngineService.Instance;
+        if (!engine.HasSource || total <= 0) return;
+
+        // 拖了进度：新位置还没分离的话让子进程先做这里
+        bool jumped = _karaokeLastPos >= 0 && Math.Abs(current - _karaokeLastPos) > 3;
+        _karaokeLastPos = current;
+        if (jumped && !job.Covers(current, Math.Min(current + 2, total - 0.05))) AiAudioService.Prioritize(t, current);
+
+        if ((DateTime.UtcNow - _karaokeSwapAt).TotalSeconds < 1) return;   // 刚换过，别来回切
+        if (!_playingInstrumental)
+        {
+            if (job.Covers(current, Math.Min(current + 2, total - 0.05)))
+            {
+                _karaokeSwapAt = DateTime.UtcNow;
+                SwapSource(t, job.Instrumental);
+                _karaokeLabel = L.T("K 歌模式：正在播放伴奏，后台继续分离");
+            }
+        }
+        else if (!job.Covers(current, Math.Min(current + 0.8, total - 0.05)))
+        {
+            _karaokeSwapAt = DateTime.UtcNow;
+            SwapSource(t, null);
+            _karaokeLabel = L.T("K 歌模式：这一段还没分离好，先放原曲");
+            AiAudioService.Prioritize(t, current);
         }
     }
 
