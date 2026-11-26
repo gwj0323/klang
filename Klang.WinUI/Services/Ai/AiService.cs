@@ -22,7 +22,7 @@ public sealed class AiProcessException : Exception
 /// <summary>
 /// 主进程里的 AI 入口：开关和设置、组件下载、和 AI 子进程通讯。
 /// 推理全部在子进程里做（见 <see cref="AiWorkerHost"/>），主进程不加载任何模型和原生推理库；
-/// 子进程空闲 3 分钟自动结束，显存和内存随之释放。
+/// 子进程空闲 90 秒（人声分离 / 识别歌词后 15 秒）自动结束，显存和内存随之释放。
 /// </summary>
 public sealed class AiService
 {
@@ -165,7 +165,8 @@ public sealed class AiService
     private int _nextId;
     private readonly ConcurrentDictionary<int, (TaskCompletionSource<JsonNode?> Tcs, Action<double>? Progress)> _pending = new();
     private Timer? _idle;
-    private static readonly TimeSpan IdleExit = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan IdleExit = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan HeavyIdleExit = TimeSpan.FromSeconds(15);
     private readonly Queue<string> _stderrTail = new();
 
     /// <summary>发一个请求给子进程。出错时抛出异常（消息给人看）；取消时抛 OperationCanceledException。</summary>
@@ -223,7 +224,8 @@ public sealed class AiService
         }
         finally
         {
-            ArmIdle();
+            // 人声分离 / 识别歌词用完后进程还留着几百 MB（运行时和显卡驱动不会全还给系统），没别的事就早点退出
+            ArmIdle(op is "separate" or "transcribe" ? HeavyIdleExit : IdleExit);
         }
     }
 
@@ -239,7 +241,7 @@ public sealed class AiService
         }
     }
 
-    private void ArmIdle()
+    private void ArmIdle(TimeSpan after)
     {
         lock (_procLock)
         {
@@ -247,7 +249,7 @@ public sealed class AiService
             if (_pending.IsEmpty)
             {
                 _idle ??= new Timer(_ => { lock (_procLock) { if (_pending.IsEmpty) StopWorkerLocked(); } });
-                _idle.Change(IdleExit, Timeout.InfiniteTimeSpan);
+                _idle.Change(after, Timeout.InfiniteTimeSpan);
             }
         }
     }

@@ -138,6 +138,12 @@ public class AudioEngineService : IDisposable
                 StartPipeline(partial);
                 return;
             }
+            // K 歌模式分离出的伴奏：和人声一起读，按设置保留部分人声
+            if (Ai.KaraokeMixStream.TryOpen(filePath) is { } mix)
+            {
+                StartPipeline(mix);
+                return;
+            }
             // Windows 10/11 MediaFoundationReader 原生支持 FLAC, MP3, WAV, AAC, M4A, ALAC
             StartPipeline(new MediaFoundationReader(filePath));
         }

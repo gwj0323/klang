@@ -177,6 +177,7 @@ public class AppState
     public string AiDevice { get; set; } = "auto";           // auto（有显卡用显卡）| cpu
     public bool AiBackgroundIndex { get; set; } = true;      // 在后台分析曲库（听感向量、歌词索引）
     public int AiKaraokeCacheMb { get; set; } = 2048;        // 分离好的伴奏缓存上限
+    public int AiKaraokeVocal { get; set; }                  // K 歌模式保留多少人声（0~100%）
     public bool AiGpuDetected { get; set; }                  // 上次检测到可用的显卡（决定下载显卡版还是 CPU 版模型）
     public List<string> AiGpuBlacklist { get; set; } = new(); // 在显卡上让 AI 进程崩溃过的模型文件，之后只用 CPU
 

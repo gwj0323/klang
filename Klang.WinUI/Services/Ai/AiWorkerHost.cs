@@ -21,10 +21,65 @@ public static class AiWorkerHost
     private static readonly object OutLock = new();
     private static StreamWriter? _out;
     private static readonly ConcurrentDictionary<int, CancellationTokenSource> Jobs = new();
-    private static readonly Lazy<ClapModel> Clap = new(() => new ClapModel());
-    private static readonly Lazy<E5Model> E5 = new(() => new E5Model());
-    private static readonly Lazy<MdxSeparator> Mdx = new(() => new MdxSeparator());
-    private static readonly Lazy<WhisperModel> Whisper = new(() => new WhisperModel());
+    // 听感 / 歌词模型在后台分析时连续用，留着；人声分离和歌词识别是偶尔用一次的大模型，用完马上释放
+    private static readonly ModelSlot<ClapModel> Clap = new(() => new ClapModel(), keep: true);
+    private static readonly ModelSlot<E5Model> E5 = new(() => new E5Model(), keep: true);
+    private static readonly ModelSlot<MdxSeparator> Mdx = new(() => new MdxSeparator(), keep: false);
+    private static readonly ModelSlot<WhisperModel> Whisper = new(() => new WhisperModel(), keep: false);
+
+    /// <summary>按需创建模型；keep=false 时最后一个使用者用完就释放（同时有别的任务在用就等它用完）。</summary>
+    private sealed class ModelSlot<T>(Func<T> create, bool keep) where T : class, IDisposable
+    {
+        private readonly object _lock = new();
+        private T? _value;
+        private int _users;
+
+        public T Acquire()
+        {
+            lock (_lock)
+            {
+                _value ??= create();
+                _users++;
+                return _value;
+            }
+        }
+
+        public void Release()
+        {
+            bool freed = false;
+            lock (_lock)
+            {
+                if (--_users > 0 || keep || _value == null) return;
+                _value.Dispose();
+                _value = null;
+                freed = true;
+            }
+            if (freed) TrimMemory();
+        }
+
+        /// <summary>没人在用时释放（unload 请求）。</summary>
+        public void Unload()
+        {
+            lock (_lock)
+            {
+                if (_users > 0 || _value == null) return;
+                _value.Dispose();
+                _value = null;
+            }
+        }
+    }
+
+    /// <summary>大任务做完后把托管堆（整首歌的音频数组都在大对象堆上）压缩回收，再把空闲页还给系统。</summary>
+    private static void TrimMemory()
+    {
+        System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        try { SetProcessWorkingSetSize(System.Diagnostics.Process.GetCurrentProcess().Handle, -1, -1); } catch { }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool SetProcessWorkingSetSize(IntPtr process, nint min, nint max);
 
     internal static void Log(string msg)
     {
@@ -112,28 +167,41 @@ public static class AiWorkerHost
 
             case "clap_audio":
             {
-                var e = Clap.Value.EmbedAudio(S("path"), D("start"), D("end"), D("duration"), ct);
-                return e == null ? null : new JsonObject { ["emb"] = Arr(e), ["gpu"] = Clap.Value.AudioOnGpu, ["model"] = Clap.Value.AudioModelName };
+                var m = Clap.Acquire();
+                try
+                {
+                    var e = m.EmbedAudio(S("path"), D("start"), D("end"), D("duration"), ct);
+                    return e == null ? null : new JsonObject { ["emb"] = Arr(e), ["gpu"] = m.AudioOnGpu, ["model"] = m.AudioModelName };
+                }
+                finally { Clap.Release(); }
             }
 
             case "clap_text":
             {
                 var texts = req["texts"]!.AsArray().Select(x => x!.GetValue<string>()).ToList();
-                return new JsonArray(texts.Select(s => (JsonNode?)Arr(Clap.Value.EmbedText(s))).ToArray());
+                var m = Clap.Acquire();
+                try { return new JsonArray(texts.Select(s => (JsonNode?)Arr(m.EmbedText(s))).ToArray()); }
+                finally { Clap.Release(); }
             }
 
             case "e5":
             {
                 var texts = req["texts"]!.AsArray().Select(x => x!.GetValue<string>()).ToList();
-                var embs = E5.Value.Embed(texts);
-                return new JsonArray(embs.Select(v => (JsonNode?)Arr(v)).ToArray());
+                var m = E5.Acquire();
+                try { return new JsonArray(m.Embed(texts).Select(v => (JsonNode?)Arr(v)).ToArray()); }
+                finally { E5.Release(); }
             }
 
             case "separate":
             {
                 string? vocals = S("vocals");
-                Mdx.Value.Separate(S("path"), D("start"), D("end"), S("inst"), string.IsNullOrEmpty(vocals) ? null : vocals, Progress, ct);
-                return new JsonObject { ["gpu"] = Mdx.Value.OnGpu };
+                var m = Mdx.Acquire();
+                try
+                {
+                    m.Separate(S("path"), D("start"), D("end"), S("inst"), string.IsNullOrEmpty(vocals) ? null : vocals, Progress, ct);
+                    return new JsonObject { ["gpu"] = m.OnGpu };
+                }
+                finally { Mdx.Release(); }
             }
 
             case "transcribe":
@@ -145,23 +213,26 @@ public static class AiWorkerHost
                     ? AiDsp.DecodeMono(vocals, 16000, 0, 0)
                     : AiDsp.DecodeMono(S("path"), 16000, D("start"), D("end") > D("start") ? D("end") - D("start") : 0);
                 string lang = S("language");
-                var (detected, segs) = Whisper.Value.Run(x, string.IsNullOrEmpty(lang) ? null : lang, Progress, ct, refineOnsets: onVocals);
-                return new JsonObject
+                var m = Whisper.Acquire();
+                try
                 {
-                    ["language"] = detected,
-                    ["gpu"] = Whisper.Value.OnGpu,
-                    ["segments"] = new JsonArray(segs.Select(s => (JsonNode?)new JsonObject
+                    var (detected, segs) = m.Run(x, string.IsNullOrEmpty(lang) ? null : lang, Progress, ct, refineOnsets: onVocals);
+                    return new JsonObject
                     {
-                        ["s"] = Math.Round(s.Start, 2), ["e"] = Math.Round(s.End, 2), ["t"] = s.Text
-                    }).ToArray())
-                };
+                        ["language"] = detected,
+                        ["gpu"] = m.OnGpu,
+                        ["segments"] = new JsonArray(segs.Select(s => (JsonNode?)new JsonObject
+                        {
+                            ["s"] = Math.Round(s.Start, 2), ["e"] = Math.Round(s.End, 2), ["t"] = s.Text
+                        }).ToArray())
+                    };
+                }
+                finally { Whisper.Release(); }
             }
 
             case "unload":
-                if (Clap.IsValueCreated) Clap.Value.Dispose();
-                if (E5.IsValueCreated) E5.Value.Dispose();
-                if (Mdx.IsValueCreated) Mdx.Value.Dispose();
-                if (Whisper.IsValueCreated) Whisper.Value.Dispose();
+                Clap.Unload(); E5.Unload(); Mdx.Unload(); Whisper.Unload();
+                TrimMemory();
                 return null;
         }
         throw new InvalidOperationException("unknown op " + op);

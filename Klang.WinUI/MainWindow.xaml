@@ -95,6 +95,34 @@
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
+                <!-- K 歌模式开着时一直显示：调人声多少、关掉 K 歌 -->
+                <Button x:Name="KaraokeBadge"
+                    Height="32"
+                    Padding="10,0,10,0"
+                    CornerRadius="4"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    Visibility="Collapsed"
+                    AutomationProperties.Name="K 歌模式"
+                    ToolTipService.ToolTip="K 歌模式已开启">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE720;" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock FontSize="12" Text="K 歌" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel Width="240" Spacing="8">
+                                <Grid>
+                                    <TextBlock Text="保留人声" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="KaraokeVocalText" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                                <Slider x:Name="KaraokeVocalSlider" Minimum="0" Maximum="100" StepFrequency="1"
+                                    ValueChanged="KaraokeVocalSlider_ValueChanged" AutomationProperties.Name="保留人声" />
+                                <Button HorizontalAlignment="Stretch" Click="KaraokeOff_Click" Content="关闭 K 歌模式" />
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
                 <Button AutomationProperties.Name="歌词相关功能"
                     x:Name="LyricMenuBtn"
                     Height="32"

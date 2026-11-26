@@ -80,6 +80,7 @@ internal static class AiRuntime
                 {
                     GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
                     EnableMemoryPattern = false,
+                    EnableCpuMemArena = false,
                     ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
                     LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
                 };
@@ -98,6 +99,8 @@ internal static class AiRuntime
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
             LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
+            // 不用内存池：池子会一直留着推理时的峰值内存，K 歌 / 识别做完后进程还占好几百 MB
+            EnableCpuMemArena = false,
             // 留一半核心给播放和界面
             IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2),
         };

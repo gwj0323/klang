@@ -34,14 +34,15 @@ public sealed partial class MainWindow
         bool can = AiAudioService.CanProcess(_currentTrack);
         bool sep = ai.Ready(AiCatalog.Separator), wh = ai.Ready(AiCatalog.Whisper);
         KaraokeItem.IsChecked = _karaoke;
-        KaraokeItem.IsEnabled = sep && (can || _karaoke);
+        // 云端歌曲还在下载时也能开 K 歌：下完自动分离
+        KaraokeItem.IsEnabled = sep && (can || _karaoke || AiAudioService.PendingDownload(_currentTrack) != null);
         AiExportItem.IsEnabled = sep && can && !AiJobRunning;
         AiTranscribeItem.IsEnabled = wh && can && !AiJobRunning;
         AiAlignItem.IsEnabled = wh && can && !AiJobRunning && HasRealLyrics();
         string needSep = L.T("需要先在设置 → AI 功能里下载“人声分离”");
         string needWh = L.T("需要先在设置 → AI 功能里下载“歌词识别”");
         string notLocal = L.T("只支持本地歌曲");
-        ToolTipService.SetToolTip(KaraokeItem, !sep ? needSep : !can && !_karaoke ? notLocal : L.T("播放去掉人声的伴奏"));
+        ToolTipService.SetToolTip(KaraokeItem, !sep ? needSep : !KaraokeItem.IsEnabled ? L.T("这首歌不支持 K 歌模式") : L.T("播放去掉人声的伴奏"));
         ToolTipService.SetToolTip(AiExportItem, !sep ? needSep : !can ? notLocal : L.T("伴奏和人声分别存成 WAV"));
         ToolTipService.SetToolTip(AiTranscribeItem, !wh ? needWh : !can ? notLocal : L.T("从声音识别歌词，可在“选择歌词”里换回"));
         ToolTipService.SetToolTip(AiAlignItem, !wh ? needWh : !HasRealLyrics() ? L.T("当前没有带时间轴的歌词") : L.T("自动调整歌词快慢"));
@@ -166,18 +167,47 @@ public sealed partial class MainWindow
 
     private void KaraokeItem_Click(object sender, RoutedEventArgs e) => SetKaraoke(KaraokeItem.IsChecked);
 
+    private void KaraokeOff_Click(object sender, RoutedEventArgs e)
+    {
+        KaraokeBadge.Flyout?.Hide();
+        SetKaraoke(false);
+    }
+
+    private void KaraokeVocalSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        int v = (int)Math.Round(e.NewValue);
+        KaraokeMixStream.VocalGain = v / 100f;
+        KaraokeVocalText.Text = v == 0 ? L.T("无") : $"{v}%";
+        var st = StateService.Instance.State;
+        if (st.AiKaraokeVocal != v) { st.AiKaraokeVocal = v; StateService.Instance.RequestSave(); }
+    }
+
+    /// <summary>AI 总开关关掉、或人声分离组件被删掉：停掉 AI 任务，退出 K 歌模式换回原曲。</summary>
+    private void OnAiChanged()
+    {
+        var ai = AiService.Instance;
+        if (!ai.Enabled) _aiJobCts?.Cancel();
+        if ((_karaoke || _karaokeCts != null || _playingInstrumental) && !ai.Ready(AiCatalog.Separator)) SetKaraoke(false);
+    }
+
     private void SetKaraoke(bool on)
     {
         _karaoke = on;
         KaraokeItem.IsChecked = on;
+        KaraokeBadge.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         if (on)
         {
+            int v = Math.Clamp(StateService.Instance.State.AiKaraokeVocal, 0, 100);
+            KaraokeMixStream.VocalGain = v / 100f;
+            KaraokeVocalSlider.Value = v;
+            KaraokeVocalText.Text = v == 0 ? L.T("无") : $"{v}%";
             if (_currentTrack != null) _ = ApplyKaraokeAsync(_currentTrack);
         }
         else
         {
             _karaokeCts?.Cancel();
             if (_playingInstrumental && _currentTrack != null) SwapSource(_currentTrack, instrumental: null);
+            _playingInstrumental = false;
             ShowAiStatus(L.T("已关闭 K 歌模式"));
         }
     }
@@ -194,13 +224,23 @@ public sealed partial class MainWindow
     {
         if (!_karaoke || _currentTrack != track) return;
         if (!AiService.Instance.Ready(AiCatalog.Separator)) { ShowAiStatus(L.T("K 歌模式需要“人声分离”")); return; }
-        if (!AiAudioService.CanProcess(track)) { ShowAiStatus(L.T("这首歌不支持 K 歌模式（只支持本地歌曲）")); return; }
+        var pending = AiAudioService.PendingDownload(track);
+        if (pending == null && !AiAudioService.CanProcess(track)) { ShowAiStatus(L.T("这首歌不支持 K 歌模式")); return; }
         if (_playingInstrumental) return;
 
         _karaokeCts?.Cancel();
         var cts = _karaokeCts = new CancellationTokenSource();
         try
         {
+            // 云端歌曲边下边播：先等整首下完（下载失败或被取消就算了）
+            if (pending != null)
+            {
+                ShowAiProgress(L.T("K 歌模式：等歌曲下载完"), 0);
+                bool ok = await pending.Completion.WaitAsync(cts.Token);
+                if (cts.IsCancellationRequested || !_karaoke || _currentTrack != track) return;
+                if (!ok || !AiAudioService.CanProcess(track)) { ShowAiStatus(L.T("歌曲没有下载完，无法分离人声")); return; }
+            }
+
             bool cached = AiAudioService.IsSeparated(track);
             if (!cached) ShowAiProgress(L.T("K 歌模式：正在分离人声"), 0);
             var inst = await AiAudioService.SeparateAsync(track, cached ? null : ThrottledStatus(L.T("K 歌模式：正在分离人声")), cts.Token);

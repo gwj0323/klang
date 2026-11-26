@@ -426,6 +426,7 @@ public sealed partial class MainWindow : Window
             LeftNavPane.RefreshView();
             AudioFeatureService.Instance.Enqueue(lib.Tracks);   // 后台慢慢给还没算过的歌提取声学特征
             Services.Ai.AiIndexService.Instance.Kick();          // AI 功能开着时：补算听感向量和歌词索引
+            Services.Ai.AiService.Instance.Changed += () => DispatcherQueue.TryEnqueue(OnAiChanged);
 
             // 无损真伪检测：后台分析所有无损文件的频谱，结果出来后刷新徽标 / 列表
             QualityAnalysisService.Instance.Start(DispatcherQueue);
@@ -801,9 +802,12 @@ public sealed partial class MainWindow : Window
                 RefreshTrackCover(track);
                 if (!adopted && autoPlay && seq == _playSeq)
                 {
-                    _playingInstrumental = false;
-                    AudioEngineService.Instance.Play(track.FilePath);
-                    if (_karaoke) _ = ApplyKaraokeAsync(track);
+                    // K 歌模式：这首云端歌曲已经分离过就直接放伴奏，否则先放原曲，下完、分离好再换
+                    var engine = AudioEngineService.Instance;
+                    var inst = KaraokeSourceFor(track);
+                    if (inst != null) { engine.Play(inst); _playingInstrumental = engine.HasSource; }
+                    if (!engine.HasSource) engine.Play(track.FilePath);
+                    if (_karaoke && !_playingInstrumental) _ = ApplyKaraokeAsync(track);
                 }
                 // 云端音源缓存到本地后才有波形；边下边播时等整首下完再算
                 if (Services.Cloud.ProgressiveDownload.Find(track.FilePath) is { } dl)

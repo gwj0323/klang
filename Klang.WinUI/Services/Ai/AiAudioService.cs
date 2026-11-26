@@ -21,6 +21,10 @@ public static class AiAudioService
         t != null && !t.IsCueTrack && !string.IsNullOrEmpty(t.FilePath) && File.Exists(t.FilePath)
         && Cloud.ProgressiveDownload.Find(t.FilePath) == null;
 
+    /// <summary>云端歌曲还在边下边播：下完后就能处理，返回这个下载（否则 null）。</summary>
+    public static Cloud.ProgressiveDownload? PendingDownload(TrackItem? t) =>
+        t == null || t.IsCueTrack || string.IsNullOrEmpty(t.FilePath) ? null : Cloud.ProgressiveDownload.Find(t.FilePath);
+
     private static string Key(TrackItem t)
     {
         long mtime = 0;
