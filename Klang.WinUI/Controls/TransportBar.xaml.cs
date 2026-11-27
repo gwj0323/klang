@@ -69,7 +69,8 @@ public sealed partial class TransportBar : UserControl
         CenterHost.SizeChanged += (s, e) => CenterPlayButton();
         ControlsPanel.SizeChanged += (s, e) => CenterPlayButton();
         ActualThemeChanged += (s, e) => RefreshIconColors();
-        Loaded += (s, e) => RefreshIconColors();
+        Loaded += (s, e) => { RefreshIconColors(); ThemeService.AccentChanged -= RefreshIconColors; ThemeService.AccentChanged += RefreshIconColors; };
+        Unloaded += (s, e) => ThemeService.AccentChanged -= RefreshIconColors;
 
         _bounceTimer.Interval = TimeSpan.FromMilliseconds(160);
         _bounceTimer.Tick += (s, e) =>

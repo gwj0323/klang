@@ -62,6 +62,7 @@ public sealed partial class MainWindow : Window
         LeftNavPane.TabChanged += (s, tab) => UpdateRail(tab);
         UpdateRail("all");
         ((FrameworkElement)Content).ActualThemeChanged += (s, e) => UpdateRail(_railTab);
+        ThemeService.AccentChanged += () => UpdateRail(_railTab);
         StageLyricsControl.CalibrationPicked += StageLyricsControl_CalibrationPicked;
         ImmersiveLayer.CloseRequested += (s, e) => CloseImmersive();
         MvLayer.CloseRequested += (s, e) => CloseMv(resume: true);
@@ -113,6 +114,7 @@ public sealed partial class MainWindow : Window
             TryPrefetchNext(current, total);
             HighlightTick(current, total);
             KaraokeTick(current, total);
+            EasterEggTick(current);
             if (ImmersiveLayer.IsOpen) ImmersiveLayer.UpdateProgress(current, total);
             StageLyricsControl.UpdatePlaybackTime(current + _lyricOffset); ImmersiveLayer.UpdateTime(current + _lyricOffset);
             _media.UpdateTimeline(current, total);
@@ -370,8 +372,9 @@ public sealed partial class MainWindow : Window
         try
         {
             Dialogs.SettingsDialog.DynamicCoverSettingChanged += () => LoadDynamicCover(_currentTrack);
-            Dialogs.SettingsDialog.EasterEggChanged += on => { StageCoverCard.SetEasterEggVisible(on); UpdateEasterEgg(); };
+            Dialogs.SettingsDialog.EasterEggChanged += on => { StageCoverCard.SetEasterEggVisible(on); UpdateEasterEgg(); ApplyMikuAccent(); };
             StageCoverCard.SetEasterEggVisible(State.EasterEgg);
+            StageCoverCard.SetEasterEggBirthday(IsMikuDay());
             UpdateEasterEgg();
             foreach (var src in Services.Cloud.CloudSources.All)
             {
@@ -585,6 +588,7 @@ public sealed partial class MainWindow : Window
         StageCoverCard.UpdateTrack(track);
         UpdateMvButton(track);
         UpdateEasterEgg();
+        UpdateEasterEggTrack(track);
         if (autoPlay && State.EasterEgg) StageCoverCard.GreetEasterEgg();   // 切歌时小人打个招呼（启动恢复时不打）
         LoadDynamicCover(track);
         UpdateTrayTip();
@@ -846,6 +850,64 @@ public sealed partial class MainWindow : Window
     {
         if (!State.EasterEgg) return;
         StageCoverCard.UpdateEasterEgg(AudioEngineService.Instance.IsPlaying, _currentTrack?.Bpm ?? 0);
+    }
+
+    // ---- 初音的歌：彩蛋没打开时探头一次（每次启动最多一次），打开时更兴奋、副歌挥葱、跟着唱、0:39 冒“39!” ----
+    private bool _eggMiku, _mikuPeeked;
+    private double _eggLastPos = -1;
+
+    private static readonly System.Text.RegularExpressions.Regex MikuArtist =
+        new(@"初音ミク|初音未来|初音未來|hatsune\s*miku|miku\s*hatsune|(^|[^a-z])miku([^a-z]|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex MikuTitle =
+        new(@"初音ミク|初音未来|初音未來|hatsune\s*miku|miku\s*hatsune", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>歌手里有初音（也认 feat. 写法），或者标题里写着“feat. 初音ミク”之类。</summary>
+    private static bool IsMikuTrack(TrackItem? t) =>
+        t != null && (MikuArtist.IsMatch(t.Artist ?? "") || MikuTitle.IsMatch(t.Title ?? ""));
+
+    private static bool IsMikuDay() => DateTime.Today is { Month: 3, Day: 9 } or { Month: 8, Day: 31 };
+
+    /// <summary>换歌时调用。</summary>
+    private void UpdateEasterEggTrack(TrackItem? track)
+    {
+        _eggMiku = IsMikuTrack(track);
+        _eggLastPos = -1;
+        StageCoverCard.SetEasterEggMiku(_eggMiku);
+        StageCoverCard.SetEasterEggBirthday(IsMikuDay());
+        ApplyMikuAccent();
+    }
+
+    /// <summary>彩蛋打开时，放初音的歌整个播放器的强调色换成她的应援色（葱绿 #39C5BB），切走后换回系统强调色。</summary>
+    private void ApplyMikuAccent() =>
+        ThemeService.SetAccentOverride(_eggMiku && State.EasterEgg ? Microsoft.UI.ColorHelper.FromArgb(255, 0x39, 0xC5, 0xBB) : null);
+
+    /// <summary>播放进度更新时调用。</summary>
+    private void EasterEggTick(double current)
+    {
+        var t = _currentTrack;
+        double last = _eggLastPos;
+        _eggLastPos = current;
+        if (t == null || !_eggMiku) return;
+        if (!State.EasterEgg)
+        {
+            // 放了几秒、封面在屏幕上时探一次头；没探成就等下一首初音的歌
+            if (!_mikuPeeked && current is > 4 and < 90 && !ImmersiveLayer.IsOpen && StageCoverCard.IsOnScreen)
+            {
+                _mikuPeeked = true;
+                StageCoverCard.PeekEasterEgg();
+            }
+            return;
+        }
+
+        bool chorus = Services.Ai.AiIndexService.Instance.CachedHighlight(t) is { Found: true, H: { } h } && current >= h.Start && current < h.End;
+        double lt = current + _lyricOffset;
+        var lyr = StageLyricsControl.Lyrics;
+        int i = LyricsService.Instance.FindActiveIndex(lyr, lt);
+        LyricLine? line = i >= 0 && i < lyr.Count && lyr[i].EndTime < 9000 && lt < lyr[i].EndTime && !string.IsNullOrWhiteSpace(lyr[i].Text) ? lyr[i] : null;
+        StageCoverCard.EasterEggSongTick(chorus, lt, line);
+
+        // 正常播放经过 0:39（拖进度跳过去的不算）
+        if (last >= 0 && last < 39 && current >= 39 && current - last < 1) StageCoverCard.PopEasterEgg("39!");
     }
 
     #region 启动时自动检查更新

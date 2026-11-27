@@ -317,8 +317,10 @@ public sealed class CoverGalleryView : UserControl
             lock (_sync) _raster = XamlRoot?.RasterizationScale ?? 1;
             UpdateAccent();
             SubscribeSpectrum(Visibility == Visibility.Visible);
+            ThemeService.AccentChanged -= UpdateAccent;
+            ThemeService.AccentChanged += UpdateAccent;
         };
-        Unloaded += (s, e) => SubscribeSpectrum(false);
+        Unloaded += (s, e) => { SubscribeSpectrum(false); ThemeService.AccentChanged -= UpdateAccent; };
     }
 
     private void UpdateAccent()

@@ -39,7 +39,8 @@ public sealed class WaveformBar : Grid
         IsHitTestVisible = false;
         ActualThemeChanged += (s, e) => _canvas.Invalidate();
         SizeChanged += (s, e) => _canvas.Invalidate();
-        Unloaded += (s, e) => StopLoop();
+        Unloaded += (s, e) => { StopLoop(); ThemeService.AccentChanged -= OnAccentChanged; };
+        Loaded += (s, e) => { ThemeService.AccentChanged -= OnAccentChanged; ThemeService.AccentChanged += OnAccentChanged; };
     }
 
     /// <summary>换波形。null = 没有波形（云端未缓存、解码失败等），显示为一条细轨道。</summary>
@@ -103,6 +104,8 @@ public sealed class WaveformBar : Grid
         _canvas.Invalidate();
         if (!moving) StopLoop();
     }
+
+    private void OnAccentChanged() => _canvas.Invalidate();
 
     private static Color ColorOf(Brush? b, Color fallback) => b is SolidColorBrush s ? s.Color : fallback;
 

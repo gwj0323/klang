@@ -79,7 +79,8 @@ public sealed partial class VinylCoverCard : UserControl
         }
         for (int i = 0; i < NUM_BARS; i++) ApplyBar(i, 0.04f, 0.04f);
 
-        Loaded += (s, e) => ApplySpectrumBrush();
+        Loaded += (s, e) => { ApplySpectrumBrush(); Services.ThemeService.AccentChanged -= ApplySpectrumBrush; Services.ThemeService.AccentChanged += ApplySpectrumBrush; };
+        Unloaded += (s, e) => Services.ThemeService.AccentChanged -= ApplySpectrumBrush;
         Loaded += (s, e) => { VinylDiscSettingChanged -= OnVinylDiscSettingChanged; VinylDiscSettingChanged += OnVinylDiscSettingChanged; ApplyDiscLayout(animate: false); };
         Unloaded += (s, e) => VinylDiscSettingChanged -= OnVinylDiscSettingChanged;
         ActualThemeChanged += (s, e) => ApplySpectrumBrush();
@@ -455,8 +456,42 @@ public sealed partial class VinylCoverCard : UserControl
         }
     }
 
+    private bool _eggOn, _eggPeekHooked;
+
     /// <summary>彩蛋：封面上边缘的小人是否出现。</summary>
-    public void SetEasterEggVisible(bool visible) => EggSitter.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    public void SetEasterEggVisible(bool visible)
+    {
+        _eggOn = visible;
+        if (visible || !EggSitter.IsPeeking) EggSitter.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>彩蛋没打开时，小人从封面后面探头看几秒再缩回去（放初音的歌时的提示）。</summary>
+    public void PeekEasterEgg()
+    {
+        if (_eggOn || EggSitter.IsPeeking) return;
+        if (!_eggPeekHooked)
+        {
+            _eggPeekHooked = true;
+            EggSitter.PeekFinished += () => { if (!_eggOn) EggSitter.Visibility = Visibility.Collapsed; };
+        }
+        EggSitter.Visibility = Visibility.Visible;
+        EggSitter.Peek();
+    }
+
+    /// <summary>封面在不在屏幕上（探头前检查一下，免得白探）。</summary>
+    public bool IsOnScreen => IsLoaded && ActualWidth > 0 && Visibility == Visibility.Visible;
+
+    /// <summary>当前是不是初音的歌。</summary>
+    public void SetEasterEggMiku(bool on) => EggSitter.SetMiku(on);
+
+    /// <summary>初音的歌播放中：高潮段、歌词时间和正在唱的那句。</summary>
+    public void EasterEggSongTick(bool chorus, double lyricTime, LyricLine? line) => EggSitter.SetSong(chorus, lyricTime, line);
+
+    /// <summary>小人头顶冒一行字。</summary>
+    public void PopEasterEgg(string text) { if (_eggOn) EggSitter.Pop(text); }
+
+    /// <summary>初音的生日（3 月 9 日、8 月 31 日）：戴帽子、放蛋糕。</summary>
+    public void SetEasterEggBirthday(bool on) => EggSitter.Birthday = on;
 
     /// <summary>彩蛋小人跟着音乐：是否在播放、当前歌曲的 BPM（0 = 不知道）。</summary>
     public void UpdateEasterEgg(bool playing, double bpm) => EggSitter.SetPlaying(playing, bpm);
@@ -648,6 +683,7 @@ public sealed partial class VinylCoverCard : UserControl
     public void UpdateSpectrum(float[] bands)
     {
         if (bands == null || bands.Length == 0) return;
+        if (_eggOn) EggSitter.FeedSpectrum(bands);
 
         // 将输入的 FFT 声学能量插值映射至 20 根物理律动柱
         for (int i = 0; i < NUM_BARS; i++)
