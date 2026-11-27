@@ -37,6 +37,9 @@ public sealed class AiService
     private AiService()
     {
         foreach (var n in State.AiGpuBlacklist) AiCatalog.GpuBlacklist.Add(n);
+        // 程序已经自带推理引擎：以前单独下载的那份（约 35 MB）用不到了，删掉
+        if (AiCatalog.BundledRuntimeDir != null && AiCatalog.AnyFile(AiCatalog.Runtime))
+            try { AiCatalog.Remove(AiCatalog.Runtime); } catch { }
     }
 
     /// <summary>总开关（默认关）。关着时不启动子进程、不在后台分析、菜单里不显示 AI 功能。</summary>
@@ -132,7 +135,7 @@ public sealed class AiService
 
     // ================= 设备信息 =================
 
-    public sealed record DeviceInfo(bool Loaded, bool Gpu, string Adapter, string Error);
+    public sealed record DeviceInfo(bool Loaded, bool Gpu, string Adapter, string Error, string Npu = "", string NpuEp = "", string NpuError = "");
     private DeviceInfo? _info;
     public DeviceInfo? LastInfo => _info;
 
@@ -147,7 +150,10 @@ public sealed class AiService
             o["loaded"]?.GetValue<bool>() == true,
             o["gpu"]?.GetValue<bool>() == true,
             o["adapter"]?.GetValue<string>() ?? "",
-            o["error"]?.GetValue<string>() ?? "");
+            o["error"]?.GetValue<string>() ?? "",
+            o["npu"]?.GetValue<string>() ?? "",
+            o["npuEp"]?.GetValue<string>() ?? "",
+            o["npuError"]?.GetValue<string>() ?? "");
         if (_info.Loaded && State.AiGpuDetected != _info.Gpu && State.AiDevice != "cpu")
         {
             State.AiGpuDetected = _info.Gpu;
@@ -287,7 +293,7 @@ public sealed class AiService
             StandardErrorEncoding = new UTF8Encoding(false),
         };
         psi.ArgumentList.Add(AiWorkerHost.WorkerArg);
-        psi.ArgumentList.Add(State.AiDevice == "cpu" ? "cpu" : "auto");
+        psi.ArgumentList.Add(State.AiDevice is "cpu" or "npu" ? State.AiDevice : "auto");
         psi.ArgumentList.Add(string.Join(";", AiCatalog.GpuBlacklist));
         var p = Process.Start(psi) ?? throw new AiProcessException(L.T("无法启动 AI 进程"));
         try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }   // 不和播放抢 CPU

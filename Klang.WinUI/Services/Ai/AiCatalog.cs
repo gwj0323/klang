@@ -164,8 +164,22 @@ public static class AiCatalog
     /// <summary>组件在当前设备上能用（下载完成后才会改成正式文件名，所以存在就是完整的）。</summary>
     public static bool IsInstalled(AiPack pack) => IsInstalled(pack, AiService.GpuClass);
 
+    /// <summary>
+    /// 程序自带的推理引擎（Windows App SDK 里的 Windows ML：onnxruntime.dll + DirectML.dll）所在目录；没有时返回 null。
+    /// 有它就不用再下载推理引擎，NPU 也只能通过它用。
+    /// </summary>
+    public static string? BundledRuntimeDir
+    {
+        get
+        {
+            var dir = AppContext.BaseDirectory;
+            return File.Exists(Path.Combine(dir, "onnxruntime.dll")) && File.Exists(Path.Combine(dir, "Microsoft.Windows.AI.MachineLearning.dll")) ? dir : null;
+        }
+    }
+
     public static bool IsInstalled(AiPack pack, bool gpu) =>
-        Required(pack, gpu).All(f => File.Exists(PathOf(f)))
+        pack == Runtime && BundledRuntimeDir != null
+        || Required(pack, gpu).All(f => File.Exists(PathOf(f)))
         // 换到了另一种设备、对应版本还没下：已有的另一个版本能用也算装好（fp32 在 CPU 上能跑；fp16 显卡版在 CPU 上不保证）
         || pack.Files.GroupBy(f => f.Role).All(g => g.Any(f => File.Exists(PathOf(f)) && (f.Device != "gpu" || !f.FileName.Contains("fp16"))));
 

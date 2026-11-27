@@ -50,6 +50,7 @@ public sealed class AiSettingsPanel : StackPanel
         _device.Items.Add(new ComboBoxItem { Content = L.T("自动（优先用显卡）"), Tag = "auto" });
         _device.Items.Add(new ComboBoxItem { Content = L.T("仅用 CPU"), Tag = "cpu" });
         _device.SelectedIndex = State.AiDevice == "cpu" ? 1 : 0;
+        if (State.AiDevice == "npu") EnsureNpuItem("");
         var clear = new Button { Content = L.T("清空") };
         clear.Click += (s, e) => { AiAudioService.ClearCache(); RefreshStatus(); };
 
@@ -161,7 +162,7 @@ public sealed class AiSettingsPanel : StackPanel
 
         var left = new StackPanel { Spacing = 2 };
         left.Children.Add(Title(L.F("已安装 {0} / {1}", installed, Features.Length)));
-        left.Children.Add(Small(used > 0 ? L.F("共占用 {0}，推理引擎随组件自动安装。", Mb(used)) : L.T("先下载要用的功能，推理引擎会一起装上。")));
+        left.Children.Add(Small(used > 0 ? L.F("共占用 {0}。", Mb(used)) : L.T("下载要用的功能，不用的可以不装。")));
 
         FrameworkElement right;
         if (upgrade.Count > 0 && !busy)
@@ -271,9 +272,16 @@ public sealed class AiSettingsPanel : StackPanel
         else if (!ai.Enabled) _deviceStatus.Text = "";
         else if (ai.LastInfo is { } info)
         {
-            _deviceStatus.Text = !info.Loaded ? L.T("推理引擎加载失败：") + info.Error
+            EnsureNpuItem(info.Npu);
+            string gpu = !info.Loaded ? L.T("推理引擎加载失败：") + info.Error
                 : info.Gpu ? L.F("正在使用：{0}", info.Adapter)
                 : L.T("正在使用：CPU") + (State.AiDevice == "cpu" ? "" : L.T("（没有可用的显卡）"));
+            string npu = info.Npu.Length == 0 || State.AiDevice == "cpu" ? ""
+                : State.AiDevice != "npu" ? L.F("检测到 NPU：{0}", info.Npu)
+                : info.NpuEp.Length > 0 ? L.F("后台分析：{0}", info.NpuEp)
+                : info.NpuError.Length > 0 ? L.T("NPU 不可用，改用显卡或 CPU：") + info.NpuError
+                : L.F("后台分析会用 NPU：{0}（第一次用时下载执行器）", info.Npu);
+            _deviceStatus.Text = npu.Length > 0 ? gpu + "\n" + npu : gpu;
         }
         else if (_probeFailed) { }
         else if (!_probing)
@@ -300,6 +308,20 @@ public sealed class AiSettingsPanel : StackPanel
             _bgStatus.Text = idx.Status.Length > 0 ? idx.Status : string.Join(" · ", parts);
         }
         _cacheInfo.Text = L.F("已用 {0}", Mb(AiAudioService.CacheBytes()));
+    }
+
+    /// <summary>检测到 NPU（或之前选过）时，计算设备里多一项“后台分析用 NPU”。</summary>
+    private void EnsureNpuItem(string npu)
+    {
+        if (npu.Length == 0 && State.AiDevice != "npu") return;
+        if (_device.Items.OfType<ComboBoxItem>().Any(i => (string)i.Tag == "npu")) return;
+        bool was = _loading;
+        _loading = true;
+        var item = new ComboBoxItem { Content = L.T("后台分析用 NPU"), Tag = "npu" };
+        ToolTipService.SetToolTip(item, L.T("听感分析和歌词搜索放到 NPU 上，省电、不占显卡；人声分离和歌词识别仍用显卡。第一次使用时 Windows 会下载对应的 NPU 执行器。"));
+        _device.Items.Insert(1, item);
+        if (State.AiDevice == "npu") _device.SelectedItem = item;
+        _loading = was;
     }
 
     private async System.Threading.Tasks.Task Probe()

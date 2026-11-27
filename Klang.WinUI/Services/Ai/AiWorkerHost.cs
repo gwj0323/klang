@@ -104,6 +104,7 @@ public static class AiWorkerHost
     public static int Run(string[] args)
     {
         bool preferCpu = args.Length > 1 && args[1] == "cpu";
+        bool useNpu = args.Length > 1 && args[1] == "npu";   // 后台分析的小模型放 NPU，其余照常用显卡
         // 第三个参数：在显卡上出过事的模型文件名（分号分隔），这些只用 CPU
         if (args.Length > 2)
             foreach (var n in args[2].Split(';', StringSplitOptions.RemoveEmptyEntries)) AiCatalog.GpuBlacklist.Add(n);
@@ -111,7 +112,7 @@ public static class AiWorkerHost
         {
             var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
             _out = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
-            bool ok = AiRuntime.Init(preferCpu);
+            bool ok = AiRuntime.Init(preferCpu, useNpu);
             string? line;
             while ((line = input.ReadLine()) != null)
             {
@@ -178,6 +179,11 @@ public static class AiWorkerHost
                     ["gpu"] = AiRuntime.GpuDevice >= 0,
                     ["adapter"] = AiRuntime.AdapterName,
                     ["ort"] = AiRuntime.Loaded ? AiRuntime.Version : "",
+                    ["bundled"] = AiRuntime.Bundled,
+                    ["npu"] = AiRuntime.NpuHardware,      // 检测到的 NPU（不代表能用）
+                    ["npuEp"] = AiRuntime.NpuEp,          // 已注册、正在用的 NPU 执行器（用过一次 NPU 模型后才有）
+                    ["npuError"] = AiRuntime.NpuError,
+                    ["providers"] = req["providers"]?.GetValue<bool>() == true ? AiRuntime.ListProviders() : "",
                 };
 
             case "clap_audio":

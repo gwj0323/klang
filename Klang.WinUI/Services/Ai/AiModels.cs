@@ -25,7 +25,7 @@ internal sealed class ClapModel : IDisposable
         if (_audio == null)
         {
             var path = AiRuntime.Pick(AiCatalog.Clap, "audio");
-            var (s, g) = AiRuntime.Create(path);
+            var (s, g) = AiRuntime.Create(path, npu: true);
             _audio = s; AudioOnGpu = g; AudioModelName = Path.GetFileName(path);
         }
         return _audio;
@@ -34,7 +34,7 @@ internal sealed class ClapModel : IDisposable
     private InferenceSession Text()
     {
         // 文本编码器每次只算几句话，放 CPU 就够快，不占显存
-        _text ??= AiRuntime.Create(AiRuntime.Pick(AiCatalog.Clap, "text"), allowGpu: false).Session;
+        _text ??= AiRuntime.Create(AiRuntime.Pick(AiCatalog.Clap, "text"), allowGpu: false, npu: true).Session;
         _tok ??= new ByteBpeTokenizer(AiRuntime.Pick(AiCatalog.Clap, "vocab"), AiRuntime.Pick(AiCatalog.Clap, "merges"));
         return _text;
     }
@@ -130,7 +130,7 @@ internal sealed class E5Model : IDisposable
     {
         lock (_lock)
         {
-            _s ??= AiRuntime.Create(AiRuntime.Pick(AiCatalog.TextEmbed, "model"), allowGpu: false).Session;
+            _s ??= AiRuntime.Create(AiRuntime.Pick(AiCatalog.TextEmbed, "model"), allowGpu: false, npu: true).Session;
             _tok ??= new UnigramTokenizer(AiRuntime.Pick(AiCatalog.TextEmbed, "tokenizer"));
             var outp = new float[texts.Count][];
             const int Batch = 32;

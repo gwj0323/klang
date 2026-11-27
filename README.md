@@ -72,7 +72,7 @@ Klang 取自丹麦语 klang，意为声音、音色、余音。
 - 桌面歌词、歌词海报生成。
 
 ### AI 功能（可选，默认关闭）
-在“设置 → AI 功能”中开启。所有模型都在本机运行，不上传任何音频或数据；模型按功能分别下载，不用的可以不装。有显卡时通过 DirectML 用显卡计算（NVIDIA / AMD / Intel 均可），没有时用 CPU。推理在独立的低优先级子进程中进行，不影响播放；任务做完会释放模型，子进程空闲后自动退出。
+在“设置 → AI 功能”中开启。所有模型都在本机运行，不上传任何音频或数据；模型按功能分别下载，不用的可以不装。有显卡时通过 DirectML 用显卡计算（NVIDIA / AMD / Intel 均可），没有时用 CPU；推理引擎（ONNX Runtime + DirectML，来自 Windows App SDK 的 Windows ML）随程序附带，不用另外下载。推理在独立的低优先级子进程中进行，不影响播放；任务做完会释放模型，子进程空闲后自动退出。
 
 | 组件 | 模型 | 用途 |
 | :--- | :--- | :--- |
@@ -83,7 +83,8 @@ Klang 取自丹麦语 klang，意为声音、音色、余音。
 
 - 高潮连播：后台找出每首歌的高潮段落（重复最多、最响的一段，有时间轴歌词时对齐到副歌第一句），连播时每首只放高潮并交叉淡入下一首的高潮；右键菜单可“从高潮开始播放”。找高潮不使用模型，随“听感分析”一起启用。
 - AI 任务的进度显示在标题栏，点击可以取消。
-- 组件大小：使用显卡时全部约 870 MB，仅用 CPU 时约 600 MB。模型从 Hugging Face、GitHub 和 NuGet 的官方地址下载，保存在 `%LocalAppData%\Klang\ai`。
+- NPU：检测到 NPU 的电脑可以在“计算设备”里选“后台分析用 NPU”，听感分析和歌词搜索改在 NPU 上运行（省电、不占显卡），人声分离和歌词识别仍用显卡。第一次使用时由 Windows ML 下载对应厂商的执行器（Intel OpenVINO / AMD Ryzen AI / 高通 QNN），不可用时自动退回显卡或 CPU。此功能尚未在实际的 NPU 设备上测试。
+- 组件大小：使用显卡时全部约 900 MB，仅用 CPU 时约 630 MB。模型从 Hugging Face 和 GitHub 的官方地址下载，保存在 `%LocalAppData%\Klang\ai`。
 
 ### 云端音乐
 云端页面顶部可以在网易云音乐和 QQ 音乐之间切换。两者都使用非官方接口，平台调整后可能暂时失效；会员歌曲与高音质需要账号有对应会员。
@@ -112,7 +113,7 @@ Klang 仅在以下情况联网，均可在设置中控制或不使用相应功�
 | 网易云账号与云端播放 | 网易云音乐 | 登录凭据与请求的曲目 |
 | QQ 音乐账号与云端播放 | QQ 音乐；扫码时另访问 QQ 登录或微信开放平台 | 登录凭据与请求的曲目 |
 | 天气效果（默认关闭） | Open-Meteo | 城市名；约 1 千米精度的经纬度 |
-| 下载 AI 组件（默认关闭，手动下载） | Hugging Face、GitHub、NuGet | 无个人信息；模型下载后在本机运行，不上传音频或歌词 |
+| 下载 AI 组件（默认关闭，手动下载） | Hugging Face、GitHub；选择“后台分析用 NPU”时，Windows ML 从 Microsoft 下载 NPU 执行器 | 无个人信息；模型下载后在本机运行，不上传音频或歌词 |
 | 检查更新 | GitHub | 无个人信息 |
 
 曲库、播放统计和设置只保存在本机 `%LocalAppData%\Klang`。 完整说明见 [PRIVACY.md](PRIVACY.md)（简体中文 / English / Dansk）。
@@ -230,7 +231,7 @@ pyinstaller Klang.spec --noconfirm
 | [QQMusicApi](https://github.com/luren-dc/QQMusicApi)（luren-dc） | GPL-3.0 | QQ 音乐接口的请求格式、签名与扫码登录流程（参考后用 C# 重写） |
 | [ComputeSharp](https://github.com/Sergio0694/ComputeSharp) | MIT | GPU 计算（动态背景） |
 | [AutoEq](https://github.com/jaakkopasanen/AutoEq) | MIT | 耳机频响补偿数据 |
-| [ONNX Runtime](https://github.com/microsoft/onnxruntime) / [DirectML](https://github.com/microsoft/DirectML) | MIT | AI 模型推理（可选组件，按需下载） |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) / [DirectML](https://github.com/microsoft/DirectML)（随 Windows App SDK 的 Windows ML 附带） | MIT | AI 模型推理；NPU 执行器由 Windows ML 按机器提供 |
 | [LAION CLAP](https://github.com/LAION-AI/CLAP)（[Xenova/larger_clap_music_and_speech](https://huggingface.co/Xenova/larger_clap_music_and_speech)） | Apache-2.0 | 听感分析、按描述找歌、自动标签 |
 | [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small)（[Xenova 转换版](https://huggingface.co/Xenova/multilingual-e5-small)） | MIT | 按意思搜索歌词 |
 | [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)（MDX-Net Inst HQ 3） | MIT | 人声分离（K 歌、导出伴奏） |
